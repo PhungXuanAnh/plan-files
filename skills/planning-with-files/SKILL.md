@@ -168,7 +168,9 @@ When all phases are done but the user requests additional work:
 - Continue the planning workflow as normal
 
 ### 8. Executable Acceptance Criteria (anti-substitution rule)
-Each phase's `Done when` items must name **the exact verification method** (e.g. `pytest tests/foo.py`, `Selenium MCP user flow`, `curl /api/x | jq .field`) — not a vague outcome like "works correctly". Never substitute a cheaper test (unit) for a stricter one (E2E) just because it's faster — if E2E is listed, E2E must run. A green unit test is **not** evidence that an E2E criterion is met.
+Each phase's `Done when` items must name **the exact verification method** (e.g. `pytest tests/foo.py`, `Selenium MCP user flow against localhost`, `curl /api/x | jq .field`) — not a vague outcome like "works correctly". Never substitute a cheaper test (unit) for a stricter one (E2E) just because it's faster — if E2E is listed, E2E must run. A green unit test is **not** evidence that an E2E criterion is met.
+
+**Workflow Profile awareness:** If the plan's `## Workflow Profile` is **Profile B (Staging-Verified)**, then "merged to staging" is NOT done — only "staging E2E re-run with the SAME assertions as local E2E, against the staging URL" is done. Localhost passing does not imply staging passes (env vars, migrations, config drift can break it). For **Profile A (PR-Handoff)**, the agent stops after CI green + reviewers requested — do not self-merge or pretend the human review step is automatable.
 
 ## The 3-Strike Error Protocol
 
