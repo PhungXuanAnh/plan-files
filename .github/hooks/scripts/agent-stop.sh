@@ -83,64 +83,56 @@ fi
 log "format detected: $FORMAT"
 log "phases: total=$TOTAL complete=$COMPLETE in_progress=$IN_PROGRESS pending=$PENDING"
 
+# --- Remaining-in-current-phase snippet (count + first unchecked) ----------
+PHASE_RAW=$(awk '
+  /^## Current Phase[[:space:]]*$/ { capture=1; next }
+  /^## / { capture=0 }
+  capture { print }
+' "$PLAN_FILE" 2>/dev/null | awk 'BEGIN{c=0} /<!--/{c=1} c==0{print} /-->/{c=0}' | sed -e '/./,$!d')
+PHASE_NUM=$(printf '%s' "$PHASE_RAW" | grep -oE 'Phase [0-9]+' | head -1)
+REMAINING_LINE=""
+if [ -n "$PHASE_NUM" ]; then
+    REMAINING=$(awk -v phase="$PHASE_NUM" '
+      BEGIN { in_phase=0; in_comment=0; count=0; first="" }
+      /<!--/ { in_comment=1 }
+      in_comment { if (/-->/) in_comment=0; next }
+      /^### / {
+        if (in_phase) { exit }
+        if ($0 ~ ("^### " phase "([: ]|$)")) in_phase=1
+        next
+      }
+      !in_phase { next }
+      /^- \[ \]/ {
+        count++
+        if (first=="") { first=$0; sub(/^- \[ \] */, "", first) }
+      }
+      END { printf "%d\t%s", count, first }
+    ' "$PLAN_FILE" 2>/dev/null)
+    REMAINING_COUNT=$(printf '%s' "$REMAINING" | cut -f1)
+    REMAINING_FIRST=$(printf '%s' "$REMAINING" | cut -f2-)
+    [ ${#REMAINING_FIRST} -gt 200 ] && REMAINING_FIRST="$(printf '%s' "$REMAINING_FIRST" | cut -c 1-200)..."
+    if [ -n "$REMAINING_COUNT" ] && [ "$REMAINING_COUNT" -gt 0 ]; then
+        REMAINING_LINE=" ${PHASE_NUM}: ${REMAINING_COUNT} unchecked item(s). First: ${REMAINING_FIRST}"
+    fi
+    log "remaining: count=${REMAINING_COUNT:-?}"
+fi
+
 if [ "$COMPLETE" -eq "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
     MSG="[planning-with-files] ALL PHASES COMPLETE ($COMPLETE/$TOTAL). If the user has additional work, add new phases to ${PLAN_FILE} before starting."
     log "decision: ALL COMPLETE"
-    OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"AgentStop\",\"additionalContext\":\"$MSG\"}}"
+    PYTHON=$(command -v python3 || command -v python)
+    ESCAPED=$(echo "$MSG" | $PYTHON -c "import sys,json; print(json.dumps(sys.stdin.read(), ensure_ascii=False))" 2>/dev/null || echo "\"\"")
+    OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"AgentStop\",\"additionalContext\":$ESCAPED}}"
     log "stdout: ${#OUTPUT} chars"
     echo "$OUTPUT"
     exit 0
 fi
 
-MSG="[planning-with-files] Task incomplete ($COMPLETE/$TOTAL phases done). Update progress.md, then read ${PLAN_FILE} and continue working on the remaining phases."
+MSG="[planning-with-files] Task incomplete ($COMPLETE/$TOTAL phases done).${REMAINING_LINE} Update progress.md, then read ${PLAN_FILE} and continue working on the remaining phases."
 log "decision: INCOMPLETE"
-OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"AgentStop\",\"additionalContext\":\"$MSG\"}}"
+PYTHON=$(command -v python3 || command -v python)
+ESCAPED=$(echo "$MSG" | $PYTHON -c "import sys,json; print(json.dumps(sys.stdin.read(), ensure_ascii=False))" 2>/dev/null || echo "\"\"")
+OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"AgentStop\",\"additionalContext\":$ESCAPED}}"
 log "stdout: ${#OUTPUT} chars"
 echo "$OUTPUT"
-exit 0
-#!/bin/bash
-# planning-with-files: Agent stop hook for GitHub Copilot
-# Checks if all phases in task_plan.md are complete.
-# Injects continuation context if phases are incomplete.
-# Always exits 0 — outputs JSON to stdout.
-
-# Read stdin (required — Copilot pipes JSON to stdin)
-INPUT=$(cat)
-
-PLAN_FILE="task_plan.md"
-
-if [ ! -f "$PLAN_FILE" ]; then
-    echo '{}'
-    exit 0
-fi
-
-# Count total phases
-TOTAL=$(grep -c "### Phase" "$PLAN_FILE" || true)
-
-# Check for **Status:** format first
-COMPLETE=$(grep -cF "**Status:** complete" "$PLAN_FILE" || true)
-IN_PROGRESS=$(grep -cF "**Status:** in_progress" "$PLAN_FILE" || true)
-PENDING=$(grep -cF "**Status:** pending" "$PLAN_FILE" || true)
-
-# Fallback: check for [complete] inline format
-if [ "$COMPLETE" -eq 0 ] && [ "$IN_PROGRESS" -eq 0 ] && [ "$PENDING" -eq 0 ]; then
-    COMPLETE=$(grep -c "\[complete\]" "$PLAN_FILE" || true)
-    IN_PROGRESS=$(grep -c "\[in_progress\]" "$PLAN_FILE" || true)
-    PENDING=$(grep -c "\[pending\]" "$PLAN_FILE" || true)
-fi
-
-# Default to 0 if empty
-: "${TOTAL:=0}"
-: "${COMPLETE:=0}"
-: "${IN_PROGRESS:=0}"
-: "${PENDING:=0}"
-
-if [ "$COMPLETE" -eq "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
-    MSG="[planning-with-files] ALL PHASES COMPLETE ($COMPLETE/$TOTAL). If the user has additional work, add new phases to ${PLAN_FILE} before starting."
-    echo "{\"hookSpecificOutput\":{\"hookEventName\":\"AgentStop\",\"additionalContext\":\"$MSG\"}}"
-    exit 0
-fi
-
-MSG="[planning-with-files] Task incomplete ($COMPLETE/$TOTAL phases done). Update progress.md, then read ${PLAN_FILE} and continue working on the remaining phases."
-echo "{\"hookSpecificOutput\":{\"hookEventName\":\"AgentStop\",\"additionalContext\":\"$MSG\"}}"
 exit 0

@@ -114,12 +114,46 @@ Log "extracted Goal: $($GoalRaw.Length) chars; Current Phase: $($PhaseRaw.Length
 $GoalBody  = Cap-Text $GoalRaw  $MaxGoalChars  'Goal'
 $PhaseBody = Cap-Text $PhaseRaw $MaxPhaseChars 'Current Phase'
 
+# --- Remaining-in-phase snippet (cheap: count + first unchecked item) -------
+$PhaseNum = ""
+if ($PhaseRaw -match '(Phase\s+\d+)') { $PhaseNum = $Matches[1] -replace '\s+',' ' }
+$RemainingLine = ""
+if ($PhaseNum) {
+    $count = 0
+    $first = ""
+    $inPhase = $false
+    $inComment = $false
+    $headerPattern = "^### " + [regex]::Escape($PhaseNum) + "([: ]|$)"
+    foreach ($line in (Get-Content $PlanFile -Encoding UTF8 -ErrorAction SilentlyContinue)) {
+        if ($line -match '<!--') { $inComment = $true }
+        if ($inComment) { if ($line -match '-->') { $inComment = $false }; continue }
+        if ($line -match '^### ') {
+            if ($inPhase) { break }
+            if ($line -match $headerPattern) { $inPhase = $true }
+            continue
+        }
+        if (-not $inPhase) { continue }
+        if ($line -match '^-\s\[\s\]') {
+            $count++
+            if (-not $first) { $first = ($line -replace '^-\s\[\s\]\s*','') }
+        }
+    }
+    if ($first.Length -gt 200) { $first = $first.Substring(0,200) + "..." }
+    if ($count -eq 0) {
+        $RemainingLine = "${PhaseNum}: 0 unchecked items in this phase — if all 'Done when' criteria genuinely verified (see anti-substitution rule), mark phase complete."
+    } else {
+        $RemainingLine = "${PhaseNum}: $count unchecked item(s). First: $first"
+    }
+    Log "remaining: count=$count first($($first.Length) chars)"
+}
+
 $parts = @()
 if ($GoalBody)  { $parts += "## Goal`n$GoalBody" }
 if ($PhaseBody) { $parts += "## Current Phase`n$PhaseBody" }
 $PlanSummary = ($parts -join "`n`n")
 
 $Nudge = "[planning-with-files] Update progress.md with what you just did. If a phase is now complete, update $PlanFile status. If you no longer see the planning-with-files SKILL.md rules in your context (post-/compact, or you have forgotten them), reload the planning-with-files skill by yourself before continuing."
+if ($RemainingLine) { $Nudge = "$Nudge`n$RemainingLine" }
 
 if ($PlanSummary) {
     $Context = "=== Current task (Goal + Current Phase from $PlanFile) ===`n$PlanSummary`n`n$Nudge"
@@ -140,86 +174,4 @@ $output = @{
 $json = $output | ConvertTo-Json -Depth 3 -Compress
 Log "stdout: $($json.Length) chars"
 $json
-exit 0
-# planning-with-files: Post-tool-use hook for GitHub Copilot (PowerShell)
-# Runs AFTER every tool call. The pre-tool-use hook has been retired; this
-# hook now does double duty:
-#   1. Anchors goals by re-injecting the '## Goal' and '## Current Phase'
-#      sections of task_plan.md (size-bounded, always relevant -- unlike
-#      a fixed 'head -N' which can miss the goal once the file grows).
-#   2. Nudges the model to update progress.md.
-# No-op when task_plan.md does not exist -- zero pollution on non-planning sessions.
-# Always exits 0 - outputs JSON to stdout.
-
-$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$InputData = [Console]::In.ReadToEnd()
-
-$PlanFile = "task_plan.md"
-
-if (-not (Test-Path $PlanFile)) {
-    Write-Output '{}'
-    exit 0
-}
-
-# Per-section hard caps. Prevents runaway model verbosity from inflating
-# per-tool-call cost while preserving BOTH sections (the previous combined
-# 800-char cap could starve Current Phase if Goal exhausted the budget).
-$MaxGoalChars  = 700    # ~100 words / 2-3 sentences
-$MaxPhaseChars = 100    # ~15 words; Current Phase is meant to be a label
-$TruncMarker = "[truncated by post-tool-use hook — full text in $PlanFile; this section is too long for per-call injection, consider shortening it there]"
-
-function Extract-Section {
-    param([string]$Name)
-    $hdrPattern = "^## $([regex]::Escape($Name))\s*$"
-    $rawLines = Get-Content $PlanFile -Encoding UTF8 -ErrorAction SilentlyContinue
-    $capture = $false
-    $collected = New-Object System.Collections.Generic.List[string]
-    foreach ($line in $rawLines) {
-        if ($line -match $hdrPattern) { $capture = $true; continue }
-        if ($line -match '^## ') { $capture = $false }
-        if ($capture) { $collected.Add($line) | Out-Null }
-    }
-    # Strip HTML comment blocks
-    $inComment = $false
-    $filtered = New-Object System.Collections.Generic.List[string]
-    foreach ($line in $collected) {
-        if ($line -match '<!--') { $inComment = $true }
-        if (-not $inComment) { $filtered.Add($line) | Out-Null }
-        if ($line -match '-->') { $inComment = $false }
-    }
-    return ($filtered -join "`n").Trim()
-}
-
-function Cap-Text {
-    param([string]$Text, [int]$Max)
-    if ($Text.Length -gt $Max) {
-        return $Text.Substring(0, $Max) + "`n$TruncMarker"
-    }
-    return $Text
-}
-
-$GoalBody  = Cap-Text (Extract-Section 'Goal')          $MaxGoalChars
-$PhaseBody = Cap-Text (Extract-Section 'Current Phase') $MaxPhaseChars
-
-$parts = @()
-if ($GoalBody)  { $parts += "## Goal`n$GoalBody" }
-if ($PhaseBody) { $parts += "## Current Phase`n$PhaseBody" }
-$PlanSummary = ($parts -join "`n`n")
-
-$Nudge = "[planning-with-files] Update progress.md with what you just did. If a phase is now complete, update $PlanFile status. If you no longer see the planning-with-files SKILL.md rules in your context (post-/compact, or you have forgotten them), reload the planning-with-files skill by yourself before continuing."
-
-if ($PlanSummary) {
-    $Context = "=== Current task (Goal + Current Phase from $PlanFile) ===`n$PlanSummary`n`n$Nudge"
-} else {
-    $Context = $Nudge
-}
-
-$output = @{
-    hookSpecificOutput = @{
-        hookEventName = "PostToolUse"
-        additionalContext = $Context
-    }
-}
-$output | ConvertTo-Json -Depth 3 -Compress
 exit 0
