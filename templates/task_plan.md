@@ -7,16 +7,20 @@
 
 ## Goal
 <!-- 
-  WHAT: One clear sentence describing what you're trying to achieve.
+  WHAT: One clear sentence (or two short ones) describing what you're trying to achieve. MAX 50 words / ~350 characters.
   WHY: This is your north star. Re-reading this keeps you focused on the end state.
-  EXAMPLE: "Create a Python CLI todo app with add, list, and delete functionality."
+  LENGTH RULE: Keep it tight. Detailed context, full constraints, and acceptance criteria belong in findings.md, NOT here.
+        This section is re-injected into the model on every tool call by the post-tool-use hook, so verbosity is paid per-call.
+  EXAMPLE: "Create a Python CLI todo app with add, list, and delete functionality, persisting to a local JSON file."
 -->
 [One sentence describing the end state]
 
 ## Current Phase
 <!-- 
-  WHAT: Which phase you're currently working on (e.g., "Phase 1", "Phase 3").
+  WHAT: Which phase you're currently working on (e.g., "Phase 1", "Phase 3"). MAX 15 words / ~100 characters.
   WHY: Quick reference for where you are in the task. Update this as you progress.
+  LENGTH RULE: Phase label + at most a short qualifier. Detailed status notes belong in progress.md, NOT here.
+        This section is re-injected into the model on every tool call by the post-tool-use hook.
 -->
 Phase 1
 

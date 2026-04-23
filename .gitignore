@@ -35,3 +35,4 @@ skill-submission-targets.txt
 *.tmp
 WIKI_HOME_PAGE.md
 DISCUSSION_2_CONTENT.md
+tmp/
