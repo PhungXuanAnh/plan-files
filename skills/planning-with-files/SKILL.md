@@ -167,6 +167,9 @@ When all phases are done but the user requests additional work:
 - Log a new session entry in `progress.md`
 - Continue the planning workflow as normal
 
+### 8. Executable Acceptance Criteria (anti-substitution rule)
+Each phase's `Done when` items must name **the exact verification method** (e.g. `pytest tests/foo.py`, `Selenium MCP user flow`, `curl /api/x | jq .field`) — not a vague outcome like "works correctly". Never substitute a cheaper test (unit) for a stricter one (E2E) just because it's faster — if E2E is listed, E2E must run. A green unit test is **not** evidence that an E2E criterion is met.
+
 ## The 3-Strike Error Protocol
 
 ```

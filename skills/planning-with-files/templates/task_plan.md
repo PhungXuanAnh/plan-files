@@ -28,64 +28,105 @@ Phase 1
 <!-- 
   WHAT: Break your task into 3-7 logical phases. Each phase should be completable.
   WHY: Breaking work into phases prevents overwhelm and makes progress visible.
-  WHEN: Update status after completing each phase: pending → in_progress → complete
+  
+  PHASE STRUCTURE (required for every phase):
+    1. **Status** — pending | in_progress | complete  (placed FIRST so you can scan progress fast)
+    2. **Tasks** — concrete actions you take (imperative verbs)
+    3. **Done when** — executable acceptance criteria (each item names HOW to verify, not just WHAT outcome)
+  
+  STATUS VALUES:
+    - pending: Not started yet
+    - in_progress: Currently working on this
+    - complete: ALL "Done when" boxes checked AND verified by the named method
 -->
 
 ### Phase 1: Requirements & Discovery
 <!-- 
   WHAT: Understand what needs to be done and gather initial information.
-  WHY: Starting without understanding leads to wasted effort. This phase prevents that.
+  WHY: Starting without understanding leads to wasted effort.
 -->
+**Status:** in_progress
+
+**Tasks:**
 - [ ] Understand user intent
 - [ ] Identify constraints and requirements
 - [ ] Document findings in findings.md
-- **Status:** in_progress
-<!-- 
-  STATUS VALUES:
-  - pending: Not started yet
-  - in_progress: Currently working on this
-  - complete: Finished this phase
--->
+
+**Done when:**
+- [ ] **Findings recorded:** open `findings.md` → contains explicit answers to every Key Question below
+- [ ] **Constraints listed:** at least one bullet per: tech stack / data shape / external dependencies / non-goals
+- [ ] **User confirms scope** (if interactive) — paste user's confirmation into `findings.md`
 
 ### Phase 2: Planning & Structure
 <!-- 
-  WHAT: Decide how you'll approach the problem and what structure you'll use.
-  WHY: Good planning prevents rework. Document decisions so you remember why you chose them.
+  WHAT: Decide approach and structure. Document decisions so you remember why.
 -->
+**Status:** pending
+
+**Tasks:**
 - [ ] Define technical approach
 - [ ] Create project structure if needed
-- [ ] Document decisions with rationale
-- **Status:** pending
+- [ ] Document decisions with rationale in `## Decisions Made` table below
+
+**Done when:**
+- [ ] **Decisions table populated:** every non-obvious choice has a row with rationale
+- [ ] **Project skeleton exists:** `ls <project-root>` shows expected directories
+- [ ] **No undefined assumptions:** re-read `## Goal` — every word maps to a documented decision
 
 ### Phase 3: Implementation
 <!-- 
   WHAT: Actually build/create/write the solution.
-  WHY: This is where the work happens. Break into smaller sub-tasks if needed.
 -->
+**Status:** pending
+
+**Tasks:**
 - [ ] Execute the plan step by step
 - [ ] Write code to files before executing
-- [ ] Test incrementally
-- **Status:** pending
+- [ ] Update `progress.md` after each significant change
+
+**Done when:**
+- [ ] **Code compiles/lints clean:** `<exact build/lint command>` exits 0
+- [ ] **Unit tests added & pass:** `<exact test command>` shows new tests covering the changes
+- [ ] **No TODOs left for this phase** in the code (`grep -rn TODO src/` excludes pre-existing ones)
 
 ### Phase 4: Testing & Verification
 <!-- 
   WHAT: Verify everything works and meets requirements.
-  WHY: Catching issues early saves time. Document test results in progress.md.
+  
+  ⚠ ANTI-SUBSTITUTION RULE:
+    Each "Done when" item below names a SPECIFIC test method (unit / integration / E2E).
+    DO NOT substitute a cheaper test for the named one.
+    Example violation: criterion says "Selenium E2E" → agent runs only pytest → marks ✅.
+    A unit test passing is NOT evidence that the E2E criterion is met.
 -->
-- [ ] Verify all requirements met
-- [ ] Document test results in progress.md
-- [ ] Fix any issues found
-- **Status:** pending
+**Status:** pending
+
+**Tasks:**
+- [ ] Run all named verifications below
+- [ ] Document test results in `progress.md` (include exact commands and observable output)
+- [ ] Fix any issues found, then re-run the failing verification
+
+**Done when** (each criterion names its tool + assertion — do not swap tools):
+- [ ] **Unit-level:** `<exact test command>` → all relevant tests pass
+- [ ] **Integration-level:** `<service / curl / API call>` → response matches `<expected shape/value>`
+- [ ] **E2E / user-flow level:** `<Selenium MCP / Playwright / manual UI walkthrough>` → user sees `<exact observable state>` AND backend stores `<exact field=value>`
+- [ ] **Live data verification (if applicable):** query `<storage>` for the record produced by the E2E run; assert `<field> == <expected>`
 
 ### Phase 5: Delivery
 <!-- 
   WHAT: Final review and handoff to user.
-  WHY: Ensures nothing is forgotten and deliverables are complete.
 -->
+**Status:** pending
+
+**Tasks:**
 - [ ] Review all output files
 - [ ] Ensure deliverables are complete
-- [ ] Deliver to user
-- **Status:** pending
+- [ ] Hand off to user with a summary
+
+**Done when:**
+- [ ] **Deliverables list verified:** every item in `## Goal` is mapped to a concrete file/PR/URL
+- [ ] **`progress.md` final entry written:** session summary + what's left (if anything)
+- [ ] **User accepts** (if interactive) OR all "Done when" boxes in earlier phases are checked
 
 ## Key Questions
 <!-- 
