@@ -56,6 +56,21 @@ $InputPreview = ($InputData -replace "`r?`n", " ")
 if ($InputPreview.Length -gt 300) { $InputPreview = $InputPreview.Substring(0, 300) }
 Log "stdin (first 300 chars, $($InputData.Length) total): $InputPreview"
 
+# --- stop_hook_active guard --------------------------------------------------
+# Per docs: if VS Code is calling Stop again because we previously blocked,
+# stop_hook_active=true is in stdin. Emit {} to break the loop.
+$StopHookActive = $false
+try {
+    $_inObj = $InputData | ConvertFrom-Json -ErrorAction Stop
+    if ($_inObj.stop_hook_active) { $StopHookActive = $true }
+} catch {}
+Log "stop_hook_active: $StopHookActive"
+if ($StopHookActive) {
+    Log "decision: GUARDED (stop_hook_active=true) -> emitting {} to break loop"
+    Write-Output '{}'
+    exit 0
+}
+
 if (-not (Test-Path $PlanFile)) {
     Log "$(if($PlanFile){$PlanFile}else{"task_plan.md"}): ABSENT -> emitting {} (no-op)"
     Write-Output '{}'
@@ -126,26 +141,21 @@ if ($PhaseNum) {
 }
 
 if ($COMPLETE -eq $TOTAL -and $TOTAL -gt 0) {
-    $msg = "[planning-with-files] ALL PHASES COMPLETE ($COMPLETE/$TOTAL). If the user has additional work, add new phases to $PlanFile before starting."
-    Log "decision: ALL COMPLETE"
-    $output = @{
-        hookSpecificOutput = @{
-            hookEventName = "AgentStop"
-            additionalContext = $msg
-        }
-    }
-    $json = $output | ConvertTo-Json -Depth 3 -Compress
-    Log "stdout: $($json.Length) chars"
-    $json
+    # All phases done -> let the agent stop normally. No block, no message.
+    Log "decision: ALL COMPLETE -> emitting {} (allow stop)"
+    Write-Output '{}'
     exit 0
 }
 
-$msg = "[planning-with-files] Task incomplete ($COMPLETE/$TOTAL phases done).${RemainingLine} Update progress.md, then read $PlanFile and continue working on the remaining phases."
-Log "decision: INCOMPLETE"
+# Task incomplete -> BLOCK the stop and tell the agent why to continue.
+# Per docs: hookEventName must be exactly "Stop"; use decision="block" + reason.
+$reason = "[planning-with-files] Task incomplete ($COMPLETE/$TOTAL phases done).${RemainingLine} Update progress.md, then read $PlanFile and continue working on the remaining phases. If you genuinely cannot continue (blocked / waiting on user), say so explicitly so the user can intervene."
+Log "decision: BLOCK ($COMPLETE/$TOTAL phases done)"
 $output = @{
     hookSpecificOutput = @{
-        hookEventName = "AgentStop"
-        additionalContext = $msg
+        hookEventName = "Stop"
+        decision = "block"
+        reason = $reason
     }
 }
 $json = $output | ConvertTo-Json -Depth 3 -Compress

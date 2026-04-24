@@ -1,7 +1,7 @@
 {
   "version": 1,
   "hooks": {
-    "postToolUse": [
+    "PostToolUse": [
       {
         "type": "command",
         "bash": ".github/hooks/scripts/post-tool-use.sh",
@@ -9,7 +9,7 @@
         "timeout": 5
       }
     ],
-    "agentStop": [
+    "Stop": [
       {
         "type": "command",
         "bash": ".github/hooks/scripts/agent-stop.sh",
@@ -17,7 +17,7 @@
         "timeout": 10
       }
     ],
-    "errorOccurred": [
+    "ErrorOccurred": [
       {
         "type": "command",
         "bash": ".github/hooks/scripts/error-occurred.sh",

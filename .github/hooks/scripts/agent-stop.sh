@@ -51,6 +51,26 @@ log "plan source: $PLAN_SOURCE -> $PLAN_FILE"
 INPUT_PREVIEW=$(printf '%s' "$INPUT" | tr '\n' ' ' | cut -c 1-300)
 log "stdin (first 300 chars, ${#INPUT} total): $INPUT_PREVIEW"
 
+# --- stop_hook_active guard --------------------------------------------------
+# Per docs: if we previously blocked the Stop and the agent is now stopping
+# again (after running our reason), `stop_hook_active=true` is set in stdin.
+# We MUST emit {} in that case to avoid an infinite loop that burns premium
+# requests. Parse with python (bash JSON parsing is fragile).
+PYTHON=$(command -v python3 || command -v python)
+STOP_HOOK_ACTIVE=$(printf '%s' "$INPUT" | $PYTHON -c "import sys,json
+try:
+    d=json.load(sys.stdin)
+    print('true' if d.get('stop_hook_active') else 'false')
+except Exception:
+    print('false')
+" 2>/dev/null || echo false)
+log "stop_hook_active: $STOP_HOOK_ACTIVE"
+if [ "$STOP_HOOK_ACTIVE" = "true" ]; then
+    log "decision: GUARDED (stop_hook_active=true) -> emitting {} to break loop"
+    echo '{}'
+    exit 0
+fi
+
 if [ ! -f "$PLAN_FILE" ]; then
     log "${PLAN_FILE:-task_plan.md}: ABSENT -> emitting {} (no-op)"
     echo '{}'
@@ -118,21 +138,20 @@ if [ -n "$PHASE_NUM" ]; then
 fi
 
 if [ "$COMPLETE" -eq "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
-    MSG="[planning-with-files] ALL PHASES COMPLETE ($COMPLETE/$TOTAL). If the user has additional work, add new phases to ${PLAN_FILE} before starting."
-    log "decision: ALL COMPLETE"
-    PYTHON=$(command -v python3 || command -v python)
-    ESCAPED=$(echo "$MSG" | $PYTHON -c "import sys,json; print(json.dumps(sys.stdin.read(), ensure_ascii=False))" 2>/dev/null || echo "\"\"")
-    OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"AgentStop\",\"additionalContext\":$ESCAPED}}"
-    log "stdout: ${#OUTPUT} chars"
-    echo "$OUTPUT"
+    # All phases done -> let the agent stop normally. No block, no message.
+    log "decision: ALL COMPLETE -> emitting {} (allow stop)"
+    echo '{}'
     exit 0
 fi
 
-MSG="[planning-with-files] Task incomplete ($COMPLETE/$TOTAL phases done).${REMAINING_LINE} Update progress.md, then read ${PLAN_FILE} and continue working on the remaining phases."
-log "decision: INCOMPLETE"
-PYTHON=$(command -v python3 || command -v python)
-ESCAPED=$(echo "$MSG" | $PYTHON -c "import sys,json; print(json.dumps(sys.stdin.read(), ensure_ascii=False))" 2>/dev/null || echo "\"\"")
-OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"AgentStop\",\"additionalContext\":$ESCAPED}}"
+# Task incomplete -> BLOCK the stop and tell the agent why to continue.
+# Per docs (https://code.visualstudio.com/docs/copilot/customization/hooks#_stop):
+#   hookEventName must be exactly "Stop"; use decision="block" + reason
+#   (additionalContext does NOT apply to Stop hooks).
+REASON="[planning-with-files] Task incomplete ($COMPLETE/$TOTAL phases done).${REMAINING_LINE} Update progress.md, then read ${PLAN_FILE} and continue working on the remaining phases. If you genuinely cannot continue (blocked / waiting on user), say so explicitly so the user can intervene."
+log "decision: BLOCK ($COMPLETE/$TOTAL phases done)"
+ESCAPED_REASON=$(echo "$REASON" | $PYTHON -c "import sys,json; print(json.dumps(sys.stdin.read(), ensure_ascii=False))" 2>/dev/null || echo '""')
+OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
 log "stdout: ${#OUTPUT} chars"
 echo "$OUTPUT"
 exit 0
