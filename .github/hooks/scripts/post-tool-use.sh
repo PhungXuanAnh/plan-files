@@ -5,8 +5,24 @@
 # No-op when task_plan.md does not exist - zero pollution on non-planning sessions.
 # Always exits 0 - outputs JSON to stdout. Debug log written to
 #   tmp/hook-logs/plan-with-files/post-tool-use.log
+#
+# Pure bash (no python dependency). Tested on bash 4+ (Ubuntu/Debian/Arch).
+
+set -u
+set -o pipefail 2>/dev/null || true
 
 INPUT=$(cat)
+
+# --- JSON escape (bash-only, no python) -------------------------------------
+json_escape() {
+    local s=${1:-}
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    s=${s//$'\t'/\\t}
+    s=${s//$'\r'/\\r}
+    s=${s//$'\n'/\\n}
+    printf '"%s"' "$s"
+}
 
 # --- Resolve plan directory --------------------------------------------------
 # Strict resolution: requires `.plan-with-files` pointer (workspace root) whose
@@ -16,7 +32,8 @@ INPUT=$(cat)
 # -> hook reads tmp/plan-with-files/JIRA-1234/task_plan.md
 # If pointer missing / invalid / target dir missing -> no-op (zero pollution).
 # The planning-with-files skill is responsible for creating both the pointer
-# and the per-task directory; hooks never write files.
+# and the per-task directory; hooks never write files (except the per-task
+# delta-state cache `.hook-state` used to suppress repeated injections).
 PLAN_DIR=""
 PLAN_SOURCE=""
 if [ -f .plan-with-files ]; then
@@ -39,21 +56,33 @@ fi
 PLAN_FILE=""
 [ -n "$PLAN_DIR" ] && PLAN_FILE="$PLAN_DIR/task_plan.md"
 
-# --- Logging setup -----------------------------------------------------------
+# --- Logging setup (flock-protected against parallel hook processes) --------
 LOG_DIR="tmp/hook-logs/plan-with-files"
 LOG_FILE="$LOG_DIR/post-tool-use.log"
-mkdir -p "$LOG_DIR" 2>/dev/null
-# Rotate log: trigger at 3000 lines, keep last 2500 (hysteresis avoids per-call rotation)
+LOG_LOCK="$LOG_FILE.lock"
 LOG_MAX_LINES=3000
 LOG_KEEP_LINES=2500
-if [ -f "$LOG_FILE" ]; then
-    _line_count=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
-    if [ "$_line_count" -gt "$LOG_MAX_LINES" ]; then
-        tail -n "$LOG_KEEP_LINES" "$LOG_FILE" > "$LOG_FILE.tmp" 2>/dev/null && mv "$LOG_FILE.tmp" "$LOG_FILE" 2>/dev/null
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+
+{
+    flock -x 9 || true
+    if [ -f "$LOG_FILE" ]; then
+        _line_count=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
+        if [ "${_line_count:-0}" -gt "$LOG_MAX_LINES" ]; then
+            tail -n "$LOG_KEEP_LINES" "$LOG_FILE" > "$LOG_FILE.tmp" 2>/dev/null \
+                && mv "$LOG_FILE.tmp" "$LOG_FILE" 2>/dev/null || true
+        fi
     fi
-fi
+} 9>>"$LOG_LOCK" 2>/dev/null || true
+
 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-log() { printf '[%s] %s\n' "$TS" "$1" >> "$LOG_FILE" 2>/dev/null; }
+log() {
+    local msg=${1:-}
+    {
+        flock -x 9 || true
+        printf '[%s] %s\n' "$TS" "$msg" >> "$LOG_FILE"
+    } 9>>"$LOG_LOCK" 2>/dev/null || true
+}
 
 log "=== post-tool-use ==="
 log "cwd: $(pwd)"
@@ -110,9 +139,10 @@ PHASE_BODY=$(cap "$PHASE_RAW" $MAX_PHASE_CHARS "Current Phase")
 # block in the plan, counts `- [ ]` lines, and captures the first one.
 # Output is a single line appended to the nudge — anti-substitution reminder
 # without per-call inflation. Caps first-item at 200 chars.
-PHASE_NUM=$(printf '%s' "$PHASE_RAW" | grep -oE 'Phase [0-9]+' | head -1)
+PHASE_NUM=$(printf '%s' "$PHASE_RAW" | grep -oE 'Phase [0-9]+' | head -1 || true)
 REMAINING_LINE=""
-if [ -n "$PHASE_NUM" ]; then
+REMAINING_COUNT=""
+if [ -n "${PHASE_NUM:-}" ]; then
     REMAINING=$(awk -v phase="$PHASE_NUM" '
       BEGIN { in_phase=0; in_comment=0; count=0; first="" }
       /<!--/ { in_comment=1 }
@@ -137,33 +167,80 @@ if [ -n "$PHASE_NUM" ]; then
     if [ ${#REMAINING_FIRST} -gt 200 ]; then
         REMAINING_FIRST="$(printf '%s' "$REMAINING_FIRST" | cut -c 1-200)..."
     fi
-    if [ -n "$REMAINING_COUNT" ] && [ "$REMAINING_COUNT" -eq 0 ]; then
+    if [ -n "${REMAINING_COUNT:-}" ] && [ "$REMAINING_COUNT" -eq 0 ]; then
         REMAINING_LINE="${PHASE_NUM}: 0 unchecked items in this phase — if all 'Done when' criteria genuinely verified (see anti-substitution rule), mark phase complete."
-    elif [ -n "$REMAINING_COUNT" ] && [ "$REMAINING_COUNT" -gt 0 ]; then
+    elif [ -n "${REMAINING_COUNT:-}" ] && [ "$REMAINING_COUNT" -gt 0 ]; then
         REMAINING_LINE="${PHASE_NUM}: ${REMAINING_COUNT} unchecked item(s). First: ${REMAINING_FIRST}"
     fi
     log "remaining: count=${REMAINING_COUNT:-?} first(${#REMAINING_FIRST} chars)"
 fi
 
-PLAN_SUMMARY=""
-if [ -n "$GOAL_BODY" ]; then
-    PLAN_SUMMARY="## Goal
-${GOAL_BODY}"
+# --- Delta-based suppression ------------------------------------------------
+# Goal/Phase/Remaining-count rarely change between tool calls. Re-injecting the
+# identical block on every PostToolUse spams the model's context. We persist
+# the last (phase, remaining-count, goal-len, phase-len) tuple to
+# `$PLAN_DIR/.hook-state` and skip the heavy block when nothing changed,
+# emitting only the short NUDGE so anti-substitution / progress-logging
+# reminder still fires every call.
+STATE_FILE="$PLAN_DIR/.hook-state"
+STATE_LOCK="$STATE_FILE.lock"
+LAST_PHASE_NUM=""
+LAST_REMAINING_COUNT=""
+LAST_GOAL_LEN=""
+LAST_PHASE_LEN=""
+if [ -f "$STATE_FILE" ]; then
+    LAST_PHASE_NUM=$(grep -E '^last_phase_num='        "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
+    LAST_REMAINING_COUNT=$(grep -E '^last_remaining_count=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
+    LAST_GOAL_LEN=$(grep -E '^last_goal_len='         "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
+    LAST_PHASE_LEN=$(grep -E '^last_phase_len='        "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
 fi
-if [ -n "$PHASE_BODY" ]; then
-    if [ -n "$PLAN_SUMMARY" ]; then
-        PLAN_SUMMARY="${PLAN_SUMMARY}
+
+CUR_GOAL_LEN=${#GOAL_BODY}
+CUR_PHASE_LEN=${#PHASE_BODY}
+INJECT_FULL=true
+if [ "${PHASE_NUM:-}"        = "${LAST_PHASE_NUM:-}" ] \
+&& [ "${REMAINING_COUNT:-}"  = "${LAST_REMAINING_COUNT:-}" ] \
+&& [ "${CUR_GOAL_LEN}"       = "${LAST_GOAL_LEN:-}" ] \
+&& [ "${CUR_PHASE_LEN}"      = "${LAST_PHASE_LEN:-}" ]; then
+    INJECT_FULL=false
+fi
+log "delta: phase='${PHASE_NUM:-}' (was '${LAST_PHASE_NUM:-}') remaining='${REMAINING_COUNT:-}' (was '${LAST_REMAINING_COUNT:-}') goal_len=$CUR_GOAL_LEN (was '${LAST_GOAL_LEN:-}') phase_len=$CUR_PHASE_LEN (was '${LAST_PHASE_LEN:-}') -> inject_full=$INJECT_FULL"
+
+# Persist new state (atomic via tmp+mv inside flock).
+{
+    flock -x 8 || true
+    {
+        printf 'last_phase_num=%s\n'        "${PHASE_NUM:-}"
+        printf 'last_remaining_count=%s\n'  "${REMAINING_COUNT:-}"
+        printf 'last_goal_len=%s\n'         "$CUR_GOAL_LEN"
+        printf 'last_phase_len=%s\n'        "$CUR_PHASE_LEN"
+    } > "$STATE_FILE.tmp" 2>/dev/null \
+        && mv "$STATE_FILE.tmp" "$STATE_FILE" 2>/dev/null || true
+} 8>>"$STATE_LOCK" 2>/dev/null || true
+
+PLAN_SUMMARY=""
+if [ "$INJECT_FULL" = "true" ]; then
+    if [ -n "$GOAL_BODY" ]; then
+        PLAN_SUMMARY="## Goal
+${GOAL_BODY}"
+    fi
+    if [ -n "$PHASE_BODY" ]; then
+        if [ -n "$PLAN_SUMMARY" ]; then
+            PLAN_SUMMARY="${PLAN_SUMMARY}
 
 ## Current Phase
 ${PHASE_BODY}"
-    else
-        PLAN_SUMMARY="## Current Phase
+        else
+            PLAN_SUMMARY="## Current Phase
 ${PHASE_BODY}"
+        fi
     fi
 fi
 
 NUDGE="[planning-with-files] Update progress.md with what you just did. If a phase is now complete, update ${PLAN_FILE} status. If you no longer see the planning-with-files SKILL.md rules in your context (post-/compact, or you have forgotten them), reload the planning-with-files skill by yourself before continuing."
-if [ -n "$REMAINING_LINE" ]; then
+# Only attach REMAINING_LINE on the call where the count actually changed,
+# OR on the first injection in a session (LAST_REMAINING_COUNT empty).
+if [ "$INJECT_FULL" = "true" ] && [ -n "$REMAINING_LINE" ]; then
     NUDGE="${NUDGE}
 ${REMAINING_LINE}"
 fi
@@ -179,12 +256,13 @@ fi
 
 log "additionalContext: ${#CONTEXT} chars"
 log "--- additionalContext begin ---"
-printf '%s\n' "$CONTEXT" >> "$LOG_FILE" 2>/dev/null
+{
+    flock -x 9 || true
+    printf '%s\n' "$CONTEXT" >> "$LOG_FILE"
+} 9>>"$LOG_LOCK" 2>/dev/null || true
 log "--- additionalContext end ---"
 
-PYTHON=$(command -v python3 || command -v python)
-ESCAPED=$(echo "$CONTEXT" | $PYTHON -c "import sys,json; print(json.dumps(sys.stdin.read(), ensure_ascii=False))" 2>/dev/null || echo "\"\"")
-
+ESCAPED=$(json_escape "$CONTEXT")
 OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":$ESCAPED}}"
 log "stdout: ${#OUTPUT} chars"
 echo "$OUTPUT"

@@ -3,8 +3,24 @@
 # Logs errors to task_plan.md when the agent encounters an error.
 # Always exits 0 — outputs JSON to stdout. Debug log written to
 #   tmp/hook-logs/plan-with-files/error-occurred.log
+#
+# Pure bash (no python dependency). Tested on bash 4+ (Ubuntu/Debian/Arch).
+
+set -u
+set -o pipefail 2>/dev/null || true
 
 INPUT=$(cat)
+
+# --- JSON escape (bash-only, no python) -------------------------------------
+json_escape() {
+    local s=${1:-}
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    s=${s//$'\t'/\\t}
+    s=${s//$'\r'/\\r}
+    s=${s//$'\n'/\\n}
+    printf '"%s"' "$s"
+}
 
 # --- Resolve plan directory (see post-tool-use.sh for full doc) -------------
 PLAN_DIR=""
@@ -28,21 +44,33 @@ fi
 PLAN_FILE=""
 [ -n "$PLAN_DIR" ] && PLAN_FILE="$PLAN_DIR/task_plan.md"
 
-# --- Logging setup -----------------------------------------------------------
+# --- Logging setup (flock-protected against parallel hook processes) --------
 LOG_DIR="tmp/hook-logs/plan-with-files"
 LOG_FILE="$LOG_DIR/error-occurred.log"
-mkdir -p "$LOG_DIR" 2>/dev/null
-# Rotate log: trigger at 3000 lines, keep last 2500 (hysteresis avoids per-call rotation)
+LOG_LOCK="$LOG_FILE.lock"
 LOG_MAX_LINES=3000
 LOG_KEEP_LINES=2500
-if [ -f "$LOG_FILE" ]; then
-    _line_count=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
-    if [ "$_line_count" -gt "$LOG_MAX_LINES" ]; then
-        tail -n "$LOG_KEEP_LINES" "$LOG_FILE" > "$LOG_FILE.tmp" 2>/dev/null && mv "$LOG_FILE.tmp" "$LOG_FILE" 2>/dev/null
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+
+{
+    flock -x 9 || true
+    if [ -f "$LOG_FILE" ]; then
+        _line_count=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
+        if [ "${_line_count:-0}" -gt "$LOG_MAX_LINES" ]; then
+            tail -n "$LOG_KEEP_LINES" "$LOG_FILE" > "$LOG_FILE.tmp" 2>/dev/null \
+                && mv "$LOG_FILE.tmp" "$LOG_FILE" 2>/dev/null || true
+        fi
     fi
-fi
+} 9>>"$LOG_LOCK" 2>/dev/null || true
+
 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-log() { printf '[%s] %s\n' "$TS" "$1" >> "$LOG_FILE" 2>/dev/null; }
+log() {
+    local msg=${1:-}
+    {
+        flock -x 9 || true
+        printf '[%s] %s\n' "$TS" "$msg" >> "$LOG_FILE"
+    } 9>>"$LOG_LOCK" 2>/dev/null || true
+}
 
 log "=== error-occurred ==="
 log "cwd: $(pwd)"
@@ -57,22 +85,29 @@ if [ ! -f "$PLAN_FILE" ]; then
 fi
 log "${PLAN_FILE}: present"
 
-# Extract error message from input JSON
-PYTHON=$(command -v python3 || command -v python)
-ERROR_MSG=$($PYTHON -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    msg = data.get('error', {}).get('message', '') if isinstance(data.get('error'), dict) else str(data.get('error', ''))
-    print(msg[:200])
-except:
-    print('')
-" <<< "$INPUT" 2>/dev/null || echo "")
+# --- Extract error message from input JSON (bash-only) ----------------------
+# Two shapes accepted:
+#   {"error":{"message":"..."}}  -> nested
+#   {"error":"..."}              -> top-level string
+# Limitation: does NOT decode escaped quotes inside the message (\" mid-value
+# would split early). Acceptable for a 200-char preview that is itself meant
+# only to nudge the agent to log the error in task_plan.md.
+ERROR_MSG=$(printf '%s' "$INPUT" \
+    | grep -oE '"message"[[:space:]]*:[[:space:]]*"[^"]*"' \
+    | head -1 \
+    | sed -E 's/^"message"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)
+if [ -z "${ERROR_MSG:-}" ]; then
+    ERROR_MSG=$(printf '%s' "$INPUT" \
+        | grep -oE '"error"[[:space:]]*:[[:space:]]*"[^"]*"' \
+        | head -1 \
+        | sed -E 's/^"error"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)
+fi
+ERROR_MSG=${ERROR_MSG:0:200}
 
-if [ -n "$ERROR_MSG" ]; then
+if [ -n "${ERROR_MSG:-}" ]; then
     log "extracted error.message (truncated to 200): $ERROR_MSG"
     CONTEXT="[planning-with-files] Error detected: ${ERROR_MSG}. Log this error in ${PLAN_FILE} under Errors Encountered with the attempt number and resolution."
-    ESCAPED=$($PYTHON -c "import sys,json; print(json.dumps(sys.stdin.read(), ensure_ascii=False))" <<< "$CONTEXT" 2>/dev/null || echo "\"\"")
+    ESCAPED=$(json_escape "$CONTEXT")
     OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"ErrorOccurred\",\"additionalContext\":$ESCAPED}}"
     log "stdout: ${#OUTPUT} chars"
     echo "$OUTPUT"
