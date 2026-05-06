@@ -11,28 +11,48 @@ if [ ! -f "$PLAN_FILE" ]; then
     exit 0
 fi
 
-# Count total phases
-TOTAL=$(grep -c "### Phase" "$PLAN_FILE" || true)
+# Phase counting (scoped to `### Phase` blocks; at most 1 status per phase).
+# Avoids false `COMPLETE > TOTAL` when status-looking lines appear OUTSIDE
+# any phase section (e.g. summary blocks). HTML comments are ignored.
+read TOTAL COMPLETE IN_PROGRESS PENDING <<EOF
+$(awk '
+  function flush() {
+    if (in_phase) {
+      if      (status == "complete")    complete++
+      else if (status == "in_progress") in_progress++
+      else if (status == "pending")     pending++
+    }
+  }
+  BEGIN { total=0; complete=0; in_progress=0; pending=0; in_phase=0; status=""; in_comment=0 }
+  /<!--/ { in_comment=1 }
+  in_comment { if (/-->/) in_comment=0; next }
+  /^### Phase/ {
+    flush(); in_phase=1; total++; status=""
+    if      ($0 ~ /\[complete\]/)    status="complete"
+    else if ($0 ~ /\[in_progress\]/) status="in_progress"
+    else if ($0 ~ /\[pending\]/)     status="pending"
+    next
+  }
+  /^### / || /^## / { flush(); in_phase=0; status=""; next }
+  !in_phase { next }
+  status != "" { next }
+  /\*\*Status:\*\*[[:space:]]*complete([^a-zA-Z_]|$)/    { status="complete";    next }
+  /\*\*Status:\*\*[[:space:]]*in_progress([^a-zA-Z_]|$)/ { status="in_progress"; next }
+  /\*\*Status:\*\*[[:space:]]*pending([^a-zA-Z_]|$)/     { status="pending";     next }
+  /\[complete\]/    { status="complete";    next }
+  /\[in_progress\]/ { status="in_progress"; next }
+  /\[pending\]/     { status="pending";     next }
+  END { flush(); printf "%d %d %d %d", total, complete, in_progress, pending }
+' "$PLAN_FILE" 2>/dev/null)
+EOF
+: "${TOTAL:=0}" "${COMPLETE:=0}" "${IN_PROGRESS:=0}" "${PENDING:=0}"
 
-# Check for **Status:** format first
-COMPLETE=$(grep -cF "**Status:** complete" "$PLAN_FILE" || true)
-IN_PROGRESS=$(grep -cF "**Status:** in_progress" "$PLAN_FILE" || true)
-PENDING=$(grep -cF "**Status:** pending" "$PLAN_FILE" || true)
-
-# Fallback: check for [complete] inline format
-if [ "$COMPLETE" -eq 0 ] && [ "$IN_PROGRESS" -eq 0 ] && [ "$PENDING" -eq 0 ]; then
-    COMPLETE=$(grep -c "\[complete\]" "$PLAN_FILE" || true)
-    IN_PROGRESS=$(grep -c "\[in_progress\]" "$PLAN_FILE" || true)
-    PENDING=$(grep -c "\[pending\]" "$PLAN_FILE" || true)
+if [ "$TOTAL" -eq 0 ]; then
+    # No `### Phase` headings -> nothing to gate on. Allow stop.
+    exit 0
 fi
 
-# Default to 0 if empty
-: "${TOTAL:=0}"
-: "${COMPLETE:=0}"
-: "${IN_PROGRESS:=0}"
-: "${PENDING:=0}"
-
-if [ "$COMPLETE" -eq "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
+if [ "$COMPLETE" -ge "$TOTAL" ]; then
     # All phases complete — provide re-entry guidance
     echo "{\"followup_message\": \"[planning-with-files] ALL PHASES COMPLETE ($COMPLETE/$TOTAL). If the user has additional work, add new phases to task_plan.md before starting.\"}"
     exit 0

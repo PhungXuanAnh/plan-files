@@ -113,14 +113,46 @@ if [ ! -f "$PLAN_FILE" ]; then
 fi
 log "${PLAN_FILE}: present ($(wc -c < "$PLAN_FILE" | tr -d ' ') bytes)"
 
-# --- Phase counting (unified: sum BOTH `**Status:**` and `[bracket]` formats) -
-# Plan files MAY use either format or mix them; previous logic only counted
-# the bracket form when Status form had zero matches, which under-counted
-# mixed files. Summing is safe because the two markers are disjoint.
-TOTAL=$(gcount "^### Phase" "$PLAN_FILE")
-COMPLETE=$((    $(gcountF "**Status:** complete"    "$PLAN_FILE") + $(gcountF "[complete]"    "$PLAN_FILE") ))
-IN_PROGRESS=$(( $(gcountF "**Status:** in_progress" "$PLAN_FILE") + $(gcountF "[in_progress]" "$PLAN_FILE") ))
-PENDING=$((     $(gcountF "**Status:** pending"     "$PLAN_FILE") + $(gcountF "[pending]"     "$PLAN_FILE") ))
+# --- Phase counting (scoped to `### Phase` blocks; at most 1 status per phase)
+# Plan files MAY use `**Status:** <state>` and/or inline `[<state>]` markers,
+# and they MAY also contain status-looking lines OUTSIDE phase sections (e.g.
+# summary blocks). Counting globally produces COMPLETE > TOTAL (e.g. 6/5).
+# Strategy: walk the file, only consider lines that belong to a `### Phase`
+# block (until the next `### ` or `## ` header), and credit each phase with
+# at most one status — the first marker found, with phase-header inline
+# `[state]` taking precedence. HTML comments are ignored.
+read TOTAL COMPLETE IN_PROGRESS PENDING <<EOF
+$(awk '
+  function flush() {
+    if (in_phase) {
+      if      (status == "complete")    complete++
+      else if (status == "in_progress") in_progress++
+      else if (status == "pending")     pending++
+    }
+  }
+  BEGIN { total=0; complete=0; in_progress=0; pending=0; in_phase=0; status=""; in_comment=0 }
+  /<!--/ { in_comment=1 }
+  in_comment { if (/-->/) in_comment=0; next }
+  /^### Phase/ {
+    flush(); in_phase=1; total++; status=""
+    if      ($0 ~ /\[complete\]/)    status="complete"
+    else if ($0 ~ /\[in_progress\]/) status="in_progress"
+    else if ($0 ~ /\[pending\]/)     status="pending"
+    next
+  }
+  /^### / || /^## / { flush(); in_phase=0; status=""; next }
+  !in_phase { next }
+  status != "" { next }
+  /\*\*Status:\*\*[[:space:]]*complete([^a-zA-Z_]|$)/    { status="complete";    next }
+  /\*\*Status:\*\*[[:space:]]*in_progress([^a-zA-Z_]|$)/ { status="in_progress"; next }
+  /\*\*Status:\*\*[[:space:]]*pending([^a-zA-Z_]|$)/     { status="pending";     next }
+  /\[complete\]/    { status="complete";    next }
+  /\[in_progress\]/ { status="in_progress"; next }
+  /\[pending\]/     { status="pending";     next }
+  END { flush(); printf "%d %d %d %d", total, complete, in_progress, pending }
+' "$PLAN_FILE" 2>/dev/null)
+EOF
+: "${TOTAL:=0}" "${COMPLETE:=0}" "${IN_PROGRESS:=0}" "${PENDING:=0}"
 
 log "phases: total=$TOTAL complete=$COMPLETE in_progress=$IN_PROGRESS pending=$PENDING"
 
@@ -158,7 +190,14 @@ if [ -n "${PHASE_NUM:-}" ]; then
     log "remaining: count=${REMAINING_COUNT:-?}"
 fi
 
-if [ "$COMPLETE" -eq "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
+if [ "$TOTAL" -eq 0 ]; then
+    # No `### Phase` headings in plan file -> nothing to gate on. Allow stop.
+    log "decision: NO PHASES (TOTAL=0) -> emitting {} (allow stop)"
+    echo '{}'
+    exit 0
+fi
+
+if [ "$COMPLETE" -ge "$TOTAL" ]; then
     # All phases done -> let the agent stop normally. No block, no message.
     log "decision: ALL COMPLETE -> emitting {} (allow stop)"
     echo '{}'
