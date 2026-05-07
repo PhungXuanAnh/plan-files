@@ -107,6 +107,96 @@ Before ANY complex task:
 
 > **Note:** Planning files go in `tmp/plan-with-files/<task-id>/` in your project, not the skill installation folder. The `tmp/` folder should be git-ignored.
 
+## FORMAT CONTRACT (strict — hooks enforce this)
+
+The Stop hook parses `task_plan.md` to decide whether to BLOCK the agent's stop or allow it. The parser is intentionally strict — paraphrased headings or status markers are NOT recognized and the hook will BLOCK with a `FORMAT CONTRACT VIOLATION` error.
+
+**You MUST follow this format verbatim. Do not paraphrase headings or status markers.**
+
+### 1. Phase headings
+
+- MUST be level-3 Markdown headings: `### Phase N: Title`
+- `N` is an integer (0, 1, 2, …)
+- A colon `:` follows `Phase N`
+- NO backticks, em-dashes, parentheticals, or status decorations on the heading line itself
+
+### 2. Phase status
+
+Each phase MUST end with **one** status line in either of these forms:
+
+```markdown
+- **Status:** pending
+- **Status:** in_progress
+- **Status:** complete
+```
+
+Or, alternatively, an inline marker on the heading itself:
+
+```markdown
+### Phase 0: Setup [complete]
+### Phase 1: Build [in_progress]
+### Phase 2: Tests [pending]
+```
+
+Allowed status values are exactly: `pending`, `in_progress`, `complete`.
+
+### 3. Current Phase pointer
+
+The `## Current Phase` section MUST contain just a phase label:
+
+```markdown
+## Current Phase
+Phase 2
+```
+
+The hook extracts `Phase N` from this section and uses it to count remaining unchecked items in that phase. Long prose here breaks the remaining-items extraction.
+
+### ✅ Good example
+
+```markdown
+## Current Phase
+Phase 1
+
+## Phases
+
+### Phase 0: Setup
+- [x] Initialize repo
+- [x] Configure CI
+- **Status:** complete
+
+### Phase 1: Implementation
+- [ ] Write feature X
+- [ ] Write tests
+- **Status:** in_progress
+
+### Phase 2: Review
+- [ ] Open PR
+- **Status:** pending
+```
+
+### ❌ Bad examples (all of these will BLOCK with FORMAT CONTRACT VIOLATION)
+
+```markdown
+## Phase 0 — Setup `[done]`              ← level-2 heading, backtick-wrapped, "done" is not a valid status
+## Phase 1 (in progress)                  ← level-2 heading, parenthetical status
+### Phase 2 - Tests [not started]         ← em-dash instead of colon, "not started" is not a valid status
+### Phase 3: Deploy                       ← missing **Status:** line
+  Status: pending                         ← missing leading `- ` and bold markers
+```
+
+### Mapping reference (when migrating an old plan)
+
+| Loose marker            | Strict replacement       |
+|-------------------------|--------------------------|
+| `` `[done]`  ``         | `- **Status:** complete` |
+| `` `[not started]` ``   | `- **Status:** pending`  |
+| `(in progress)`         | `- **Status:** in_progress` |
+| `## Phase N — Title`    | `### Phase N: Title`     |
+
+### Why the strict format
+
+The hook injects "Goal" and "Current Phase" into the model context on every tool call, and BLOCKs the agent's stop when phases are incomplete. If the parser can't recognize phases or statuses, it cannot enforce continuation — which silently breaks the planning gate (the agent stops mid-task and the user has to re-prompt). The strict format is what makes the gate reliable.
+
 ## The Core Pattern
 
 ```

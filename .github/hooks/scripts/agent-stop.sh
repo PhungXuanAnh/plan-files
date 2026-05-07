@@ -191,9 +191,30 @@ if [ -n "${PHASE_NUM:-}" ]; then
 fi
 
 if [ "$TOTAL" -eq 0 ]; then
-    # No `### Phase` headings in plan file -> nothing to gate on. Allow stop.
-    log "decision: NO PHASES (TOTAL=0) -> emitting {} (allow stop)"
-    echo '{}'
+    # Plan file present but contains zero `### Phase N:` headings.
+    # Almost always a FORMAT-CONTRACT violation: the agent paraphrased
+    # headings (e.g. `## Phase 0 — Preparation \`[done]\``) instead of using
+    # the strict template. Silently allowing stop would let the agent slip
+    # past the planning gate (the original bug). BLOCK with a precise
+    # actionable message instead.
+    REASON="[planning-with-files] FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: 0 phases detected. Required heading format is exactly '### Phase N: Title' (level-3, colon, no decorations, no backticks), and each phase MUST end with a line '- **Status:** pending|in_progress|complete'. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Fix the plan file headings/status markers, then continue."
+    log "decision: BLOCK (FORMAT CONTRACT — TOTAL=0)"
+    ESCAPED_REASON=$(json_escape "$REASON")
+    OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
+    log "stdout: ${#OUTPUT} chars"
+    echo "$OUTPUT"
+    exit 0
+fi
+
+# Phases exist but no status markers were recognized at all -> also a format
+# contract violation (e.g. agent used `\`[done]\``/`\`[not started]\`` etc.).
+if [ "$COMPLETE" -eq 0 ] && [ "$IN_PROGRESS" -eq 0 ] && [ "$PENDING" -eq 0 ]; then
+    REASON="[planning-with-files] FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: $TOTAL phase heading(s) found but ZERO recognized status markers. Each phase MUST end with a line: '- **Status:** pending' OR '- **Status:** in_progress' OR '- **Status:** complete'. The inline form '[complete]'/'[in_progress]'/'[pending]' on the heading is also accepted. Backtick-wrapped or paraphrased markers (e.g. \`[done]\`, \`[not started]\`, (in progress)) are NOT recognized. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Fix the markers, then continue."
+    log "decision: BLOCK (FORMAT CONTRACT — no recognized status markers across $TOTAL phases)"
+    ESCAPED_REASON=$(json_escape "$REASON")
+    OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
+    log "stdout: ${#OUTPUT} chars"
+    echo "$OUTPUT"
     exit 0
 fi
 
