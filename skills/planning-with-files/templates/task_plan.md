@@ -28,7 +28,16 @@ Phase 1
 <!-- 
   CRITICAL: Pick ONE profile before starting. This determines what "done" means for every coding phase below.
   The agent MUST NOT mark a coding phase complete until it reaches the named handoff point of the chosen profile.
-  Replace the placeholder below with: A | B | C
+  Replace the placeholder below with exactly one letter: A, B, or C.
+
+  PURPOSE — declares the agent↔human handoff point:
+    A = PR-Handoff        — agent stops after PR opened + CI green + reviewers requested; human merges + deploys
+    B = Staging-Verified  — agent stops after staging E2E passes (same assertions as local, against staging URL); human promotes to prod
+    C = Research/Document — no code, no PR; agent stops after deliverable file is written and key questions answered
+
+  HOOK ENFORCEMENT: The agent-stop hook BLOCKS the agent from stopping if this section is missing
+  or the placeholder is not filled in. Enforcement is active while COMPLETE=0 (i.e., during planning /
+  before any phase is marked complete). Fill this in before beginning Phase 1.
 -->
 **Profile:** [A | B | C]
 

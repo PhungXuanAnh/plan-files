@@ -11,6 +11,9 @@
 set -u
 set -o pipefail 2>/dev/null || true
 
+# shellcheck source=common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
 INPUT=$(cat)
 
 # --- JSON escape (bash-only, no python) -------------------------------------
@@ -97,6 +100,10 @@ if [ ! -f "$PLAN_FILE" ]; then
 fi
 PLAN_BYTES=$(wc -c < "$PLAN_FILE" | tr -d ' ')
 log "${PLAN_FILE}: present (${PLAN_BYTES} bytes)"
+
+# --- Phase counting (delegated to common.sh:count_phases) ------------------
+count_phases "$PLAN_FILE"
+log "phases: total=$TOTAL complete=$COMPLETE in_progress=$IN_PROGRESS pending=$PENDING"
 
 # Per-section hard caps. Prevents runaway model verbosity from inflating
 # per-tool-call cost while preserving BOTH sections (the previous combined
@@ -243,6 +250,34 @@ NUDGE="[planning-with-files] Update progress.md with what you just did. If a pha
 if [ "$INJECT_FULL" = "true" ] && [ -n "$REMAINING_LINE" ]; then
     NUDGE="${NUDGE}
 ${REMAINING_LINE}"
+fi
+
+# --- Format / Workflow-Profile reminder (delegated to common.sh:check_task_plan_format)
+# Injected only when INJECT_FULL=true (plan changed since last call) to avoid
+# spamming every tool call. Once any phase is complete (COMPLETE>0) the plan
+# is in active use and we stop reminding about format.
+if [ "$INJECT_FULL" = "true" ]; then
+    FORMAT_WARN=""
+    FORMAT_ISSUE=$(check_task_plan_format "$PLAN_FILE")
+    case "${FORMAT_ISSUE:-}" in
+        NO_PHASES)
+            FORMAT_WARN="FORMAT REMINDER: no '### Phase N: Title' headings detected in ${PLAN_FILE}. Use exact level-3 headings: '### Phase 0: Title', '### Phase 1: Title', etc. Each phase must end with '- **Status:** pending'. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT."
+            ;;
+        NO_STATUS_MARKERS)
+            FORMAT_WARN="FORMAT REMINDER: $TOTAL phase heading(s) found in ${PLAN_FILE} but no recognized status markers. Each phase must end with exactly: '- **Status:** pending' (or in_progress / complete). See skills/planning-with-files/SKILL.md > FORMAT CONTRACT."
+            ;;
+        PROFILE_MISSING)
+            FORMAT_WARN="REMINDER: '## Workflow Profile' section is missing from ${PLAN_FILE}. Add it between '## Current Phase' and '## Phases' with '**Profile:** A' (PR-Handoff), B (Staging-Verified), or C (Research/Document) filled in before starting implementation."
+            ;;
+        PROFILE_UNFILLED)
+            FORMAT_WARN="REMINDER: '## Workflow Profile' found in ${PLAN_FILE} but **Profile:** is still the placeholder. Replace '[A | B | C]' with A (PR-Handoff), B (Staging-Verified), or C (Research/Document) before starting implementation."
+            ;;
+    esac
+    if [ -n "$FORMAT_WARN" ]; then
+        NUDGE="${NUDGE}
+[planning-with-files] ${FORMAT_WARN}"
+        log "format warn injected (${#FORMAT_WARN} chars)"
+    fi
 fi
 
 if [ -n "$PLAN_SUMMARY" ]; then

@@ -10,6 +10,9 @@
 set -u
 set -o pipefail 2>/dev/null || true
 
+# shellcheck source=common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+
 INPUT=$(cat)
 
 # --- JSON escape (bash-only, no python) -------------------------------------
@@ -113,47 +116,8 @@ if [ ! -f "$PLAN_FILE" ]; then
 fi
 log "${PLAN_FILE}: present ($(wc -c < "$PLAN_FILE" | tr -d ' ') bytes)"
 
-# --- Phase counting (scoped to `### Phase` blocks; at most 1 status per phase)
-# Plan files MAY use `**Status:** <state>` and/or inline `[<state>]` markers,
-# and they MAY also contain status-looking lines OUTSIDE phase sections (e.g.
-# summary blocks). Counting globally produces COMPLETE > TOTAL (e.g. 6/5).
-# Strategy: walk the file, only consider lines that belong to a `### Phase`
-# block (until the next `### ` or `## ` header), and credit each phase with
-# at most one status — the first marker found, with phase-header inline
-# `[state]` taking precedence. HTML comments are ignored.
-read TOTAL COMPLETE IN_PROGRESS PENDING <<EOF
-$(awk '
-  function flush() {
-    if (in_phase) {
-      if      (status == "complete")    complete++
-      else if (status == "in_progress") in_progress++
-      else if (status == "pending")     pending++
-    }
-  }
-  BEGIN { total=0; complete=0; in_progress=0; pending=0; in_phase=0; status=""; in_comment=0 }
-  /<!--/ { in_comment=1 }
-  in_comment { if (/-->/) in_comment=0; next }
-  /^### Phase/ {
-    flush(); in_phase=1; total++; status=""
-    if      ($0 ~ /\[complete\]/)    status="complete"
-    else if ($0 ~ /\[in_progress\]/) status="in_progress"
-    else if ($0 ~ /\[pending\]/)     status="pending"
-    next
-  }
-  /^### / || /^## / { flush(); in_phase=0; status=""; next }
-  !in_phase { next }
-  status != "" { next }
-  /\*\*Status:\*\*[[:space:]]*complete([^a-zA-Z_]|$)/    { status="complete";    next }
-  /\*\*Status:\*\*[[:space:]]*in_progress([^a-zA-Z_]|$)/ { status="in_progress"; next }
-  /\*\*Status:\*\*[[:space:]]*pending([^a-zA-Z_]|$)/     { status="pending";     next }
-  /\[complete\]/    { status="complete";    next }
-  /\[in_progress\]/ { status="in_progress"; next }
-  /\[pending\]/     { status="pending";     next }
-  END { flush(); printf "%d %d %d %d", total, complete, in_progress, pending }
-' "$PLAN_FILE" 2>/dev/null)
-EOF
-: "${TOTAL:=0}" "${COMPLETE:=0}" "${IN_PROGRESS:=0}" "${PENDING:=0}"
-
+# --- Phase counting (delegated to common.sh:count_phases) ------------------
+count_phases "$PLAN_FILE"
 log "phases: total=$TOTAL complete=$COMPLETE in_progress=$IN_PROGRESS pending=$PENDING"
 
 # --- Remaining-in-current-phase snippet (count + first unchecked) ----------
@@ -190,33 +154,48 @@ if [ -n "${PHASE_NUM:-}" ]; then
     log "remaining: count=${REMAINING_COUNT:-?}"
 fi
 
-if [ "$TOTAL" -eq 0 ]; then
-    # Plan file present but contains zero `### Phase N:` headings.
-    # Almost always a FORMAT-CONTRACT violation: the agent paraphrased
-    # headings (e.g. `## Phase 0 — Preparation \`[done]\``) instead of using
-    # the strict template. Silently allowing stop would let the agent slip
-    # past the planning gate (the original bug). BLOCK with a precise
-    # actionable message instead.
-    REASON="[planning-with-files] FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: 0 phases detected. Required heading format is exactly '### Phase N: Title' (level-3, colon, no decorations, no backticks), and each phase MUST end with a line '- **Status:** pending|in_progress|complete'. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Fix the plan file headings/status markers, then continue."
-    log "decision: BLOCK (FORMAT CONTRACT — TOTAL=0)"
-    ESCAPED_REASON=$(json_escape "$REASON")
-    OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
-    log "stdout: ${#OUTPUT} chars"
-    echo "$OUTPUT"
-    exit 0
-fi
-
-# Phases exist but no status markers were recognized at all -> also a format
-# contract violation (e.g. agent used `\`[done]\``/`\`[not started]\`` etc.).
-if [ "$COMPLETE" -eq 0 ] && [ "$IN_PROGRESS" -eq 0 ] && [ "$PENDING" -eq 0 ]; then
-    REASON="[planning-with-files] FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: $TOTAL phase heading(s) found but ZERO recognized status markers. Each phase MUST end with a line: '- **Status:** pending' OR '- **Status:** in_progress' OR '- **Status:** complete'. The inline form '[complete]'/'[in_progress]'/'[pending]' on the heading is also accepted. Backtick-wrapped or paraphrased markers (e.g. \`[done]\`, \`[not started]\`, (in progress)) are NOT recognized. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Fix the markers, then continue."
-    log "decision: BLOCK (FORMAT CONTRACT — no recognized status markers across $TOTAL phases)"
-    ESCAPED_REASON=$(json_escape "$REASON")
-    OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
-    log "stdout: ${#OUTPUT} chars"
-    echo "$OUTPUT"
-    exit 0
-fi
+# --- Format / Workflow-Profile checks (delegated to common.sh:check_task_plan_format)
+# Active only during the planning phase (COMPLETE=0). Each issue code maps to
+# a specific BLOCK message. Detection logic is shared; messages stay here.
+FORMAT_ISSUE=$(check_task_plan_format "$PLAN_FILE")
+case "${FORMAT_ISSUE:-}" in
+    NO_PHASES)
+        REASON="[planning-with-files] FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: 0 phases detected. Required heading format is exactly '### Phase N: Title' (level-3, colon, no decorations, no backticks), and each phase MUST end with a line '- **Status:** pending|in_progress|complete'. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Fix the plan file headings/status markers, then continue."
+        log "decision: BLOCK (FORMAT CONTRACT — TOTAL=0)"
+        ESCAPED_REASON=$(json_escape "$REASON")
+        OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
+        log "stdout: ${#OUTPUT} chars"
+        echo "$OUTPUT"
+        exit 0
+        ;;
+    NO_STATUS_MARKERS)
+        REASON="[planning-with-files] FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: $TOTAL phase heading(s) found but ZERO recognized status markers. Each phase MUST end with a line: '- **Status:** pending' OR '- **Status:** in_progress' OR '- **Status:** complete'. The inline form '[complete]'/'[in_progress]'/'[pending]' on the heading is also accepted. Backtick-wrapped or paraphrased markers (e.g. \`[done]\`, \`[not started]\`, (in progress)) are NOT recognized. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Fix the markers, then continue."
+        log "decision: BLOCK (FORMAT CONTRACT — no recognized status markers across $TOTAL phases)"
+        ESCAPED_REASON=$(json_escape "$REASON")
+        OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
+        log "stdout: ${#OUTPUT} chars"
+        echo "$OUTPUT"
+        exit 0
+        ;;
+    PROFILE_MISSING)
+        REASON="[planning-with-files] MISSING SECTION in ${PLAN_FILE}: '## Workflow Profile' not found. This section is REQUIRED before implementation begins. It declares the agent handoff point: Profile A = PR-Handoff (stop after CI green), B = Staging-Verified (stop after staging E2E), C = Research/Document (no code/PR). Add it between '## Current Phase' and '## Phases', with '**Profile:** A' (or B or C) filled in. See skills/planning-with-files/SKILL.md > Workflow Profile."
+        log "decision: BLOCK (Workflow Profile section absent, COMPLETE=0)"
+        ESCAPED_REASON=$(json_escape "$REASON")
+        OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
+        log "stdout: ${#OUTPUT} chars"
+        echo "$OUTPUT"
+        exit 0
+        ;;
+    PROFILE_UNFILLED)
+        REASON="[planning-with-files] UNFILLED SECTION in ${PLAN_FILE}: '## Workflow Profile' found but **Profile:** is not set to A, B, or C (placeholder still present or missing). Replace the '[A | B | C]' placeholder with exactly one letter: A (PR-Handoff — stop after CI green + reviewers), B (Staging-Verified — stop after staging E2E passes), or C (Research/Document — deliverable file complete). See skills/planning-with-files/SKILL.md > Workflow Profile."
+        log "decision: BLOCK (Workflow Profile unfilled, COMPLETE=0)"
+        ESCAPED_REASON=$(json_escape "$REASON")
+        OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
+        log "stdout: ${#OUTPUT} chars"
+        echo "$OUTPUT"
+        exit 0
+        ;;
+esac
 
 if [ "$COMPLETE" -ge "$TOTAL" ]; then
     # All phases done -> let the agent stop normally. No block, no message.
