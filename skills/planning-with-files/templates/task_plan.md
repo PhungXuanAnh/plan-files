@@ -17,12 +17,14 @@
 
 ## Current Phase
 <!-- 
-  WHAT: Which phase you're currently working on (e.g., "Phase 1", "Phase 3"). MAX 15 words / ~100 characters.
-  WHY: Quick reference for where you are in the task. Update this as you progress.
-  LENGTH RULE: Phase label + at most a short qualifier. Detailed status notes belong in progress.md, NOT here.
-        This section is re-injected into the model on every tool call by the post-tool-use hook.
+  WHAT: The phase you are currently IMPLEMENTING. Leave this empty while planning/discussing.
+  WHY: The hook uses this to count remaining unchecked items and inject context on every tool call.
+  RULE: Fill in (e.g. "Phase 1") only when you START working on a phase. Clear it back to empty
+        if you return to pure planning mode. While empty, the agent-stop hook will NOT block the
+        agent from stopping (planning mode). Once you write "Phase N" here and set a phase to
+        in_progress, the hook begins enforcing continuation.
+  LENGTH RULE: Phase label only — max 15 words. No prose here.
 -->
-Phase 1
 
 ## Workflow Profile
 <!-- 

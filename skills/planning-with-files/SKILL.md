@@ -142,7 +142,7 @@ Allowed status values are exactly: `pending`, `in_progress`, `complete`.
 
 ### 3. Current Phase pointer
 
-The `## Current Phase` section MUST contain just a phase label:
+**Leave this section empty while planning/discussing.** Fill it in only when you START implementing a phase.
 
 ```markdown
 ## Current Phase
@@ -150,6 +150,8 @@ Phase 2
 ```
 
 The hook extracts `Phase N` from this section and uses it to count remaining unchecked items in that phase. Long prose here breaks the remaining-items extraction.
+
+**Planning mode (empty = allowed to stop):** When `## Current Phase` is empty and no phase is `in_progress` or `complete`, the agent-stop hook treats the agent as being in planning/discussion mode and allows the agent to stop freely. The hook only starts blocking when a phase is actively being worked on (`in_progress`) or when some phases are done and others remain (`complete < total`).
 
 ### ✅ Good example
 

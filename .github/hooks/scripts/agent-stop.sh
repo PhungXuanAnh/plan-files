@@ -204,6 +204,15 @@ if [ "$COMPLETE" -ge "$TOTAL" ]; then
     exit 0
 fi
 
+# Planning mode: all phases still pending (none in_progress or complete).
+# The agent is reviewing / discussing the plan with the user, not implementing.
+# Allow stop — do not demand continuation.
+if [ "$COMPLETE" -eq 0 ] && [ "$IN_PROGRESS" -eq 0 ]; then
+    log "decision: PLANNING MODE (no phases started/complete, all pending) -> emitting {} (allow stop)"
+    echo '{}'
+    exit 0
+fi
+
 # Task incomplete -> BLOCK the stop and tell the agent why to continue.
 # Per docs (https://code.visualstudio.com/docs/copilot/customization/hooks#_stop):
 #   hookEventName must be exactly "Stop"; use decision="block" + reason
