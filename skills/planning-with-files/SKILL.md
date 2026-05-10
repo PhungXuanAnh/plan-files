@@ -229,13 +229,21 @@ This prevents visual/multimodal information from being lost.
 ### 3. Read Before Decide
 Before major decisions, read the plan file. This keeps goals in your attention window.
 
-### 4. Update After Act
+### 4. Declare Before Start
+**Before doing any work on a phase** (research, implementation, or tool calls), as the very first action:
+1. Update `## Current Phase` to the phase you are about to start (e.g. `Phase 2`).
+2. Set that phase's `- **Status:**` line to `in_progress`.
+3. Only then begin the actual work.
+
+This applies when starting a brand-new phase AND when transitioning from a blocked/completed phase to the next one. The hook reads `## Current Phase` to inject the right context — if you skip this step, the hook keeps injecting the old phase and the stop-hook cannot correctly gate on the active phase.
+
+### 5. Update After Act
 After completing any phase:
 - Mark phase status: `in_progress` → `complete`
 - Log any errors encountered
 - Note files created/modified
 
-### 5. Log ALL Errors
+### 6. Log ALL Errors
 Every error goes in the plan file. This builds knowledge and prevents repetition.
 
 ```markdown
@@ -246,20 +254,20 @@ Every error goes in the plan file. This builds knowledge and prevents repetition
 | API timeout | 2 | Added retry logic |
 ```
 
-### 6. Never Repeat Failures
+### 7. Never Repeat Failures
 ```
 if action_failed:
     next_action != same_action
 ```
 Track what you tried. Mutate the approach.
 
-### 7. Continue After Completion
+### 8. Continue After Completion
 When all phases are done but the user requests additional work:
 - Add new phases to `task_plan.md` (e.g., Phase 6, Phase 7)
 - Log a new session entry in `progress.md`
 - Continue the planning workflow as normal
 
-### 8. Executable Acceptance Criteria (anti-substitution rule)
+### 9. Executable Acceptance Criteria (anti-substitution rule)
 Each phase's `Done when` items must name **the exact verification method** (e.g. `pytest tests/foo.py`, `Selenium MCP user flow against localhost`, `curl /api/x | jq .field`) — not a vague outcome like "works correctly". Never substitute a cheaper test (unit) for a stricter one (E2E) just because it's faster — if E2E is listed, E2E must run. A green unit test is **not** evidence that an E2E criterion is met.
 
 **Workflow Profile awareness:** If the plan's `## Workflow Profile` is **Profile B (Staging-Verified)**, then "merged to staging" is NOT done — only "staging E2E re-run with the SAME assertions as local E2E, against the staging URL" is done. Localhost passing does not imply staging passes (env vars, migrations, config drift can break it). For **Profile A (PR-Handoff)**, the agent stops after CI green + reviewers requested — do not self-merge or pretend the human review step is automatable.
