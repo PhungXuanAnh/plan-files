@@ -213,6 +213,20 @@ if [ "$COMPLETE" -eq 0 ] && [ "$IN_PROGRESS" -eq 0 ]; then
     exit 0
 fi
 
+# Discussion mode: ## Current Phase is empty (no valid "Phase N" parsed from it)
+# AND nothing is complete yet. This covers the case where a phase is marked
+# in_progress for tracking (e.g. Phase 0 = research/plan phase with some items
+# checked) but the agent is still discussing/waiting for user input before
+# implementation begins. The placeholder text in ## Current Phase must NOT
+# contain "Phase N" patterns — if it does, it will be misread as the current
+# phase (see SKILL.md FORMAT CONTRACT). When Current Phase is truly empty,
+# we treat the session as still in discussion mode and allow stop.
+if [ -z "${PHASE_NUM:-}" ] && [ "$COMPLETE" -eq 0 ]; then
+    log "decision: DISCUSSION MODE (Current Phase empty, nothing complete) -> emitting {} (allow stop)"
+    echo '{}'
+    exit 0
+fi
+
 # Task incomplete -> BLOCK the stop and tell the agent why to continue.
 # Per docs (https://code.visualstudio.com/docs/copilot/customization/hooks#_stop):
 #   hookEventName must be exactly "Stop"; use decision="block" + reason

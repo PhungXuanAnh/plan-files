@@ -151,7 +151,9 @@ Phase 2
 
 The hook extracts `Phase N` from this section and uses it to count remaining unchecked items in that phase. Long prose here breaks the remaining-items extraction.
 
-**Planning mode (empty = allowed to stop):** When `## Current Phase` is empty and no phase is `in_progress` or `complete`, the agent-stop hook treats the agent as being in planning/discussion mode and allows the agent to stop freely. The hook only starts blocking when a phase is actively being worked on (`in_progress`) or when some phases are done and others remain (`complete < total`).
+**⚠️ WARNING — never put "Phase N" text in this section as a comment/placeholder.** The hook uses a simple `grep -oE 'Phase [0-9]+'` regex. Any occurrence of that pattern — even inside a parenthetical like `(waiting for user before Phase 1)` — will be parsed as the current phase number, causing the hook to report the wrong phase's unchecked items. If you need to leave a note here while waiting for user input, use text that does NOT contain `Phase` followed by a digit. Or leave the section completely blank.
+
+**Discussion mode (empty Current Phase = allowed to stop):** When `## Current Phase` contains no valid `Phase N` pattern AND no phases are complete yet, the agent-stop hook treats the session as still in planning/discussion mode and allows the agent to stop freely. This covers the case where a phase is marked `in_progress` for tracking purposes (e.g. Phase 0 research with some items checked) but the agent is waiting on a user decision before implementation begins. The hook only starts blocking when `## Current Phase` has a valid phase number AND some phases are complete.
 
 ### ✅ Good example
 
