@@ -197,6 +197,68 @@ case "${FORMAT_ISSUE:-}" in
         ;;
 esac
 
+# --- Status-integrity checks (run regardless of COMPLETE count) ------------
+# Catches two classes of "the agent stopped too early" bug:
+#   (A) A phase marked **Status:** complete still has "- [ ]" items inside it.
+#       The phase counter trusts the status marker, so unchecked sub-tasks are
+#       invisible to the gate. Block until either the boxes are checked or the
+#       remaining work is split into a new ### Phase with status pending.
+#   (B) ## Current Phase points at a phase whose status is already complete
+#       while other phases are still pending/in_progress. The hook keeps
+#       injecting the wrong phase context and the agent loses track. Block
+#       until ## Current Phase is advanced to a non-complete phase.
+SUMMARY=$(phase_summary "$PLAN_FILE")
+LIE_PHASE=""
+LIE_COUNT=0
+LIE_FIRST=""
+while IFS=$'\t' read -r _num _status _unchecked _first; do
+    [ -z "${_num:-}" ] && continue
+    if [ "${_status:-}" = "complete" ] && [ "${_unchecked:-0}" -gt 0 ]; then
+        LIE_PHASE="Phase ${_num}"
+        LIE_COUNT="${_unchecked}"
+        LIE_FIRST="${_first}"
+        break
+    fi
+done <<< "$SUMMARY"
+
+if [ -n "$LIE_PHASE" ]; then
+    REASON="[planning-with-files] STATUS LIES in ${PLAN_FILE}: ${LIE_PHASE} is marked '**Status:** complete' but still has ${LIE_COUNT} unchecked '- [ ]' item(s). First: ${LIE_FIRST} | Either (a) finish the items and check the boxes, or (b) demote the phase to '**Status:** in_progress' and update '## Current Phase' to ${LIE_PHASE}, or (c) split the remaining items into a new '### Phase N+1: ...' with '**Status:** pending'. Do not stop with unchecked items inside a 'complete' phase."
+    log "decision: BLOCK (STATUS LIES — ${LIE_PHASE} complete with ${LIE_COUNT} unchecked)"
+    ESCAPED_REASON=$(json_escape "$REASON")
+    OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
+    log "stdout: ${#OUTPUT} chars"
+    echo "$OUTPUT"
+    exit 0
+fi
+
+# Stale Current Phase: pointer references a phase whose status is complete,
+# AND there is at least one non-complete phase remaining. Only fires if the
+# user actually filled in ## Current Phase (PHASE_NUM non-empty).
+if [ -n "${PHASE_NUM:-}" ] && [ "$COMPLETE" -lt "$TOTAL" ]; then
+    CURRENT_NUM=$(printf '%s' "$PHASE_NUM" | grep -oE '[0-9]+' | head -1)
+    CURRENT_STATUS=""
+    NEXT_INCOMPLETE=""
+    while IFS=$'\t' read -r _num _status _unchecked _first; do
+        [ -z "${_num:-}" ] && continue
+        if [ "$_num" = "$CURRENT_NUM" ]; then
+            CURRENT_STATUS="${_status:-}"
+        fi
+        if [ -z "$NEXT_INCOMPLETE" ] && [ "${_status:-}" != "complete" ]; then
+            NEXT_INCOMPLETE="Phase ${_num}"
+        fi
+    done <<< "$SUMMARY"
+
+    if [ "$CURRENT_STATUS" = "complete" ] && [ -n "$NEXT_INCOMPLETE" ]; then
+        REASON="[planning-with-files] STALE '## Current Phase' in ${PLAN_FILE}: it points at ${PHASE_NUM} which is already '**Status:** complete', but ${NEXT_INCOMPLETE} (and possibly later phases) are not complete. Update the '## Current Phase' section to '${NEXT_INCOMPLETE}' and set its status to 'in_progress' before continuing. The hook injects context based on Current Phase — leaving it on a finished phase makes the agent work on the wrong target."
+        log "decision: BLOCK (STALE Current Phase — points at completed ${PHASE_NUM}, next incomplete is ${NEXT_INCOMPLETE})"
+        ESCAPED_REASON=$(json_escape "$REASON")
+        OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
+        log "stdout: ${#OUTPUT} chars"
+        echo "$OUTPUT"
+        exit 0
+    fi
+fi
+
 if [ "$COMPLETE" -ge "$TOTAL" ]; then
     # All phases done -> let the agent stop normally. No block, no message.
     log "decision: ALL COMPLETE -> emitting {} (allow stop)"

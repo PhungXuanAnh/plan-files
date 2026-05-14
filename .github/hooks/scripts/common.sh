@@ -98,3 +98,59 @@ check_task_plan_format() {
         return
     fi
 }
+
+# ---------------------------------------------------------------------------
+# phase_summary PLAN_FILE
+# Emits one TSV line per ### Phase block:
+#   <phase_num>\t<status>\t<unchecked_count>\t<first_unchecked_text>
+# Where:
+#   phase_num             — integer N from "### Phase N:" (or empty if unparsable)
+#   status                — complete | in_progress | pending | "" (no marker)
+#   unchecked_count       — count of "- [ ]" lines inside the phase block
+#   first_unchecked_text  — text of first "- [ ]" line (truncated to 200 chars)
+# Phase block boundaries: from the heading until the next ### or ## heading.
+# HTML comments are skipped.
+# ---------------------------------------------------------------------------
+phase_summary() {
+    local _plan_file="${1:-}"
+    awk '
+      function flush() {
+        if (in_phase) {
+          gsub(/\t/, " ", first)
+          if (length(first) > 200) first = substr(first, 1, 200) "..."
+          printf "%s\t%s\t%d\t%s\n", num, status, unchecked, first
+        }
+      }
+      BEGIN { in_phase=0; in_comment=0; num=""; status=""; unchecked=0; first="" }
+      /<!--/ { in_comment=1 }
+      in_comment { if (/-->/) in_comment=0; next }
+      /^### Phase/ {
+        flush()
+        in_phase=1; unchecked=0; first=""; status=""; num=""
+        if (match($0, /Phase[[:space:]]+[0-9]+/)) {
+          tok = substr($0, RSTART, RLENGTH)
+          sub(/^Phase[[:space:]]+/, "", tok)
+          num = tok
+        }
+        if      ($0 ~ /\[complete\]/)    status="complete"
+        else if ($0 ~ /\[in_progress\]/) status="in_progress"
+        else if ($0 ~ /\[pending\]/)     status="pending"
+        next
+      }
+      /^### / || /^## / { flush(); in_phase=0; status=""; unchecked=0; first=""; num=""; next }
+      !in_phase { next }
+      /^- \[ \]/ {
+        unchecked++
+        if (first == "") { first = $0; sub(/^- \[ \] */, "", first) }
+        next
+      }
+      status != "" { next }
+      /\*\*Status:\*\*[[:space:]]*complete([^a-zA-Z_]|$)/    { status="complete";    next }
+      /\*\*Status:\*\*[[:space:]]*in_progress([^a-zA-Z_]|$)/ { status="in_progress"; next }
+      /\*\*Status:\*\*[[:space:]]*pending([^a-zA-Z_]|$)/     { status="pending";     next }
+      /\[complete\]/    { status="complete";    next }
+      /\[in_progress\]/ { status="in_progress"; next }
+      /\[pending\]/     { status="pending";     next }
+      END { flush() }
+    ' "$_plan_file" 2>/dev/null
+}
