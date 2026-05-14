@@ -154,3 +154,51 @@ phase_summary() {
       END { flush() }
     ' "$_plan_file" 2>/dev/null
 }
+
+# ---------------------------------------------------------------------------
+# check_non_phase_work PLAN_FILE
+# Scans every `### ` heading in the file. If a heading does NOT match
+#   `^### Phase[[:space:]]+[0-9]`
+# AND its body contains at least one `- [ ]` unchecked item before the next
+# `### ` or `## ` heading, echo the offending heading text (sans `### `,
+# truncated to 200 chars) on stdout and stop. Echoes nothing if the plan is
+# clean.
+#
+# Purpose: catch the bypass pattern where the agent renames work blocks to
+# `### Step N:` / `### Task N:` / `### Stage N:` etc. Those headings are
+# invisible to count_phases (anchored on `^### Phase`), so unchecked work
+# hidden under them never blocks the Stop hook. HTML comments are ignored.
+# Heading-only sections (no checkboxes, e.g. `### Rollback`, `### Open
+# question`) do NOT trigger — only sections with actual unchecked work.
+# ---------------------------------------------------------------------------
+check_non_phase_work() {
+    local _plan_file="${1:-}"
+    awk '
+      function flush() {
+        if (heading != "" && unchecked > 0 && !is_phase) {
+          if (length(heading) > 200) heading = substr(heading, 1, 200) "..."
+          print heading
+          heading=""; unchecked=0
+          exit
+        }
+      }
+      BEGIN { heading=""; is_phase=0; unchecked=0; in_comment=0 }
+      /<!--/ { in_comment=1 }
+      in_comment { if (/-->/) in_comment=0; next }
+      /^### / {
+        flush()
+        heading=$0; sub(/^### */, "", heading)
+        is_phase = ($0 ~ /^### Phase[[:space:]]+[0-9]/)
+        unchecked=0
+        next
+      }
+      /^## / {
+        flush()
+        heading=""; is_phase=0; unchecked=0
+        next
+      }
+      heading == "" { next }
+      /^- \[ \]/ { unchecked++ }
+      END { flush() }
+    ' "$_plan_file" 2>/dev/null
+}

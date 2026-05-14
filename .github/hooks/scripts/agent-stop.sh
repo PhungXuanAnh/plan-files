@@ -259,6 +259,24 @@ if [ -n "${PHASE_NUM:-}" ] && [ "$COMPLETE" -lt "$TOTAL" ]; then
     fi
 fi
 
+# --- Non-Phase work check (delegated to common.sh:check_non_phase_work) ----
+# Catches the bypass pattern where the agent invents `### Step N:` /
+# `### Task N:` / `### Stage N:` headings to hide unchecked work from the
+# `^### Phase` scanner. Runs regardless of COMPLETE/TOTAL so it also fires
+# when Phase 0..N are all marked complete and the remaining work was renamed
+# to a non-Phase heading underneath. Heading-only sections (Rollback, Open
+# question, etc.) are not flagged — only ones containing `- [ ]` items.
+NON_PHASE_HEADING=$(check_non_phase_work "$PLAN_FILE")
+if [ -n "$NON_PHASE_HEADING" ]; then
+    REASON="[planning-with-files] FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: heading '### ${NON_PHASE_HEADING}' contains unchecked '- [ ]' work items but is NOT a recognized phase heading. The ONLY heading form recognized as work is '### Phase N: Title' (level-3, the literal word 'Phase', a number, a colon). 'Step', 'Task', 'Stage', 'Iteration', 'Milestone', etc. are NOT accepted — they hide work from the gate. Rename the heading to '### Phase N: ...' (pick the next free N) and add '- **Status:** pending|in_progress' on its last line. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Do NOT stop until every block of unchecked work lives under a '### Phase N:' heading."
+    log "decision: BLOCK (NON-PHASE WORK — '${NON_PHASE_HEADING}' has unchecked items)"
+    ESCAPED_REASON=$(json_escape "$REASON")
+    OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
+    log "stdout: ${#OUTPUT} chars"
+    echo "$OUTPUT"
+    exit 0
+fi
+
 if [ "$COMPLETE" -ge "$TOTAL" ]; then
     # All phases done -> let the agent stop normally. No block, no message.
     log "decision: ALL COMPLETE -> emitting {} (allow stop)"

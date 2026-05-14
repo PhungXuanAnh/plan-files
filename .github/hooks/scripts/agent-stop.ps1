@@ -165,6 +165,52 @@ if ($COMPLETE -eq 0 -and $IN_PROGRESS -eq 0 -and $PENDING -eq 0) {
     exit 0
 }
 
+# --- Non-Phase work check ---------------------------------------------------
+# Catches the bypass pattern where the agent invents `### Step N:` /
+# `### Task N:` etc. to hide unchecked work from the `### Phase` scanner.
+# Runs regardless of COMPLETE/TOTAL. Heading-only sections (no `- [ ]`
+# items) are not flagged.
+$NonPhaseHeading = ""
+$cur = ""
+$curIsPhase = $false
+$curUnchecked = 0
+$inCmt = $false
+foreach ($line in (Get-Content $PlanFile -Encoding UTF8 -ErrorAction SilentlyContinue)) {
+    if ($line -match '<!--') { $inCmt = $true }
+    if ($inCmt) { if ($line -match '-->') { $inCmt = $false }; continue }
+    if ($line -match '^### ') {
+        if ($cur -and $curUnchecked -gt 0 -and -not $curIsPhase) {
+            $NonPhaseHeading = $cur; break
+        }
+        $cur = ($line -replace '^###\s*','')
+        $curIsPhase = ($line -match '^###\s+Phase\s+\d')
+        $curUnchecked = 0
+        continue
+    }
+    if ($line -match '^## ') {
+        if ($cur -and $curUnchecked -gt 0 -and -not $curIsPhase) {
+            $NonPhaseHeading = $cur; break
+        }
+        $cur = ""; $curIsPhase = $false; $curUnchecked = 0
+        continue
+    }
+    if (-not $cur) { continue }
+    if ($line -match '^-\s\[\s\]') { $curUnchecked++ }
+}
+if (-not $NonPhaseHeading -and $cur -and $curUnchecked -gt 0 -and -not $curIsPhase) {
+    $NonPhaseHeading = $cur
+}
+if ($NonPhaseHeading) {
+    if ($NonPhaseHeading.Length -gt 200) { $NonPhaseHeading = $NonPhaseHeading.Substring(0,200) + "..." }
+    $reason = "[planning-with-files] FORMAT CONTRACT VIOLATION in ${PlanFile}: heading '### $NonPhaseHeading' contains unchecked '- [ ]' work items but is NOT a recognized phase heading. The ONLY heading form recognized as work is '### Phase N: Title' (level-3, the literal word 'Phase', a number, a colon). 'Step', 'Task', 'Stage', 'Iteration', 'Milestone', etc. are NOT accepted - they hide work from the gate. Rename the heading to '### Phase N: ...' (pick the next free N) and add '- **Status:** pending|in_progress' on its last line. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Do NOT stop until every block of unchecked work lives under a '### Phase N:' heading."
+    Log "decision: BLOCK (NON-PHASE WORK - '$NonPhaseHeading' has unchecked items)"
+    $output = @{ hookSpecificOutput = @{ hookEventName = "Stop"; decision = "block"; reason = $reason } }
+    $json = $output | ConvertTo-Json -Depth 3 -Compress
+    Log "stdout: $($json.Length) chars"
+    $json
+    exit 0
+}
+
 if ($COMPLETE -eq $TOTAL -and $TOTAL -gt 0) {
     # All phases done -> let the agent stop normally. No block, no message.
     Log "decision: ALL COMPLETE -> emitting {} (allow stop)"

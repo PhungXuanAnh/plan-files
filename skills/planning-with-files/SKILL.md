@@ -186,7 +186,13 @@ Phase 1
 ### Phase 2 - Tests [not started]         ← em-dash instead of colon, "not started" is not a valid status
 ### Phase 3: Deploy                       ← missing **Status:** line
   Status: pending                         ← missing leading `- ` and bold markers
+### Step 7: Cleanup                       ← "Step" / "Task" / "Stage" is NOT a phase — see rule 4 below
+- [ ] do thing                            ← unchecked work under a non-Phase heading hides from the gate
 ```
+
+### 4. No non-Phase work headings
+
+The literal word `Phase` is the **only** recognized work-heading prefix. If any `### ` heading anywhere in the file (even far below the `## Phases` section) contains `- [ ]` items, it MUST start with `### Phase N:`. Headings like `### Step 7:`, `### Task 3:`, `### Stage 2:`, `### Iteration 4:`, `### Milestone B:` are NOT counted by `count_phases`, so unchecked work hidden under them silently bypasses the Stop hook. The hook detects this and BLOCKs with a `FORMAT CONTRACT VIOLATION: heading '### …' contains unchecked '- [ ]' work items but is NOT a recognized phase heading` — fix by renaming to the next free `### Phase N: ...` and adding a `- **Status:**` line. Heading-only sections with no `- [ ]` items (e.g. `### Rollback`, `### Open question`) are exempt.
 
 ### Mapping reference (when migrating an old plan)
 
