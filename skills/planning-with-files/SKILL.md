@@ -78,8 +78,17 @@ The Stop hook parses `task_plan.md` with simple regex. Paraphrased headings/stat
 Each phase MUST have a status. Either:
 ```markdown
 - **Status:** pending      ← values: pending | in_progress | complete (exact)
+- **Status:** deferred (reason)   ← reason REQUIRED inside parentheses, non-empty
 ```
 Or inline on heading: `### Phase 0: Setup [complete]`
+
+**`deferred` rule.** Use ONLY when the phase cannot be done now AND the reason is explicit:
+- Blocked by an external dependency (e.g. "blocked by upstream API change"), OR
+- User explicitly asked to defer (e.g. "user requested: logging is follow-up PR").
+
+The parenthesised reason is MANDATORY — hooks BLOCK on `- **Status:** deferred` without `(...)` or with empty `()`. Do NOT use `deferred` to silence the stop hook when you simply got tired or hit an error; that is what the 3-strike protocol + escalate-to-user path is for. A deferred phase counts as settled (does not block stop), but its unchecked `- [ ]` items are NOT treated as status lies.
+
+Bad: `- **Status:** complete (deferred)` — `complete` is a lie if work isn't done. Use `- **Status:** deferred (user asked to split into follow-up PR)` instead.
 
 ### 3. Current Phase pointer
 ```markdown
@@ -123,12 +132,16 @@ Phase 1
 | `### Phase 3: Deploy` (no status line) | missing `- **Status:**` |
 | `  Status: pending` | missing `- ` and bold |
 | `### Step 7: Cleanup` with `- [ ]` items | non-Phase work heading |
+| `- **Status:** complete (deferred)` | `complete` is a lie when work is deferred — use `deferred (reason)` |
+| `- **Status:** deferred` | missing required `(reason)` |
+| `- **Status:** deferred ()` | empty reason |
 
 ### Migration map
 | Loose | Strict |
 |-------|--------|
 | `` `[done]` ``, `(in progress)`, `[not started]` | `- **Status:** complete` / `in_progress` / `pending` |
 | `## Phase N — Title` | `### Phase N: Title` |
+| `complete (deferred)`, `skipped`, `wontfix` | `- **Status:** deferred (explicit reason)` |
 
 ## Critical Rules
 

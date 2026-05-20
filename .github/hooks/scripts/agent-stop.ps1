@@ -84,9 +84,20 @@ $TOTAL = ([regex]::Matches($content, "### Phase")).Count
 $COMPLETE = ([regex]::Matches($content, "\*\*Status:\*\* complete")).Count
 $IN_PROGRESS = ([regex]::Matches($content, "\*\*Status:\*\* in_progress")).Count
 $PENDING = ([regex]::Matches($content, "\*\*Status:\*\* pending")).Count
+# Deferred: only count when "(reason)" with at least one non-whitespace char is present.
+$DEFERRED = ([regex]::Matches($content, "\*\*Status:\*\*\s*deferred\s*\(\s*[^)\s][^)]*\)")).Count
+# Detect malformed deferred markers (bare "deferred" or "deferred ()") so we can BLOCK.
+$DeferredBad = $false
+$_deferredLines = [regex]::Matches($content, "\*\*Status:\*\*\s*deferred[^\r\n]*")
+foreach ($m in $_deferredLines) {
+    if ($m.Value -notmatch '\*\*Status:\*\*\s*deferred\s*\(\s*[^)\s][^)]*\)') {
+        $DeferredBad = $true
+        break
+    }
+}
 $Format = "Status:"
 
-if ($COMPLETE -eq 0 -and $IN_PROGRESS -eq 0 -and $PENDING -eq 0) {
+if ($COMPLETE -eq 0 -and $IN_PROGRESS -eq 0 -and $PENDING -eq 0 -and $DEFERRED -eq 0) {
     $COMPLETE = ([regex]::Matches($content, "\[complete\]")).Count
     $IN_PROGRESS = ([regex]::Matches($content, "\[in_progress\]")).Count
     $PENDING = ([regex]::Matches($content, "\[pending\]")).Count
@@ -94,7 +105,7 @@ if ($COMPLETE -eq 0 -and $IN_PROGRESS -eq 0 -and $PENDING -eq 0) {
 }
 
 Log "format detected: $Format"
-Log "phases: total=$TOTAL complete=$COMPLETE in_progress=$IN_PROGRESS pending=$PENDING"
+Log "phases: total=$TOTAL complete=$COMPLETE in_progress=$IN_PROGRESS pending=$PENDING deferred=$DEFERRED deferred_bad=$DeferredBad"
 
 # --- Remaining-in-current-phase snippet (count + first unchecked) ----------
 $PhaseRaw = ""
@@ -145,7 +156,7 @@ if ($TOTAL -eq 0) {
     # Almost always a FORMAT-CONTRACT violation: the agent paraphrased
     # headings (e.g. `## Phase 0 — Preparation \`[done]\``) instead of using
     # the strict template. BLOCK with a precise actionable message.
-    $reason = "[planning-with-files] FORMAT CONTRACT VIOLATION in ${PlanFile}: 0 phases detected. Required heading format is exactly '### Phase N: Title' (level-3, colon, no decorations, no backticks), and each phase MUST end with a line '- **Status:** pending|in_progress|complete'. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Fix the plan file headings/status markers, then continue."
+    $reason = "[planning-with-files] FORMAT CONTRACT VIOLATION in ${PlanFile}: 0 phases detected. Required heading format is exactly '### Phase N: Title' (level-3, colon, no decorations, no backticks), and each phase MUST end with a line '- **Status:** pending|in_progress|complete|deferred (reason)'. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Fix the plan file headings/status markers, then continue."
     Log "decision: BLOCK (FORMAT CONTRACT - TOTAL=0)"
     $output = @{ hookSpecificOutput = @{ hookEventName = "Stop"; decision = "block"; reason = $reason } }
     $json = $output | ConvertTo-Json -Depth 3 -Compress
@@ -154,9 +165,22 @@ if ($TOTAL -eq 0) {
     exit 0
 }
 
-if ($COMPLETE -eq 0 -and $IN_PROGRESS -eq 0 -and $PENDING -eq 0) {
+if ($DeferredBad) {
+    # A `**Status:** deferred` line exists but is missing the required
+    # `(non-empty reason)` parenthetical. Always BLOCK — bare deferred is
+    # never valid, regardless of completion state.
+    $reason = "[planning-with-files] FORMAT CONTRACT VIOLATION in ${PlanFile}: a phase has '**Status:** deferred' but is missing the REQUIRED parenthesised reason. The only valid form is '- **Status:** deferred (explicit reason)' where the reason names the blocker - e.g. '- **Status:** deferred (blocked by upstream API change)' or '- **Status:** deferred (user asked to split into follow-up PR)'. Bare 'deferred', 'deferred ()', or vague reasons are NOT accepted. Do NOT use 'deferred' to silence the stop hook after a transient error - use the 3-strike protocol and escalate to the user instead. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT > Phase status."
+    Log "decision: BLOCK (DEFERRED_NO_REASON)"
+    $output = @{ hookSpecificOutput = @{ hookEventName = "Stop"; decision = "block"; reason = $reason } }
+    $json = $output | ConvertTo-Json -Depth 3 -Compress
+    Log "stdout: $($json.Length) chars"
+    $json
+    exit 0
+}
+
+if ($COMPLETE -eq 0 -and $IN_PROGRESS -eq 0 -and $PENDING -eq 0 -and $DEFERRED -eq 0) {
     # Phases exist but no status markers were recognized at all.
-    $reason = "[planning-with-files] FORMAT CONTRACT VIOLATION in ${PlanFile}: $TOTAL phase heading(s) found but ZERO recognized status markers. Each phase MUST end with a line: '- **Status:** pending' OR '- **Status:** in_progress' OR '- **Status:** complete'. The inline form '[complete]'/'[in_progress]'/'[pending]' on the heading is also accepted. Backtick-wrapped or paraphrased markers (e.g. ``[done]``, ``[not started]``, (in progress)) are NOT recognized. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Fix the markers, then continue."
+    $reason = "[planning-with-files] FORMAT CONTRACT VIOLATION in ${PlanFile}: $TOTAL phase heading(s) found but ZERO recognized status markers. Each phase MUST end with a line: '- **Status:** pending' OR '- **Status:** in_progress' OR '- **Status:** complete' OR '- **Status:** deferred (reason)'. The inline form '[complete]'/'[in_progress]'/'[pending]' on the heading is also accepted. Backtick-wrapped or paraphrased markers (e.g. ``[done]``, ``[not started]``, (in progress)) are NOT recognized. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Fix the markers, then continue."
     Log "decision: BLOCK (FORMAT CONTRACT - no recognized status markers across $TOTAL phases)"
     $output = @{ hookSpecificOutput = @{ hookEventName = "Stop"; decision = "block"; reason = $reason } }
     $json = $output | ConvertTo-Json -Depth 3 -Compress
@@ -211,17 +235,20 @@ if ($NonPhaseHeading) {
     exit 0
 }
 
-if ($COMPLETE -eq $TOTAL -and $TOTAL -gt 0) {
-    # All phases done -> let the agent stop normally. No block, no message.
-    Log "decision: ALL COMPLETE -> emitting {} (allow stop)"
+if ($COMPLETE + $DEFERRED -ge $TOTAL -and $TOTAL -gt 0) {
+    # All phases settled (complete or deferred-with-reason) -> let the agent stop.
+    Log "decision: ALL SETTLED (complete=$COMPLETE deferred=$DEFERRED total=$TOTAL) -> emitting {} (allow stop)"
     Write-Output '{}'
     exit 0
 }
 
 # Task incomplete -> BLOCK the stop and tell the agent why to continue.
 # Per docs: hookEventName must be exactly "Stop"; use decision="block" + reason.
-$reason = "[planning-with-files] Task incomplete ($COMPLETE/$TOTAL phases done).${RemainingLine} Update progress.md, then read $PlanFile and continue working on the remaining phases. If you genuinely cannot continue (blocked / waiting on user), say so explicitly so the user can intervene."
-Log "decision: BLOCK ($COMPLETE/$TOTAL phases done)"
+$Settled = $COMPLETE + $DEFERRED
+$DeferredNote = ""
+if ($DEFERRED -gt 0) { $DeferredNote = " (including $DEFERRED deferred)" }
+$reason = "[planning-with-files] Task incomplete ($Settled/$TOTAL phases settled$DeferredNote).${RemainingLine} Update progress.md, then read $PlanFile and continue working on the remaining phases. If you genuinely cannot continue (blocked / waiting on user), either say so explicitly so the user can intervene, or mark the phase '- **Status:** deferred (explicit reason - blocker or user request)' if the deferral was explicitly agreed."
+Log "decision: BLOCK ($Settled/$TOTAL phases settled, deferred=$DEFERRED)"
 $output = @{
     hookSpecificOutput = @{
         hookEventName = "Stop"

@@ -45,6 +45,9 @@ Phase 1
   - pending: Not started yet
   - in_progress: Currently working on this
   - complete: Finished this phase
+  - deferred (reason): Explicitly postponed; reason in parens is MANDATORY (e.g. "deferred (blocked by upstream API)"
+    or "deferred (user asked to split into follow-up PR)"). Counts as settled — does not block stop.
+    Hook BLOCKs `deferred` without `(reason)` or with empty `()`. Do NOT use to silence the stop hook after an error.
 -->
 
 ### Phase 2: Planning & Structure
@@ -127,10 +130,12 @@ Phase 1
 <!-- 
   REMINDERS:
   - Update phase status as you progress: pending → in_progress → complete
+  - Use `**Status:** deferred (reason)` ONLY when explicitly blocked or user-asked-to-defer; reason in parens is required
   - Re-read this plan before major decisions (attention manipulation)
   - Log ALL errors - they help avoid repetition
   - Never repeat a failed action - mutate your approach instead
 -->
 - Update phase status as you progress: pending → in_progress → complete
+- Use `**Status:** deferred (reason)` ONLY when explicitly blocked or user-asked-to-defer; reason in parens is required
 - Re-read this plan before major decisions (attention manipulation)
 - Log ALL errors - they help avoid repetition

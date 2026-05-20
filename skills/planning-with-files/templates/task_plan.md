@@ -74,6 +74,10 @@
     - pending: Not started yet
     - in_progress: Currently working on this
     - complete: ALL "Done when" boxes checked AND verified by the named method
+    - deferred (reason): Phase explicitly postponed. Reason in parens is MANDATORY and must name the blocker
+      (e.g. "deferred (blocked by upstream API change)" or "deferred (user asked to split into follow-up PR)").
+      Hook BLOCKs `deferred` without `(reason)` or with empty `()`. Counts as settled — does not block stop.
+      Do NOT use to silence the stop hook after an error; use the 3-strike protocol + escalate instead.
 -->
 
 ### CODING PHASE TEMPLATE — copy this into any coding phase you create
@@ -253,5 +257,6 @@
   - Never repeat a failed action - mutate your approach instead
 -->
 - Update phase status as you progress: pending → in_progress → complete
+- Use `**Status:** deferred (reason)` ONLY when explicitly blocked or user-asked-to-defer; reason in parens is required
 - Re-read this plan before major decisions (attention manipulation)
 - Log ALL errors - they help avoid repetition

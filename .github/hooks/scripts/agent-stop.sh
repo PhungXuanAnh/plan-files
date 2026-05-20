@@ -118,7 +118,7 @@ log "${PLAN_FILE}: present ($(wc -c < "$PLAN_FILE" | tr -d ' ') bytes)"
 
 # --- Phase counting (delegated to common.sh:count_phases) ------------------
 count_phases "$PLAN_FILE"
-log "phases: total=$TOTAL complete=$COMPLETE in_progress=$IN_PROGRESS pending=$PENDING"
+log "phases: total=$TOTAL complete=$COMPLETE in_progress=$IN_PROGRESS pending=$PENDING deferred=$DEFERRED"
 
 # --- Remaining-in-current-phase snippet (count + first unchecked) ----------
 PHASE_RAW=$(awk '
@@ -169,8 +169,17 @@ case "${FORMAT_ISSUE:-}" in
         exit 0
         ;;
     NO_STATUS_MARKERS)
-        REASON="[planning-with-files] FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: $TOTAL phase heading(s) found but ZERO recognized status markers. Each phase MUST end with a line: '- **Status:** pending' OR '- **Status:** in_progress' OR '- **Status:** complete'. The inline form '[complete]'/'[in_progress]'/'[pending]' on the heading is also accepted. Backtick-wrapped or paraphrased markers (e.g. \`[done]\`, \`[not started]\`, (in progress)) are NOT recognized. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Fix the markers, then continue."
+        REASON="[planning-with-files] FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: $TOTAL phase heading(s) found but ZERO recognized status markers. Each phase MUST end with a line: '- **Status:** pending' OR '- **Status:** in_progress' OR '- **Status:** complete' OR '- **Status:** deferred (reason)'. The inline form '[complete]'/'[in_progress]'/'[pending]' on the heading is also accepted. Backtick-wrapped or paraphrased markers (e.g. \`[done]\`, \`[not started]\`, (in progress)) are NOT recognized. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Fix the markers, then continue."
         log "decision: BLOCK (FORMAT CONTRACT — no recognized status markers across $TOTAL phases)"
+        ESCAPED_REASON=$(json_escape "$REASON")
+        OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
+        log "stdout: ${#OUTPUT} chars"
+        echo "$OUTPUT"
+        exit 0
+        ;;
+    DEFERRED_NO_REASON)
+        REASON="[planning-with-files] FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: a phase has '**Status:** deferred' but is missing the REQUIRED parenthesised reason. The only valid form is '- **Status:** deferred (explicit reason)' where the reason names the blocker — e.g. '- **Status:** deferred (blocked by upstream API change)' or '- **Status:** deferred (user asked to split into follow-up PR)'. Bare 'deferred', 'deferred ()', or vague reasons like '(later)' / '(skipped)' are NOT accepted. Do NOT use 'deferred' to silence the stop hook after a transient error — use the 3-strike protocol and escalate to the user instead. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT > Phase status."
+        log "decision: BLOCK (DEFERRED_NO_REASON)"
         ESCAPED_REASON=$(json_escape "$REASON")
         OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
         log "stdout: ${#OUTPUT} chars"
@@ -203,10 +212,12 @@ esac
 #       The phase counter trusts the status marker, so unchecked sub-tasks are
 #       invisible to the gate. Block until either the boxes are checked or the
 #       remaining work is split into a new ### Phase with status pending.
+#       Note: `deferred` phases are EXEMPT — their unchecked items are
+#       expected (the whole point of deferred is "we are not doing this now").
 #   (B) ## Current Phase points at a phase whose status is already complete
-#       while other phases are still pending/in_progress. The hook keeps
-#       injecting the wrong phase context and the agent loses track. Block
-#       until ## Current Phase is advanced to a non-complete phase.
+#       (or deferred) while other phases are still pending/in_progress. The
+#       hook keeps injecting the wrong phase context and the agent loses
+#       track. Block until ## Current Phase is advanced to a non-settled phase.
 SUMMARY=$(phase_summary "$PLAN_FILE")
 LIE_PHASE=""
 LIE_COUNT=0
@@ -231,10 +242,10 @@ if [ -n "$LIE_PHASE" ]; then
     exit 0
 fi
 
-# Stale Current Phase: pointer references a phase whose status is complete,
-# AND there is at least one non-complete phase remaining. Only fires if the
-# user actually filled in ## Current Phase (PHASE_NUM non-empty).
-if [ -n "${PHASE_NUM:-}" ] && [ "$COMPLETE" -lt "$TOTAL" ]; then
+# Stale Current Phase: pointer references a phase whose status is settled
+# (complete OR deferred), AND there is at least one non-settled phase remaining.
+# Only fires if the user actually filled in ## Current Phase (PHASE_NUM non-empty).
+if [ -n "${PHASE_NUM:-}" ] && [ $((COMPLETE + DEFERRED)) -lt "$TOTAL" ]; then
     CURRENT_NUM=$(printf '%s' "$PHASE_NUM" | grep -oE '[0-9]+' | head -1)
     CURRENT_STATUS=""
     NEXT_INCOMPLETE=""
@@ -243,14 +254,14 @@ if [ -n "${PHASE_NUM:-}" ] && [ "$COMPLETE" -lt "$TOTAL" ]; then
         if [ "$_num" = "$CURRENT_NUM" ]; then
             CURRENT_STATUS="${_status:-}"
         fi
-        if [ -z "$NEXT_INCOMPLETE" ] && [ "${_status:-}" != "complete" ]; then
+        if [ -z "$NEXT_INCOMPLETE" ] && [ "${_status:-}" != "complete" ] && [ "${_status:-}" != "deferred" ]; then
             NEXT_INCOMPLETE="Phase ${_num}"
         fi
     done <<< "$SUMMARY"
 
-    if [ "$CURRENT_STATUS" = "complete" ] && [ -n "$NEXT_INCOMPLETE" ]; then
-        REASON="[planning-with-files] STALE '## Current Phase' in ${PLAN_FILE}: it points at ${PHASE_NUM} which is already '**Status:** complete', but ${NEXT_INCOMPLETE} (and possibly later phases) are not complete. Update the '## Current Phase' section to '${NEXT_INCOMPLETE}' and set its status to 'in_progress' before continuing. The hook injects context based on Current Phase — leaving it on a finished phase makes the agent work on the wrong target."
-        log "decision: BLOCK (STALE Current Phase — points at completed ${PHASE_NUM}, next incomplete is ${NEXT_INCOMPLETE})"
+    if { [ "$CURRENT_STATUS" = "complete" ] || [ "$CURRENT_STATUS" = "deferred" ]; } && [ -n "$NEXT_INCOMPLETE" ]; then
+        REASON="[planning-with-files] STALE '## Current Phase' in ${PLAN_FILE}: it points at ${PHASE_NUM} which is already '**Status:** ${CURRENT_STATUS}', but ${NEXT_INCOMPLETE} (and possibly later phases) are not settled. Update the '## Current Phase' section to '${NEXT_INCOMPLETE}' and set its status to 'in_progress' before continuing. The hook injects context based on Current Phase — leaving it on a finished/deferred phase makes the agent work on the wrong target."
+        log "decision: BLOCK (STALE Current Phase — points at ${CURRENT_STATUS} ${PHASE_NUM}, next incomplete is ${NEXT_INCOMPLETE})"
         ESCAPED_REASON=$(json_escape "$REASON")
         OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
         log "stdout: ${#OUTPUT} chars"
@@ -277,32 +288,32 @@ if [ -n "$NON_PHASE_HEADING" ]; then
     exit 0
 fi
 
-if [ "$COMPLETE" -ge "$TOTAL" ]; then
-    # All phases done -> let the agent stop normally. No block, no message.
-    log "decision: ALL COMPLETE -> emitting {} (allow stop)"
+if [ $((COMPLETE + DEFERRED)) -ge "$TOTAL" ]; then
+    # All phases settled (complete or deferred-with-reason) -> let the agent stop.
+    log "decision: ALL SETTLED (complete=$COMPLETE deferred=$DEFERRED total=$TOTAL) -> emitting {} (allow stop)"
     echo '{}'
     exit 0
 fi
 
-# Planning mode: all phases still pending (none in_progress or complete).
+# Planning mode: all phases still pending (none in_progress, complete, or deferred).
 # The agent is reviewing / discussing the plan with the user, not implementing.
 # Allow stop — do not demand continuation.
-if [ "$COMPLETE" -eq 0 ] && [ "$IN_PROGRESS" -eq 0 ]; then
-    log "decision: PLANNING MODE (no phases started/complete, all pending) -> emitting {} (allow stop)"
+if [ "$COMPLETE" -eq 0 ] && [ "$IN_PROGRESS" -eq 0 ] && [ "$DEFERRED" -eq 0 ]; then
+    log "decision: PLANNING MODE (no phases started/complete/deferred, all pending) -> emitting {} (allow stop)"
     echo '{}'
     exit 0
 fi
 
 # Discussion mode: ## Current Phase is empty (no valid "Phase N" parsed from it)
-# AND nothing is complete yet. This covers the case where a phase is marked
-# in_progress for tracking (e.g. Phase 0 = research/plan phase with some items
-# checked) but the agent is still discussing/waiting for user input before
-# implementation begins. The placeholder text in ## Current Phase must NOT
+# AND nothing is complete or deferred yet. This covers the case where a phase
+# is marked in_progress for tracking (e.g. Phase 0 = research/plan phase with
+# some items checked) but the agent is still discussing/waiting for user input
+# before implementation begins. The placeholder text in ## Current Phase must NOT
 # contain "Phase N" patterns — if it does, it will be misread as the current
 # phase (see SKILL.md FORMAT CONTRACT). When Current Phase is truly empty,
 # we treat the session as still in discussion mode and allow stop.
-if [ -z "${PHASE_NUM:-}" ] && [ "$COMPLETE" -eq 0 ]; then
-    log "decision: DISCUSSION MODE (Current Phase empty, nothing complete) -> emitting {} (allow stop)"
+if [ -z "${PHASE_NUM:-}" ] && [ "$COMPLETE" -eq 0 ] && [ "$DEFERRED" -eq 0 ]; then
+    log "decision: DISCUSSION MODE (Current Phase empty, nothing complete/deferred) -> emitting {} (allow stop)"
     echo '{}'
     exit 0
 fi
@@ -311,8 +322,11 @@ fi
 # Per docs (https://code.visualstudio.com/docs/copilot/customization/hooks#_stop):
 #   hookEventName must be exactly "Stop"; use decision="block" + reason
 #   (additionalContext does NOT apply to Stop hooks).
-REASON="[planning-with-files] Task incomplete ($COMPLETE/$TOTAL phases done).${REMAINING_LINE} Update progress.md, then read ${PLAN_FILE} and continue working on the remaining phases. If you genuinely cannot continue (blocked / waiting on user), say so explicitly so the user can intervene."
-log "decision: BLOCK ($COMPLETE/$TOTAL phases done)"
+SETTLED=$((COMPLETE + DEFERRED))
+DEFERRED_NOTE=""
+[ "$DEFERRED" -gt 0 ] && DEFERRED_NOTE=" (including $DEFERRED deferred)"
+REASON="[planning-with-files] Task incomplete ($SETTLED/$TOTAL phases settled${DEFERRED_NOTE}).${REMAINING_LINE} Update progress.md, then read ${PLAN_FILE} and continue working on the remaining phases. If you genuinely cannot continue (blocked / waiting on user), either say so explicitly so the user can intervene, or mark the phase '- **Status:** deferred (explicit reason — blocker or user request)' if the deferral was explicitly agreed."
+log "decision: BLOCK ($SETTLED/$TOTAL phases settled, deferred=$DEFERRED)"
 ESCAPED_REASON=$(json_escape "$REASON")
 OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
 log "stdout: ${#OUTPUT} chars"

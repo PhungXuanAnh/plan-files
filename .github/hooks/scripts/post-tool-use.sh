@@ -264,7 +264,10 @@ if [ "$INJECT_FULL" = "true" ]; then
             FORMAT_WARN="FORMAT REMINDER: no '### Phase N: Title' headings detected in ${PLAN_FILE}. Use exact level-3 headings: '### Phase 0: Title', '### Phase 1: Title', etc. Each phase must end with '- **Status:** pending'. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT."
             ;;
         NO_STATUS_MARKERS)
-            FORMAT_WARN="FORMAT REMINDER: $TOTAL phase heading(s) found in ${PLAN_FILE} but no recognized status markers. Each phase must end with exactly: '- **Status:** pending' (or in_progress / complete). See skills/planning-with-files/SKILL.md > FORMAT CONTRACT."
+            FORMAT_WARN="FORMAT REMINDER: $TOTAL phase heading(s) found in ${PLAN_FILE} but no recognized status markers. Each phase must end with exactly: '- **Status:** pending' (or in_progress / complete / 'deferred (reason)'). See skills/planning-with-files/SKILL.md > FORMAT CONTRACT."
+            ;;
+        DEFERRED_NO_REASON)
+            FORMAT_WARN="FORMAT REMINDER: a phase in ${PLAN_FILE} has '- **Status:** deferred' but is missing the REQUIRED '(reason)'. Replace with exactly '- **Status:** deferred (explicit reason)' — e.g. 'deferred (blocked by upstream API)' or 'deferred (user asked to defer to follow-up PR)'. Bare 'deferred' / 'deferred ()' will block stop."
             ;;
         PROFILE_MISSING)
             FORMAT_WARN="REMINDER: '## Workflow Profile' section is missing from ${PLAN_FILE}. Add it between '## Current Phase' and '## Phases' with '**Profile:** A' (PR-Handoff), B (Staging-Verified), or C (Research/Document) filled in before starting implementation."
