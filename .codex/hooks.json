@@ -1,0 +1,30 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel)\" && cd \"$ROOT\" && bash \"$ROOT/.codex/hooks/planning-with-files/scripts/post-tool-use.sh\"",
+            "commandWindows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; Set-Location $root; & (Join-Path $root '.codex/hooks/planning-with-files/scripts/post-tool-use.ps1')\"",
+            "timeout": 5,
+            "statusMessage": "Injecting planning context"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel)\" && cd \"$ROOT\" && bash \"$ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh\"",
+            "commandWindows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; Set-Location $root; & (Join-Path $root '.codex/hooks/planning-with-files/scripts/agent-stop.ps1')\"",
+            "timeout": 10,
+            "statusMessage": "Checking planning completion"
+          }
+        ]
+      }
+    ]
+  }
+}
