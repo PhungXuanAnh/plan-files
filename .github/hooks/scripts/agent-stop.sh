@@ -15,6 +15,20 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 INPUT=$(cat)
 
+# --- Early skip: hooks only run when a real task pointer is present ---------
+# Skip silently (emit `{}` and exit 0) if ANY of the following is true:
+#   1. `.plan-with-files-skip` marker file exists at CWD (manual opt-out)
+#   2. `.plan-with-files` pointer file is missing
+#   3. `.plan-with-files` pointer file is empty (whitespace-only counts as empty)
+# This makes the pointer file the explicit opt-in: worktrees, worktree-
+# container workspaces, and unrelated projects all stay silent.
+if [ -e .plan-with-files-skip ] \
+    || [ ! -f .plan-with-files ] \
+    || [ -z "$(tr -d '[:space:]' < .plan-with-files 2>/dev/null)" ]; then
+    printf '{}'
+    exit 0
+fi
+
 # --- JSON escape (bash-only, no python) -------------------------------------
 # Handles: backslash, double-quote, tab, CR, LF. Sufficient for our use case
 # where strings come from plan files + hook-generated messages (no embedded

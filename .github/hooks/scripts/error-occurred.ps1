@@ -2,6 +2,23 @@
 # Logs errors to task_plan.md when the agent encounters an error.
 # Debug log at: tmp/hook-logs/plan-with-files/error-occurred.log
 
+# --- Early skip: hooks only run when a real task pointer is present ---------
+# Skip silently (emit `{}` and exit 0) if ANY of the following is true:
+#   1. `.plan-with-files-skip` marker file exists at CWD (manual opt-out)
+#   2. `.plan-with-files` pointer file is missing
+#   3. `.plan-with-files` pointer file is empty (whitespace-only counts as empty)
+# This makes the pointer file the explicit opt-in: worktrees, worktree-
+# container workspaces, and unrelated projects all stay silent.
+$__pointer = if (Test-Path .plan-with-files -PathType Leaf) {
+    Get-Content .plan-with-files -Raw -ErrorAction SilentlyContinue
+} else { $null }
+if ((Test-Path .plan-with-files-skip) `
+    -or (-not (Test-Path .plan-with-files -PathType Leaf)) `
+    -or ([string]::IsNullOrWhiteSpace($__pointer))) {
+    [Console]::Out.Write('{}')
+    exit 0
+}
+
 # --- Resolve plan directory (see post-tool-use.ps1 for full doc) ------------
 $PlanDir = ""
 $PlanSource = ""
