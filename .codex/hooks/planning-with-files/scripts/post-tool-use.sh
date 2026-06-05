@@ -196,48 +196,78 @@ if [ -n "${PHASE_NUM:-}" ]; then
     log "remaining: count=${REMAINING_COUNT:-?} first(${#REMAINING_FIRST} chars)"
 fi
 
-# --- Delta-based suppression ------------------------------------------------
-# Goal/Phase/Remaining-count rarely change between tool calls. Re-injecting the
-# identical block on every PostToolUse spams the model's context. We persist
-# the last (phase, remaining-count, goal-len, phase-len) tuple to
-# `$PLAN_DIR/.hook-state` and skip the heavy block when nothing changed,
-# emitting only the short NUDGE so anti-substitution / progress-logging
-# reminder still fires every call.
+# --- Delta + timestamp debounce -----------------------------------------------
+# Two-tier suppression for parallel-safe, low-noise context injection:
+# 1. INJECT_FULL=true when plan state changes (phase, remaining count, content).
+# 2. EMIT_NUDGE=true when INJECT_FULL or the debounce window has expired.
+#    Both decisions are made under flock so parallel hook processes (e.g. a
+#    burst of 8 simultaneous reads) collapse to at most one emission per window;
+#    the rest exit silently with {}.
+NUDGE_DEBOUNCE_SECS=60   # max one nudge per minute during stable runs
 STATE_FILE="$PLAN_DIR/.hook-state"
 STATE_LOCK="$STATE_FILE.lock"
 LAST_PHASE_NUM=""
 LAST_REMAINING_COUNT=""
 LAST_GOAL_LEN=""
 LAST_PHASE_LEN=""
+LAST_NUDGE_TS=0
 if [ -f "$STATE_FILE" ]; then
     LAST_PHASE_NUM=$(grep -E '^last_phase_num='        "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
     LAST_REMAINING_COUNT=$(grep -E '^last_remaining_count=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
     LAST_GOAL_LEN=$(grep -E '^last_goal_len='         "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
     LAST_PHASE_LEN=$(grep -E '^last_phase_len='        "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
+    LAST_NUDGE_TS=$(grep -E '^last_nudge_ts='         "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
 fi
+LAST_NUDGE_TS=${LAST_NUDGE_TS:-0}
 
 CUR_GOAL_LEN=${#GOAL_BODY}
 CUR_PHASE_LEN=${#PHASE_BODY}
-INJECT_FULL=true
-if [ "${PHASE_NUM:-}"        = "${LAST_PHASE_NUM:-}" ] \
-&& [ "${REMAINING_COUNT:-}"  = "${LAST_REMAINING_COUNT:-}" ] \
-&& [ "${CUR_GOAL_LEN}"       = "${LAST_GOAL_LEN:-}" ] \
-&& [ "${CUR_PHASE_LEN}"      = "${LAST_PHASE_LEN:-}" ]; then
-    INJECT_FULL=false
-fi
-log "delta: phase='${PHASE_NUM:-}' (was '${LAST_PHASE_NUM:-}') remaining='${REMAINING_COUNT:-}' (was '${LAST_REMAINING_COUNT:-}') goal_len=$CUR_GOAL_LEN (was '${LAST_GOAL_LEN:-}') phase_len=$CUR_PHASE_LEN (was '${LAST_PHASE_LEN:-}') -> inject_full=$INJECT_FULL"
+NOW_TS=$(date +%s)
+log "delta (pre-lock): phase='${PHASE_NUM:-}' (was '${LAST_PHASE_NUM:-}') remaining='${REMAINING_COUNT:-}' (was '${LAST_REMAINING_COUNT:-}') goal_len=$CUR_GOAL_LEN (was '${LAST_GOAL_LEN:-}') phase_len=$CUR_PHASE_LEN (was '${LAST_PHASE_LEN:-}') nudge_age=$((NOW_TS - LAST_NUDGE_TS))s"
 
-# Persist new state (atomic via tmp+mv inside flock).
+# Flock-protected decision + state update.
+# Re-read state under lock to avoid TOCTOU with parallel hook processes.
+EMIT_NUDGE=false
+INJECT_FULL=false
 {
     flock -x 8 || true
-    {
-        printf 'last_phase_num=%s\n'        "${PHASE_NUM:-}"
-        printf 'last_remaining_count=%s\n'  "${REMAINING_COUNT:-}"
-        printf 'last_goal_len=%s\n'         "$CUR_GOAL_LEN"
-        printf 'last_phase_len=%s\n'        "$CUR_PHASE_LEN"
-    } > "$STATE_FILE.tmp" 2>/dev/null \
-        && mv "$STATE_FILE.tmp" "$STATE_FILE" 2>/dev/null || true
+    _st_phase=$(grep -E '^last_phase_num='        "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
+    _st_remaining=$(grep -E '^last_remaining_count=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
+    _st_goal=$(grep -E '^last_goal_len='         "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
+    _st_phase_len=$(grep -E '^last_phase_len='   "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
+    _st_nudge_ts=$(grep -E '^last_nudge_ts='     "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
+    _st_nudge_ts=${_st_nudge_ts:-0}
+    _time_since=$(( NOW_TS - _st_nudge_ts ))
+
+    _delta=false
+    if [ "${PHASE_NUM:-}"       != "${_st_phase:-}" ] \
+    || [ "${REMAINING_COUNT:-}" != "${_st_remaining:-}" ] \
+    || [ "$CUR_GOAL_LEN"        != "${_st_goal:-}" ] \
+    || [ "$CUR_PHASE_LEN"       != "${_st_phase_len:-}" ]; then
+        _delta=true
+    fi
+
+    if [ "$_delta" = "true" ] || [ "$_time_since" -ge "$NUDGE_DEBOUNCE_SECS" ]; then
+        EMIT_NUDGE=true
+        [ "$_delta" = "true" ] && INJECT_FULL=true
+        {
+            printf 'last_phase_num=%s\n'       "${PHASE_NUM:-}"
+            printf 'last_remaining_count=%s\n' "${REMAINING_COUNT:-}"
+            printf 'last_goal_len=%s\n'        "$CUR_GOAL_LEN"
+            printf 'last_phase_len=%s\n'       "$CUR_PHASE_LEN"
+            printf 'last_nudge_ts=%s\n'        "$NOW_TS"
+        } > "$STATE_FILE.tmp" 2>/dev/null \
+            && mv "$STATE_FILE.tmp" "$STATE_FILE" 2>/dev/null || true
+    fi
 } 8>>"$STATE_LOCK" 2>/dev/null || true
+
+log "emit_nudge=$EMIT_NUDGE inject_full=$INJECT_FULL nudge_age=$((NOW_TS - LAST_NUDGE_TS))s debounce=${NUDGE_DEBOUNCE_SECS}s"
+
+if [ "$EMIT_NUDGE" = "false" ]; then
+    log "debounce active -> {} (silent)"
+    echo '{}'
+    exit 0
+fi
 
 PLAN_SUMMARY=""
 if [ "$INJECT_FULL" = "true" ]; then

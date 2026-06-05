@@ -1,0 +1,7 @@
+# BEGIN synced:copilot:workspace-mcp
+# Generated from workspace .vscode/mcp.json. Do not edit this block by hand.
+
+[mcp_servers.github]
+command = "bash"
+args = ["-c", "/home/xuananh/Dropbox/Work/copilot/mcp-server-commands/start_github_mcp.sh plan-with-files"]
+# END synced:copilot:workspace-mcp

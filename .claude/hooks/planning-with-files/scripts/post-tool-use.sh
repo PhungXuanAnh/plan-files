@@ -1,5 +1,5 @@
 #!/bin/bash
-# planning-with-files: Post-tool-use hook for GitHub Copilot
+# planning-with-files: Post-tool-use hook for Claude Code
 # Runs AFTER every tool call. Anchors goals (re-injecting Goal + Current Phase
 # from task_plan.md, size-bounded per section) and nudges progress logging.
 # No-op when task_plan.md does not exist - zero pollution on non-planning sessions.

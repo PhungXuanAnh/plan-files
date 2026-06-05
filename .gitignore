@@ -27,9 +27,6 @@ clawhub-upload/
 clawhub-changelog.txt
 skill-submission-targets.txt
 
-# Claude session files
-.claude/
-
 # Keep the skill folder clean
 *.log
 *.tmp

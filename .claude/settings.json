@@ -1,0 +1,35 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel)\" && cd \"$ROOT\" && bash \"$ROOT/.claude/hooks/planning-with-files/scripts/post-tool-use.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel)\" && cd \"$ROOT\" && bash \"$ROOT/.claude/hooks/planning-with-files/scripts/agent-stop.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "mcpServers": {
+    "github": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "/home/xuananh/Dropbox/Work/copilot/mcp-server-commands/start_github_mcp.sh plan-with-files"
+      ]
+    }
+  }
+}
