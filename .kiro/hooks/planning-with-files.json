@@ -1,0 +1,23 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Planning With Files - Post Tool Use",
+      "trigger": "PostToolUse",
+      "action": {
+        "type": "command",
+        "command": "/home/xuananh/repo/planning-with-files/.kiro/hooks/scripts/post-tool-use.sh",
+        "timeout": 5
+      }
+    },
+    {
+      "name": "Planning With Files - Agent Stop",
+      "trigger": "Stop",
+      "action": {
+        "type": "command",
+        "command": "/home/xuananh/repo/planning-with-files/.kiro/hooks/scripts/agent-stop.sh",
+        "timeout": 10
+      }
+    }
+  ]
+}

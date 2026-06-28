@@ -1,5 +1,5 @@
 .PHONY: help injected-content \
-        install-hook-copilot install-hook-claude-code install-hook-codex install-hooks \
+        install-hook-copilot install-hook-claude-code install-hook-codex install-hook-kiro install-hooks \
         sync-upstream sync-upstream-rebase sync-upstream-merge
 
 help: ## Show this help
@@ -117,7 +117,15 @@ install-hook-codex: ## Install planning-with-files hook into global Codex (~/.co
 	@rm -f /tmp/_pwf_hook_codex.py
 	@echo ">>> done. Restart Codex to reload hooks."
 
-install-hooks: install-hook-copilot install-hook-claude-code install-hook-codex ## Install hooks for all AI agents
+install-hook-kiro: ## Install planning-with-files hook into global Kiro hook 
+	@echo ">>> installing global Kiro hook..."
+	@mkdir -p ~/.kiro/hooks
+	@ln -sf $(REPO_ROOT)/.kiro/hooks/planning-with-files.json ~/.kiro/hooks/planning-with-files.json
+	@echo "  written: .kiro/hooks/planning-with-files.json"
+	@echo "  symlinked: ~/.kiro/hooks/planning-with-files.json -> $(REPO_ROOT)/.kiro/hooks/planning-with-files.json"
+	@echo ">>> done. Hooks will activate on next Kiro session start."
+
+install-hooks: install-hook-copilot install-hook-claude-code install-hook-codex install-hook-kiro ## Install hooks for all AI agents
 
 # ---------------------------------------------------------------------------
 injected-content: ## Show what the post-tool-use hook would inject from task_plan.md
