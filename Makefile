@@ -24,15 +24,12 @@ cfg = {
     'hooks': {
         'PostToolUse': [{'type': 'command',
             'bash':       repo + '/.github/hooks/scripts/post-tool-use.sh',
-            'powershell': repo + '/.github/hooks/scripts/post-tool-use.ps1',
             'timeout': 5}],
         'Stop': [{'type': 'command',
             'bash':       repo + '/.github/hooks/scripts/agent-stop.sh',
-            'powershell': repo + '/.github/hooks/scripts/agent-stop.ps1',
             'timeout': 10}],
         'ErrorOccurred': [{'type': 'command',
             'bash':       repo + '/.github/hooks/scripts/error-occurred.sh',
-            'powershell': repo + '/.github/hooks/scripts/error-occurred.ps1',
             'timeout': 5}],
     }
 }
@@ -76,19 +73,13 @@ except FileNotFoundError:
     s = {}
 pfx_bash = (f'ROOT="{d}(git rev-parse --show-toplevel 2>/dev/null || pwd)"'
             f' && cd "{d}ROOT" && bash "')
-pfx_ps   = ('powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '
-            '"' + d + 'root = git rev-parse --show-toplevel 2>' + d + 'null; '
-            'if (-not ' + d + 'root) { ' + d + 'root = (Get-Location).Path }; '
-            'Set-Location ' + d + 'root; & \'')
 s.setdefault('hooks', {})
 s['hooks']['PostToolUse'] = [{'hooks': [{'type': 'command', 'timeout': 5,
     'statusMessage': 'Injecting planning context',
-    'command':        pfx_bash + repo + '/.codex/hooks/planning-with-files/scripts/post-tool-use.sh"',
-    'commandWindows': pfx_ps   + repo + '/.codex/hooks/planning-with-files/scripts/post-tool-use.ps1\'"'}]}]
+    'command':        pfx_bash + repo + '/.codex/hooks/planning-with-files/scripts/post-tool-use.sh"'}]}]
 s['hooks']['Stop'] = [{'hooks': [{'type': 'command', 'timeout': 10,
     'statusMessage': 'Checking planning completion',
-    'command':        pfx_bash + repo + '/.codex/hooks/planning-with-files/scripts/agent-stop.sh"',
-    'commandWindows': pfx_ps   + repo + '/.codex/hooks/planning-with-files/scripts/agent-stop.ps1\'"'}]}]
+    'command':        pfx_bash + repo + '/.codex/hooks/planning-with-files/scripts/agent-stop.sh"'}]}]
 with open(path, 'w') as f:
     json.dump(s, f, indent=2)
     f.write('\n')
@@ -128,8 +119,12 @@ install-hook-kiro: ## Install planning-with-files hook into global Kiro hook
 install-hooks: install-hook-copilot install-hook-claude-code install-hook-codex install-hook-kiro ## Install hooks for all AI agents
 
 # ---------------------------------------------------------------------------
-injected-content: ## Show what the post-tool-use hook would inject from task_plan.md
-	awk '/^## (Goal|Current Phase)[[:space:]]*$$/{c=1;print;next} /^## /{c=0} c' task_plan.md | awk 'BEGIN{c=0} /<!--/{c=1} c==0{print} /-->/{c=0}'
+injected-content: ## Show what the post-tool-use hook would inject from the active tasks.md
+	@id=$$(cat .plan-with-files 2>/dev/null || true); \
+	case "$$id" in ""|.|*/*|*..*|*" "*) echo "no valid active plan"; exit 0;; esac; \
+	file="tmp/plan-with-files/$$id/tasks.md"; \
+	if [ ! -f "$$file" ]; then echo "active tasks.md not found: $$file"; exit 0; fi; \
+	awk '/^## (Goal|Current Phase)[[:space:]]*$$/{c=1;print;next} /^## /{c=0} c' "$$file" | awk 'BEGIN{c=0} /<!--/{c=1} c==0{print} /-->/{c=0}'
 
 # ----------------------------------------------------------------------------
 # Upstream sync (origin = PhungXuanAnh fork, upstream = OthmanAdi original)

@@ -1,18 +1,70 @@
 #!/bin/bash
 # Initialize planning files for a new session
-# Usage: ./init-session.sh [project-name]
+# Usage: ./init-session.sh [--template TYPE] [project-name]
+# Templates: default, analytics
 
 set -e
 
-PROJECT_NAME="${1:-project}"
-DATE=$(date +%Y-%m-%d)
+TEMPLATE="default"
+PROJECT_NAME="project"
 
-echo "Initializing planning files for: $PROJECT_NAME"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --template|-t)
+            TEMPLATE="$2"
+            shift 2
+            ;;
+        *)
+            PROJECT_NAME="$1"
+            shift
+            ;;
+    esac
+done
 
-# Create task_plan.md if it doesn't exist
-if [ ! -f "task_plan.md" ]; then
-    cat > task_plan.md << 'EOF'
-# Task Plan: [Brief Description]
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SKILL_ROOT="$(dirname "$SCRIPT_DIR")"
+TEMPLATE_DIR="$SKILL_ROOT/templates"
+
+echo "Initializing planning files for: $PROJECT_NAME (template: $TEMPLATE)"
+
+if [ "$TEMPLATE" != "default" ] && [ "$TEMPLATE" != "analytics" ]; then
+    echo "Unknown template: $TEMPLATE (available: default, analytics). Using default."
+    TEMPLATE="default"
+fi
+
+copy_or_create() {
+    local target="$1"
+    local template="$2"
+    local fallback="$3"
+
+    if [ -f "$target" ]; then
+        echo "$target already exists, skipping"
+        return
+    fi
+
+    if [ -f "$template" ]; then
+        cp "$template" "$target"
+    else
+        printf '%s\n' "$fallback" > "$target"
+    fi
+    echo "Created $target"
+}
+
+if [ "$TEMPLATE" = "analytics" ] && [ -f "$TEMPLATE_DIR/analytics_tasks.md" ]; then
+    TASKS_TEMPLATE="$TEMPLATE_DIR/analytics_tasks.md"
+else
+    TASKS_TEMPLATE="$TEMPLATE_DIR/tasks.md"
+fi
+
+if [ "$TEMPLATE" = "analytics" ] && [ -f "$TEMPLATE_DIR/analytics_findings.md" ]; then
+    FINDINGS_TEMPLATE="$TEMPLATE_DIR/analytics_findings.md"
+else
+    FINDINGS_TEMPLATE="$TEMPLATE_DIR/findings.md"
+fi
+
+DECISIONS_TEMPLATE="$TEMPLATE_DIR/decisions.md"
+
+copy_or_create "tasks.md" "$TASKS_TEMPLATE" "# Tasks: $PROJECT_NAME
 
 ## Goal
 [One sentence describing the end state]
@@ -20,51 +72,26 @@ if [ ! -f "task_plan.md" ]; then
 ## Current Phase
 Phase 1
 
+## Workflow Profile
+**Profile:** [A | B | C]
+
 ## Phases
 
 ### Phase 1: Requirements & Discovery
 - [ ] Understand user intent
 - [ ] Identify constraints
-- [ ] Document in findings.md
+- [ ] Document findings in findings.md
+- [ ] Document user decisions in decisions.md
 - **Status:** in_progress
 
-### Phase 2: Planning & Structure
-- [ ] Define approach
-- [ ] Create project structure
-- **Status:** pending
-
-### Phase 3: Implementation
-- [ ] Execute the plan
-- [ ] Write to files before executing
-- **Status:** pending
-
-### Phase 4: Testing & Verification
-- [ ] Verify requirements met
-- [ ] Document test results
-- **Status:** pending
-
-### Phase 5: Delivery
-- [ ] Review outputs
-- [ ] Deliver to user
-- **Status:** pending
-
-## Decisions Made
-| Decision | Rationale |
-|----------|-----------|
+## Progress Notes
+- Created plan.
 
 ## Errors Encountered
-| Error | Resolution |
-|-------|------------|
-EOF
-    echo "Created task_plan.md"
-else
-    echo "task_plan.md already exists, skipping"
-fi
+| Error | Attempt | Resolution |
+|-------|---------|------------|"
 
-# Create findings.md if it doesn't exist
-if [ ! -f "findings.md" ]; then
-    cat > findings.md << 'EOF'
-# Findings & Decisions
+copy_or_create "findings.md" "$FINDINGS_TEMPLATE" "# Findings
 
 ## Requirements
 -
@@ -72,49 +99,26 @@ if [ ! -f "findings.md" ]; then
 ## Research Findings
 -
 
-## Technical Decisions
-| Decision | Rationale |
-|----------|-----------|
-
 ## Issues Encountered
 | Issue | Resolution |
 |-------|------------|
 
 ## Resources
--
-EOF
-    echo "Created findings.md"
-else
-    echo "findings.md already exists, skipping"
-fi
+-"
 
-# Create progress.md if it doesn't exist
-if [ ! -f "progress.md" ]; then
-    cat > progress.md << EOF
-# Progress Log
+copy_or_create "decisions.md" "$DECISIONS_TEMPLATE" "# Decisions
 
-## Session: $DATE
+## Active Decisions
+| ID | Decision | Rationale | Date |
+|----|----------|-----------|------|
 
-### Current Status
-- **Phase:** 1 - Requirements & Discovery
-- **Started:** $DATE
+## Superseded Decisions
+| ID | Old Decision | Replaced By | Reason |
+|----|--------------|-------------|--------|
 
-### Actions Taken
--
-
-### Test Results
-| Test | Expected | Actual | Status |
-|------|----------|--------|--------|
-
-### Errors
-| Error | Resolution |
-|-------|------------|
-EOF
-    echo "Created progress.md"
-else
-    echo "progress.md already exists, skipping"
-fi
+## Open Decision Questions
+- [ ]"
 
 echo ""
 echo "Planning files initialized!"
-echo "Files: task_plan.md, findings.md, progress.md"
+echo "Files: tasks.md, findings.md, decisions.md"

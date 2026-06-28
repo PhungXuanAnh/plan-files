@@ -1,11 +1,11 @@
 #!/bin/bash
 # planning-with-files: BeforeTool hook for Gemini CLI
-# Reads the first 30 lines of task_plan.md before tool use.
+# Reads the first 30 lines of tasks.md before tool use.
 # Receives JSON on stdin, must output ONLY JSON to stdout.
 
 INPUT=$(cat)
 
-PLAN_FILE="task_plan.md"
+PLAN_FILE="tasks.md"
 
 if [ ! -f "$PLAN_FILE" ]; then
     echo '{}'

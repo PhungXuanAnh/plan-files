@@ -5,7 +5,6 @@
       {
         "type": "command",
         "bash": "/home/xuananh/repo/planning-with-files/.github/hooks/scripts/post-tool-use.sh",
-        "powershell": "/home/xuananh/repo/planning-with-files/.github/hooks/scripts/post-tool-use.ps1",
         "timeout": 5
       }
     ],
@@ -13,7 +12,6 @@
       {
         "type": "command",
         "bash": "/home/xuananh/repo/planning-with-files/.github/hooks/scripts/agent-stop.sh",
-        "powershell": "/home/xuananh/repo/planning-with-files/.github/hooks/scripts/agent-stop.ps1",
         "timeout": 10
       }
     ],
@@ -21,7 +19,6 @@
       {
         "type": "command",
         "bash": "/home/xuananh/repo/planning-with-files/.github/hooks/scripts/error-occurred.sh",
-        "powershell": "/home/xuananh/repo/planning-with-files/.github/hooks/scripts/error-occurred.ps1",
         "timeout": 5
       }
     ]

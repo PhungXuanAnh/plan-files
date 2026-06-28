@@ -1,6 +1,6 @@
 #!/bin/bash
 # planning-with-files: Error hook for GitHub Copilot
-# Logs errors to task_plan.md when the agent encounters an error.
+# Logs errors to tasks.md when the agent encounters an error.
 # Always exits 0 — outputs JSON to stdout. Debug log written to
 #   tmp/hook-logs/plan-with-files/error-occurred.log
 #
@@ -56,7 +56,7 @@ else
     PLAN_SOURCE="no .plan-with-files pointer -> no-op"
 fi
 PLAN_FILE=""
-[ -n "$PLAN_DIR" ] && PLAN_FILE="$PLAN_DIR/task_plan.md"
+[ -n "$PLAN_DIR" ] && PLAN_FILE="$PLAN_DIR/tasks.md"
 
 # --- Logging setup (flock-protected against parallel hook processes) --------
 LOG_DIR="tmp/hook-logs/plan-with-files"
@@ -93,7 +93,7 @@ INPUT_PREVIEW=$(printf '%s' "$INPUT" | tr '\n' ' ' | cut -c 1-500)
 log "stdin (first 500 chars, ${#INPUT} total): $INPUT_PREVIEW"
 
 if [ ! -f "$PLAN_FILE" ]; then
-    log "${PLAN_FILE:-task_plan.md}: ABSENT -> emitting {} (no-op)"
+    log "${PLAN_FILE:-tasks.md}: ABSENT -> emitting {} (no-op)"
     echo '{}'
     exit 0
 fi
@@ -105,7 +105,7 @@ log "${PLAN_FILE}: present"
 #   {"error":"..."}              -> top-level string
 # Limitation: does NOT decode escaped quotes inside the message (\" mid-value
 # would split early). Acceptable for a 200-char preview that is itself meant
-# only to nudge the agent to log the error in task_plan.md.
+# only to nudge the agent to log the error in tasks.md.
 ERROR_MSG=$(printf '%s' "$INPUT" \
     | grep -oE '"message"[[:space:]]*:[[:space:]]*"[^"]*"' \
     | head -1 \

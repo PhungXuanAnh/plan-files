@@ -6,7 +6,7 @@
 
 INPUT=$(cat)
 
-PLAN_FILE="task_plan.md"
+PLAN_FILE="tasks.md"
 
 if [ ! -f "$PLAN_FILE" ]; then
     echo '{}'

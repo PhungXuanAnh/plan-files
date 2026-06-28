@@ -1,8 +1,8 @@
 #!/bin/bash
 # planning-with-files: Post-tool-use hook for Kiro
 # Runs AFTER every tool call. Anchors goals (re-injecting Goal + Current Phase
-# from task_plan.md, size-bounded per section) and nudges progress logging.
-# No-op when task_plan.md does not exist - zero pollution on non-planning sessions.
+# from tasks.md, size-bounded per section) and nudges progress logging.
+# No-op when tasks.md does not exist - zero pollution on non-planning sessions.
 # Always exits 0 - outputs to stdout. Debug log written to
 #   tmp/hook-logs/plan-with-files/post-tool-use.log
 #
@@ -34,7 +34,7 @@ fi
 # first line is a task id, e.g.
 #   $ cat .plan-with-files
 #   JIRA-1234
-# -> hook reads tmp/plan-with-files/JIRA-1234/task_plan.md
+# -> hook reads tmp/plan-with-files/JIRA-1234/tasks.md
 # If pointer missing / invalid / target dir missing -> no-op (zero pollution).
 # The planning-with-files skill is responsible for creating both the pointer
 # and the per-task directory; hooks never write files (except the per-task
@@ -59,7 +59,7 @@ else
     PLAN_SOURCE="no .plan-with-files pointer -> no-op"
 fi
 PLAN_FILE=""
-[ -n "$PLAN_DIR" ] && PLAN_FILE="$PLAN_DIR/task_plan.md"
+[ -n "$PLAN_DIR" ] && PLAN_FILE="$PLAN_DIR/tasks.md"
 
 # --- Logging setup (flock-protected against parallel hook processes) --------
 LOG_DIR="tmp/hook-logs/plan-with-files"
@@ -96,7 +96,7 @@ INPUT_PREVIEW=$(printf '%s' "$INPUT" | tr '\n' ' ' | cut -c 1-300)
 log "stdin (first 300 chars, ${#INPUT} total): $INPUT_PREVIEW"
 
 if [ ! -f "$PLAN_FILE" ]; then
-    log "${PLAN_FILE:-task_plan.md}: ABSENT -> emitting nothing (no-op, zero pollution)"
+    log "${PLAN_FILE:-tasks.md}: ABSENT -> emitting nothing (no-op, zero pollution)"
     exit 0
 fi
 PLAN_BYTES=$(wc -c < "$PLAN_FILE" | tr -d ' ')
@@ -274,7 +274,13 @@ ${PHASE_BODY}"
     fi
 fi
 
-NUDGE="[planning-with-files] Update progress.md with what you just did. If a phase is now complete, update ${PLAN_FILE} status. If you no longer see the planning-with-files SKILL.md rules in your context (post-/compact, or you have forgotten them), reload the planning-with-files skill by yourself before continuing."
+NUDGE="[planning-with-files] Update tasks.md with what you just did. If a phase is now complete, update ${PLAN_FILE} status. If you no longer see the planning-with-files SKILL.md rules in your context (post-/compact, or you have forgotten them), reload the planning-with-files skill by yourself before continuing."
+COMPACTION_WARN=$(planning_file_budget_warning "$PLAN_DIR" 250)
+if [ -n "$COMPACTION_WARN" ]; then
+    NUDGE="${NUDGE}
+${COMPACTION_WARN}"
+    log "compaction warn injected (${#COMPACTION_WARN} chars)"
+fi
 # Only attach REMAINING_LINE on the call where the count actually changed,
 # OR on the first injection in a session (LAST_REMAINING_COUNT empty).
 if [ "$INJECT_FULL" = "true" ] && [ -n "$REMAINING_LINE" ]; then

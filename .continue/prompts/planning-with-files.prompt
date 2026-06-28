@@ -1,32 +1,33 @@
 ---
 name: planning-with-files
-description: Start the "Planning with Files" 3-file workflow (task_plan.md / findings.md / progress.md)
+description: Start the "Planning with Files" pointer workflow (tasks.md / findings.md / decisions.md)
 invokable: true
 ---
 
-You will use the "Planning with Files" pattern for the work ahead: persist plans, findings, and progress into 3 Markdown files to prevent context drift and forgotten goals.
+You will use the "Planning with Files" pattern for the work ahead: persist tasks, findings, and decisions into task-scoped Markdown files to prevent context drift and forgotten goals.
 
 ## Goal
 
-- Ensure these files exist in the project root: task_plan.md, findings.md, progress.md
+- Ensure `.plan-with-files` points at an active task id.
+- Ensure these files exist under `tmp/plan-with-files/<task-id>/`: tasks.md, findings.md, decisions.md
 - All key decisions, research conclusions, errors, and fix paths must be written to files
-- Update task_plan.md status after completing each phase
+- Update tasks.md status after completing each phase
 
 ## Steps
 
-1. Check whether the project root already has task_plan.md / findings.md / progress.md
-2. If they don't exist, create them (run the init script or create the files manually):
-   - macOS/Linux: `bash .continue/skills/planning-with-files/scripts/init-session.sh`
-   - Windows: `powershell -ExecutionPolicy Bypass -File .continue/skills/planning-with-files/scripts/init-session.ps1`
-3. Read task_plan.md and fill in:
+1. Check `.plan-with-files` at the project root.
+2. If there is no active task, create `tmp/plan-with-files/<task-id>/` and write the task id to `.plan-with-files`.
+3. If the planning files do not exist, create them from the skill templates manually.
+4. Read tasks.md and fill in:
    - Goal (one sentence)
    - Phases (3-7 phases, each with Status: pending / in_progress / complete)
    - Key Questions (critical questions that need answers)
-4. While executing the task, follow these rules:
+5. While executing the task, follow these rules:
    - After every 2 view/search/browse operations, immediately write findings to findings.md
-   - Before every major decision, re-read task_plan.md to refresh goals
-   - Log every error in task_plan.md under Errors Encountered, including attempt count and resolution
-5. Continuously write session actions and verification results to progress.md (including commands, tests, output)
+   - Before every major decision, re-read tasks.md and decisions.md to refresh goals and user choices
+   - Log every error in tasks.md under Errors Encountered, including attempt count and resolution
+6. Write user decisions and changed direction to decisions.md; keep superseded decisions compact.
+7. Compact any active planning file that grows past about 250 lines; do not truncate.
 
 ## Output Requirements
 

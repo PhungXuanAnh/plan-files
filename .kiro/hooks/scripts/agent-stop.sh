@@ -1,6 +1,6 @@
 #!/bin/bash
 # planning-with-files: Agent stop hook for Kiro
-# Checks if all phases in task_plan.md are complete.
+# Checks if all phases in tasks.md are complete.
 # Injects continuation context if phases are incomplete.
 # Always exits 0 — outputs to stdout for "agent" type hooks.
 # Debug log written to tmp/hook-logs/plan-with-files/agent-stop.log
@@ -48,7 +48,7 @@ else
     PLAN_SOURCE="no .plan-with-files pointer -> no-op"
 fi
 PLAN_FILE=""
-[ -n "$PLAN_DIR" ] && PLAN_FILE="$PLAN_DIR/task_plan.md"
+[ -n "$PLAN_DIR" ] && PLAN_FILE="$PLAN_DIR/tasks.md"
 
 # --- Logging setup (flock-protected against parallel hook processes) --------
 LOG_DIR="tmp/hook-logs/plan-with-files"
@@ -101,7 +101,7 @@ if [ "$STOP_HOOK_ACTIVE" = "true" ]; then
 fi
 
 if [ ! -f "$PLAN_FILE" ]; then
-    log "${PLAN_FILE:-task_plan.md}: ABSENT -> silent exit (no-op)"
+    log "${PLAN_FILE:-tasks.md}: ABSENT -> silent exit (no-op)"
     exit 0
 fi
 log "${PLAN_FILE}: present ($(wc -c < "$PLAN_FILE" | tr -d ' ') bytes)"
@@ -285,7 +285,7 @@ fi
 SETTLED=$((COMPLETE + DEFERRED))
 DEFERRED_NOTE=""
 [ "$DEFERRED" -gt 0 ] && DEFERRED_NOTE=" (including $DEFERRED deferred)"
-REASON="[planning-with-files] Task incomplete ($SETTLED/$TOTAL phases settled${DEFERRED_NOTE}).${REMAINING_LINE} Update progress.md, then read ${PLAN_FILE} and continue working on the remaining phases. If you genuinely cannot continue (blocked / waiting on user), either say so explicitly so the user can intervene, or mark the phase '- **Status:** deferred (explicit reason — blocker or user request)' if the deferral was explicitly agreed."
+REASON="[planning-with-files] Task incomplete ($SETTLED/$TOTAL phases settled${DEFERRED_NOTE}).${REMAINING_LINE} Update tasks.md, then read ${PLAN_FILE} and continue working on the remaining phases. If you genuinely cannot continue (blocked / waiting on user), either say so explicitly so the user can intervene, or mark the phase '- **Status:** deferred (explicit reason — blocker or user request)' if the deferral was explicitly agreed."
 log "decision: BLOCK ($SETTLED/$TOTAL phases settled, deferred=$DEFERRED)"
 printf '%s\n' "$REASON"
 exit 0

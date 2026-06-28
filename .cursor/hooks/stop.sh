@@ -1,10 +1,10 @@
 #!/bin/bash
 # planning-with-files: Stop hook for Cursor
-# Checks if all phases in task_plan.md are complete.
+# Checks if all phases in tasks.md are complete.
 # Returns followup_message to auto-continue if phases are incomplete.
 # Always exits 0 — uses JSON stdout for control.
 
-PLAN_FILE="task_plan.md"
+PLAN_FILE="tasks.md"
 
 if [ ! -f "$PLAN_FILE" ]; then
     # No plan file = no planning session, allow stop
@@ -54,10 +54,10 @@ fi
 
 if [ "$COMPLETE" -ge "$TOTAL" ]; then
     # All phases complete — provide re-entry guidance
-    echo "{\"followup_message\": \"[planning-with-files] ALL PHASES COMPLETE ($COMPLETE/$TOTAL). If the user has additional work, add new phases to task_plan.md before starting.\"}"
+    echo "{\"followup_message\": \"[planning-with-files] ALL PHASES COMPLETE ($COMPLETE/$TOTAL). If the user has additional work, add new phases to tasks.md before starting.\"}"
     exit 0
 else
     # Phases incomplete — auto-continue via followup_message
-    echo "{\"followup_message\": \"[planning-with-files] Task incomplete ($COMPLETE/$TOTAL phases done). Update progress.md, then read task_plan.md and continue working on the remaining phases.\"}"
+    echo "{\"followup_message\": \"[planning-with-files] Task incomplete ($COMPLETE/$TOTAL phases done). Update tasks.md, then read tasks.md and decisions.md before continuing.\"}"
     exit 0
 fi

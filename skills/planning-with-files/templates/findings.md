@@ -1,8 +1,9 @@
-# Findings & Decisions
+# Findings
 <!-- 
-  WHAT: Your knowledge base for the task. Stores everything you discover and decide.
+  WHAT: Your knowledge base for discoveries, research, and untrusted external content.
   WHY: Context windows are limited. This file is your "external memory" - persistent and unlimited.
   WHEN: Update after ANY discovery, especially after 2 view/browser/search operations (2-Action Rule).
+  LENGTH RULE: Keep near 250 lines. Summarize old findings and keep links/paths to raw sources.
 -->
 
 ## Requirements
@@ -33,24 +34,10 @@
 <!-- Key discoveries during exploration -->
 -
 
-## Technical Decisions
-<!-- 
-  WHAT: Architecture and implementation choices you've made, with reasoning.
-  WHY: You'll forget why you chose a technology or approach. This table preserves that knowledge.
-  WHEN: Update whenever you make a significant technical choice.
-  EXAMPLE:
-    | Use JSON for storage | Simple, human-readable, built-in Python support |
-    | argparse with subcommands | Clean CLI: python todo.py add "task" |
--->
-<!-- Decisions made with rationale -->
-| Decision | Rationale |
-|----------|-----------|
-|          |           |
-
 ## Issues Encountered
 <!-- 
   WHAT: Problems you ran into and how you solved them.
-  WHY: Similar to errors in task_plan.md, but focused on broader issues (not just code errors).
+  WHY: Similar to errors in tasks.md, but focused on broader issues (not just code errors).
   WHEN: Document when you encounter blockers or unexpected challenges.
   EXAMPLE:
     | Empty file causes JSONDecodeError | Added explicit empty file check before json.load() |

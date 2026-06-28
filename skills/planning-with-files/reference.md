@@ -1,218 +1,93 @@
 # Reference: Manus Context Engineering Principles
 
-This skill is based on context engineering principles from Manus, the AI agent company acquired by Meta for $2 billion in December 2025.
+This skill is based on context engineering principles from Manus-style agent workflows: use files as persistent working memory, keep the active plan in attention, and preserve enough history to avoid repeating mistakes.
 
-## The 6 Manus Principles
+## Core Principles
 
-### Principle 1: Design Around KV-Cache
+### 1. Filesystem as External Memory
 
-> "KV-cache hit rate is THE single most important metric for production AI agents."
-
-**Statistics:**
-- ~100:1 input-to-output token ratio
-- Cached tokens: $0.30/MTok vs Uncached: $3/MTok
-- 10x cost difference!
-
-**Implementation:**
-- Keep prompt prefixes STABLE (single-token change invalidates cache)
-- NO timestamps in system prompts
-- Make context APPEND-ONLY with deterministic serialization
-
-### Principle 2: Mask, Don't Remove
-
-Don't dynamically remove tools (breaks KV-cache). Use logit masking instead.
-
-**Best Practice:** Use consistent action prefixes (e.g., `browser_`, `shell_`, `file_`) for easier masking.
-
-### Principle 3: Filesystem as External Memory
-
-> "Markdown is my 'working memory' on disk."
-
-**The Formula:**
 ```
 Context Window = RAM (volatile, limited)
-Filesystem = Disk (persistent, unlimited)
+Filesystem = Disk (persistent, durable)
 ```
 
-**Compression Must Be Restorable:**
-- Keep URLs even if web content is dropped
-- Keep file paths when dropping document contents
-- Never lose the pointer to full data
+Anything important should be written to disk. The active task folder contains:
 
-### Principle 4: Manipulate Attention Through Recitation
+| File | Purpose |
+|------|---------|
+| `tasks.md` | Goal, current phase, phase statuses, concise progress, errors, verification |
+| `findings.md` | Discoveries, research, browser/search results, source references |
+| `decisions.md` | Active user decisions, superseded decisions, open decision questions |
 
-> "Creates and updates todo.md throughout tasks to push global plan into model's recent attention span."
+### 2. Manipulate Attention Through Recitation
 
-**Problem:** After ~50 tool calls, models forget original goals ("lost in the middle" effect).
+After many tool calls, original goals drift out of attention. Re-read `tasks.md` before major decisions so the goal and current phase are recent again.
 
-**Solution:** Re-read `task_plan.md` before each decision. Goals appear in the attention window.
+Also re-read `decisions.md` before changing direction. User choices are more stable than tool observations and should not be overwritten from memory.
 
-```
-Start of context: [Original goal - far away, forgotten]
-...many tool calls...
-End of context: [Recently read task_plan.md - gets ATTENTION!]
-```
+### 3. Keep the Wrong Stuff, But Compact It
 
-### Principle 5: Keep the Wrong Stuff In
+Failed attempts and old decisions help prevent repeated mistakes. Keep them, but compress stale detail:
 
-> "Leave the wrong turns in the context."
+- Recent/current errors stay explicit in `tasks.md`.
+- Resolved or old errors become short summaries.
+- Changed user decisions move to `## Superseded Decisions` in `decisions.md`.
+- Large research notes in `findings.md` become summaries plus links/paths to sources.
 
-**Why:**
-- Failed actions with stack traces let model implicitly update beliefs
-- Reduces mistake repetition
-- Error recovery is "one of the clearest signals of TRUE agentic behavior"
+### 4. Compression Must Be Restorable
 
-### Principle 6: Don't Get Few-Shotted
+When compacting:
 
-> "Uniformity breeds fragility."
+- Keep URLs even if web content is dropped.
+- Keep file paths when dropping long snippets.
+- Keep exact commands/checks that prove completion.
+- Keep active decisions and blockers.
+- Never raw-truncate.
 
-**Problem:** Repetitive action-observation pairs cause drift and hallucination.
+### 5. Isolate Untrusted Content
 
-**Solution:** Introduce controlled variation:
-- Vary phrasings slightly
-- Don't copy-paste patterns blindly
-- Recalibrate on repetitive tasks
+External content belongs in `findings.md`, not `tasks.md` or `decisions.md`. The hook re-injects `## Goal` and `## Current Phase` from `tasks.md`, so those sections must stay trusted and concise.
 
----
+## File Lifecycle
 
-## The 3 Context Engineering Strategies
+| Event | Action |
+|-------|--------|
+| Start task | Create `tasks.md`, `findings.md`, `decisions.md` |
+| Resume task | Read all 3 files |
+| Start phase | Update `tasks.md` current phase and status |
+| Discover information | Update `findings.md` |
+| User decides/changes direction | Read then update `decisions.md` |
+| Complete phase | Update `tasks.md` status, progress, verification |
+| File exceeds about 250 lines | Compact with judgment before continuing |
 
-Based on Lance Martin's analysis of Manus architecture.
+## Compaction Guidance
 
-### Strategy 1: Context Reduction
+Target about 250 lines per active planning file. This is a token-budget guideline, not a hard data-retention rule.
 
-**Compaction:**
-```
-Tool calls have TWO representations:
-├── FULL: Raw tool content (stored in filesystem)
-└── COMPACT: Reference/file path only
+Prefer:
 
-RULES:
-- Apply compaction to STALE (older) tool results
-- Keep RECENT results FULL (to guide next decision)
-```
+- `tasks.md`: compact completed phase details into short progress notes.
+- `findings.md`: summarize old findings and keep source references.
+- `decisions.md`: keep active decisions explicit; compress superseded history.
 
-**Summarization:**
-- Applied when compaction reaches diminishing returns
-- Generated using full tool results
-- Creates standardized summary objects
+Avoid:
 
-### Strategy 2: Context Isolation (Multi-Agent)
+- Blind truncation.
+- Removing unresolved blockers.
+- Removing active user decisions.
+- Removing exact verification commands.
 
-**Architecture:**
-```
-┌─────────────────────────────────┐
-│         PLANNER AGENT           │
-│  └─ Assigns tasks to sub-agents │
-├─────────────────────────────────┤
-│       KNOWLEDGE MANAGER         │
-│  └─ Reviews conversations       │
-│  └─ Determines filesystem store │
-├─────────────────────────────────┤
-│      EXECUTOR SUB-AGENTS        │
-│  └─ Perform assigned tasks      │
-│  └─ Have own context windows    │
-└─────────────────────────────────┘
-```
+## Reboot Test
 
-**Key Insight:** Manus originally used `todo.md` for task planning but found ~33% of actions were spent updating it. Shifted to dedicated planner agent calling executor sub-agents.
+If you can answer all 5, your context is solid:
 
-### Strategy 3: Context Offloading
-
-**Tool Design:**
-- Use <20 atomic functions total
-- Store full results in filesystem, not context
-- Use `glob` and `grep` for searching
-- Progressive disclosure: load information only as needed
-
----
-
-## The Agent Loop
-
-Manus operates in a continuous 7-step loop:
-
-```
-┌─────────────────────────────────────────┐
-│  1. ANALYZE CONTEXT                      │
-│     - Understand user intent             │
-│     - Assess current state               │
-│     - Review recent observations         │
-├─────────────────────────────────────────┤
-│  2. THINK                                │
-│     - Should I update the plan?          │
-│     - What's the next logical action?    │
-│     - Are there blockers?                │
-├─────────────────────────────────────────┤
-│  3. SELECT TOOL                          │
-│     - Choose ONE tool                    │
-│     - Ensure parameters available        │
-├─────────────────────────────────────────┤
-│  4. EXECUTE ACTION                       │
-│     - Tool runs in sandbox               │
-├─────────────────────────────────────────┤
-│  5. RECEIVE OBSERVATION                  │
-│     - Result appended to context         │
-├─────────────────────────────────────────┤
-│  6. ITERATE                              │
-│     - Return to step 1                   │
-│     - Continue until complete            │
-├─────────────────────────────────────────┤
-│  7. DELIVER OUTCOME                      │
-│     - Send results to user               │
-│     - Attach all relevant files          │
-└─────────────────────────────────────────┘
-```
-
----
-
-## File Types Manus Creates
-
-| File | Purpose | When Created | When Updated |
-|------|---------|--------------|--------------|
-| `task_plan.md` | Phase tracking, progress | Task start | After completing phases |
-| `findings.md` | Discoveries, decisions | After ANY discovery | After viewing images/PDFs |
-| `progress.md` | Session log, what's done | At breakpoints | Throughout session |
-| Code files | Implementation | Before execution | After errors |
-
----
-
-## Critical Constraints
-
-- **Single-Action Execution:** ONE tool call per turn. No parallel execution.
-- **Plan is Required:** Agent must ALWAYS know: goal, current phase, remaining phases
-- **Files are Memory:** Context = volatile. Filesystem = persistent.
-- **Never Repeat Failures:** If action failed, next action MUST be different
-- **Communication is a Tool:** Message types: `info` (progress), `ask` (blocking), `result` (terminal)
-
----
-
-## Manus Statistics
-
-| Metric | Value |
-|--------|-------|
-| Average tool calls per task | ~50 |
-| Input-to-output token ratio | 100:1 |
-| Acquisition price | $2 billion |
-| Time to $100M revenue | 8 months |
-| Framework refactors since launch | 5 times |
-
----
-
-## Key Quotes
-
-> "Context window = RAM (volatile, limited). Filesystem = Disk (persistent, unlimited). Anything important gets written to disk."
-
-> "if action_failed: next_action != same_action. Track what you tried. Mutate the approach."
-
-> "Error recovery is one of the clearest signals of TRUE agentic behavior."
-
-> "KV-cache hit rate is the single most important metric for a production-stage AI agent."
-
-> "Leave the wrong turns in the context."
-
----
+- Where am I? `## Current Phase` in `tasks.md`
+- Where am I going? Remaining phases in `tasks.md`
+- What's the goal? `## Goal` in `tasks.md`
+- What have I learned? `findings.md`
+- What has the user decided? `decisions.md`
 
 ## Source
 
-Based on Manus's official context engineering documentation:
+Based on Manus context-engineering ideas:
 https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus

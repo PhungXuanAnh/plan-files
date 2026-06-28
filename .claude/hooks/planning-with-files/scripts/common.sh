@@ -233,3 +233,36 @@ check_non_phase_work() {
       END { flush() }
     ' "$_plan_file" 2>/dev/null
 }
+
+# ---------------------------------------------------------------------------
+# planning_file_budget_warning PLAN_DIR [LIMIT]
+# Checks the active planning files and prints one compact warning if any file
+# is over the line budget. This is intentionally advisory: hooks never mutate
+# or truncate planning files.
+# ---------------------------------------------------------------------------
+planning_file_budget_warning() {
+    local _plan_dir="${1:-}"
+    local _limit="${2:-250}"
+    local _items=""
+    local _name _path _lines
+
+    [ -z "$_plan_dir" ] && return 0
+
+    for _name in tasks.md findings.md decisions.md; do
+        _path="$_plan_dir/$_name"
+        [ -f "$_path" ] || continue
+        _lines=$(wc -l < "$_path" 2>/dev/null | tr -d ' ' || echo 0)
+        _lines=${_lines:-0}
+        if [ "$_lines" -gt "$_limit" ]; then
+            if [ -n "$_items" ]; then
+                _items="${_items}, ${_name}=${_lines}"
+            else
+                _items="${_name}=${_lines}"
+            fi
+        fi
+    done
+
+    if [ -n "$_items" ]; then
+        printf '[planning-with-files] COMPACTION NEEDED: %s line(s) over the %s-line target. Compact before continuing: preserve current goal/phase, incomplete tasks, blockers, verification commands, recent errors, active user decisions, and source references. Summarize stale completed work and superseded history. Never raw-truncate.' "$_items" "$_limit"
+    fi
+}

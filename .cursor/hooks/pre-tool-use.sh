@@ -1,9 +1,9 @@
 #!/bin/bash
 # planning-with-files: Pre-tool-use hook for Cursor
-# Reads the first 30 lines of task_plan.md to keep goals in context.
+# Reads the first 30 lines of tasks.md to keep goals in context.
 # Returns {"decision": "allow"} — this hook never blocks tools.
 
-PLAN_FILE="task_plan.md"
+PLAN_FILE="tasks.md"
 
 if [ -f "$PLAN_FILE" ]; then
     # Log plan context to stderr (visible in Cursor's hook logs)

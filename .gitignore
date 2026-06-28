@@ -10,9 +10,9 @@ Thumbs.db
 .idea/
 
 # Development planning files (meta: I used this skill to build this skill!)
-task_plan.md
+tasks.md
 findings.md
-progress.md
+decisions.md
 research_notes.md
 notes.md
 
