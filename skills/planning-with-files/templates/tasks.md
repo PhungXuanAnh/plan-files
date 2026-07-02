@@ -1,5 +1,5 @@
 # Tasks: [Brief Description]
-<!-- Keep this active file near 250 lines. Compact by summarizing old completed work; never raw-truncate. -->
+<!-- Keep this active file near 150 lines. Compact ## Progress Notes hardest, then completed phases (keep phase headings + Status lines verbatim); never raw-truncate. -->
 
 ## Goal
 <!-- One or two short sentences. The hook re-injects this, so keep it concise. -->
@@ -93,7 +93,7 @@ Use `deferred (reason)` only for explicit blockers or user-requested follow-up.
 - [path]: [why]
 
 ## Compaction Notes
-<!-- If this file grows beyond about 250 lines, compact before continuing. -->
+<!-- If this file grows beyond about 150 lines, compact before continuing. -->
 - Preserve: goal, current phase, incomplete tasks, blockers, verification commands, recent errors, and active user decisions referenced from `decisions.md`.
-- Summarize: completed work, old progress notes, and resolved errors.
+- Compact in order: (1) `## Progress Notes` hardest — keep only active/recent entries; (2) completed phases → one-line outcome, keeping each `### Phase N:` heading and `- **Status:**` line verbatim; (3) resolved errors → short summaries.
 - Never raw-truncate.

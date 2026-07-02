@@ -1,5 +1,5 @@
 # Decisions
-<!-- Keep this active file near 250 lines. Read before every edit. Compact by summarizing superseded history; never raw-truncate. -->
+<!-- Keep this active file near 150 lines. Read before every edit. Compact by summarizing superseded history; never raw-truncate. -->
 
 ## Active Decisions
 <!-- Current user-confirmed decisions that affect implementation. -->

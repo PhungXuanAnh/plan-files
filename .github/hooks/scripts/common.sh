@@ -235,34 +235,40 @@ check_non_phase_work() {
 }
 
 # ---------------------------------------------------------------------------
-# planning_file_budget_warning PLAN_DIR [LIMIT]
+# planning_file_budget_warning PLAN_DIR [DEFAULT_LIMIT]
 # Checks the active planning files and prints one compact warning if any file
-# is over the line budget. This is intentionally advisory: hooks never mutate
-# or truncate planning files.
+# is over its per-file line budget. tasks.md is the hook-parsed dashboard and
+# decisions.md should stay lean, so both target 150 lines; findings.md holds
+# research/detail and targets 250. DEFAULT_LIMIT (fallback 150) applies to any
+# file without a specific budget. Advisory only: hooks never mutate or truncate.
 # ---------------------------------------------------------------------------
 planning_file_budget_warning() {
     local _plan_dir="${1:-}"
-    local _limit="${2:-250}"
+    local _default_limit="${2:-150}"
     local _items=""
-    local _name _path _lines
+    local _name _path _lines _limit
 
     [ -z "$_plan_dir" ] && return 0
 
     for _name in tasks.md findings.md decisions.md; do
         _path="$_plan_dir/$_name"
         [ -f "$_path" ] || continue
+        case "$_name" in
+            findings.md) _limit=250 ;;
+            *)           _limit="$_default_limit" ;;
+        esac
         _lines=$(wc -l < "$_path" 2>/dev/null | tr -d ' ' || echo 0)
         _lines=${_lines:-0}
         if [ "$_lines" -gt "$_limit" ]; then
             if [ -n "$_items" ]; then
-                _items="${_items}, ${_name}=${_lines}"
+                _items="${_items}, ${_name}=${_lines}/${_limit}"
             else
-                _items="${_name}=${_lines}"
+                _items="${_name}=${_lines}/${_limit}"
             fi
         fi
     done
 
     if [ -n "$_items" ]; then
-        printf '[planning-with-files] COMPACTION NEEDED: %s line(s) over the %s-line target. Compact before continuing: preserve current goal/phase, incomplete tasks, blockers, verification commands, recent errors, active user decisions, and source references. Summarize stale completed work and superseded history. Never raw-truncate.' "$_items" "$_limit"
+        printf '[planning-with-files] COMPACTION NEEDED (file=lines/target): %s. Compact before continuing: preserve current goal/phase, incomplete tasks, blockers, verification commands, recent errors, active user decisions, and source references. Compact the ## Progress Notes section hardest, then completed phases (keep each "### Phase N:" heading and its "- **Status:**" line verbatim). Summarize stale completed work and superseded history. Never raw-truncate.' "$_items"
     fi
 }

@@ -275,7 +275,7 @@ ${PHASE_BODY}"
 fi
 
 NUDGE="[planning-with-files] Update tasks.md with what you just did. If a phase is now complete, update ${PLAN_FILE} status. If you no longer see the planning-with-files SKILL.md rules in your context (post-/compact, or you have forgotten them), reload the planning-with-files skill by yourself before continuing."
-COMPACTION_WARN=$(planning_file_budget_warning "$PLAN_DIR" 250)
+COMPACTION_WARN=$(planning_file_budget_warning "$PLAN_DIR")
 if [ -n "$COMPACTION_WARN" ]; then
     NUDGE="${NUDGE}
 ${COMPACTION_WARN}"

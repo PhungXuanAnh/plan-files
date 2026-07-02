@@ -3,7 +3,7 @@ name: planning-with-files
 description: Implements Manus-style file-based planning to organize and track progress on complex tasks. Uses a `.plan-with-files` pointer at the project root and per-task folders under `tmp/plan-with-files/<task-id>/` containing tasks.md, findings.md, and decisions.md. Use when asked to plan out, break down, or organize a multi-step project, research task, or any work requiring >5 tool calls.
 user-invocable: true
 metadata:
-  version: "2.36.0"
+  version: "2.37.0"
 ---
 
 # Planning with Files
@@ -113,15 +113,23 @@ Phase 2
 
 ## Compaction contract
 
-Planning files should stay small enough to re-read cheaply. Target **about 250 lines per active file**.
+Planning files should stay small enough to re-read cheaply. Per-file line budgets:
 
-Hooks should notify the agent when `tasks.md`, `findings.md`, or `decisions.md` exceeds the line budget. Hooks should NOT auto-truncate.
+| File | Budget | Why |
+|------|--------|-----|
+| `tasks.md` | **150** | Hook-parsed dashboard; Goal + Current Phase are re-injected on every tool call. Keep it a lean live status, not an archive. |
+| `findings.md` | **250** | Holds research/detail and untrusted external content; needs room. |
+| `decisions.md` | **150** | Decision ledger; keep active decisions crisp, compress superseded history. |
 
-When notified, the agent must compact before continuing:
-- Preserve current goal, current phase, incomplete tasks, blockers, verification commands, recent errors, and active user decisions.
-- Summarize completed work, old progress notes, resolved errors, and stale findings.
-- Keep links, file paths, commands, and source references needed to restore detail.
-- Never raw-truncate a planning file.
+Hooks notify the agent when a file exceeds its budget (the message reports `file=lines/target`). Hooks NEVER auto-truncate.
+
+When notified, compact in this order — stop once the file is back under budget:
+
+1. **`## Progress Notes` first, and hardest.** It is a running journal; once a phase is `complete`, its blow-by-blow notes are redundant with that phase's Status line. Keep only entries for the active/most-recent phase; fold older entries into one or two summary lines. Move any durable command/hash/path into `## Verification`, `## Files Touched`, or `findings.md` before dropping the entry.
+2. **Completed phases next.** Collapse each `complete` phase's checklist items and inline "DONE …" narration to a single outcome line. **Preserve verbatim** the `### Phase N: Title` heading and its `- **Status:** complete` line — the Stop hook parses them, so paraphrasing breaks the FORMAT CONTRACT. Keep (or move to `## Verification`) the `Done when` verification references.
+3. **Everything else**: resolved errors → short summaries; stale `## Files Touched` entries → current-and-relevant only.
+
+Never compact away: current goal, `## Current Phase`, incomplete/in-progress phases, blockers, unresolved Key Questions, verification commands, and active user decisions. Keep links, file paths, and source references needed to restore detail. Never raw-truncate a planning file.
 
 ## Critical Rules
 

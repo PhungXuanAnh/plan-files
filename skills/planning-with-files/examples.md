@@ -132,7 +132,7 @@ Phase 2
 
 ## Example 4: Compaction
 
-When a hook reports a planning file is over about 250 lines, compact before continuing.
+When a hook reports a planning file is over its budget (`tasks.md`/`decisions.md` 150, `findings.md` 250), compact before continuing — starting with `## Progress Notes`, then completed phases.
 
 ### Before
 ```markdown

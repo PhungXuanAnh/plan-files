@@ -58,15 +58,15 @@ External content belongs in `findings.md`, not `tasks.md` or `decisions.md`. The
 | Discover information | Update `findings.md` |
 | User decides/changes direction | Read then update `decisions.md` |
 | Complete phase | Update `tasks.md` status, progress, verification |
-| File exceeds about 250 lines | Compact with judgment before continuing |
+| File exceeds its budget (`tasks.md`/`decisions.md` 150, `findings.md` 250) | Compact with judgment before continuing |
 
 ## Compaction Guidance
 
-Target about 250 lines per active planning file. This is a token-budget guideline, not a hard data-retention rule.
+Per-file line budgets: `tasks.md` 150, `findings.md` 250, `decisions.md` 150. These are token-budget guidelines, not hard data-retention rules.
 
 Prefer:
 
-- `tasks.md`: compact completed phase details into short progress notes.
+- `tasks.md`: compact `## Progress Notes` first and hardest (keep only active/recent entries), then collapse completed phases to a one-line outcome — but keep each `### Phase N:` heading and its `- **Status:**` line verbatim.
 - `findings.md`: summarize old findings and keep source references.
 - `decisions.md`: keep active decisions explicit; compress superseded history.
 
