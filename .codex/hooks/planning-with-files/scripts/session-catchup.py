@@ -19,7 +19,7 @@ import os
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
-PLANNING_FILES = ['tasks.md', 'findings.md', 'decisions.md']
+PLANNING_FILES = ['tasks.md', 'findings.md', 'decisions.md', 'history.md', 'handoff.md']
 
 
 def detect_ide() -> str:
@@ -251,7 +251,7 @@ def main():
         print("\n[planning-with-files] OpenCode session catchup is not yet fully supported")
         print("OpenCode uses a different session storage format (.json) than Claude Code (.jsonl)")
         print("Session catchup requires parsing OpenCode's message storage structure.")
-        print("\nWorkaround: Manually read tasks.md, decisions.md, and findings.md to catch up.")
+        print("\nWorkaround: Read tasks.md, decisions.md, current findings, and a fresh handoff.md if present.")
         return
 
     # Claude Code path
@@ -343,7 +343,7 @@ def main():
 
     print("\n--- RECOMMENDED ---")
     print("1. Run: git diff --stat")
-    print("2. Read: tasks.md, decisions.md, findings.md")
+    print("2. Read: tasks.md, decisions.md, current findings, and fresh handoff.md if present")
     print("3. Update planning files based on above context")
     print("4. Continue with task")
 

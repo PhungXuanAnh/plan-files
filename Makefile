@@ -1,4 +1,4 @@
-.PHONY: help check-installs injected-content \
+.PHONY: help test check-installs injected-content \
         install-skill-copilot install-skill-claude-code install-skill-codex install-skill-kiro install-skills \
         install-hook-copilot install-hook-claude-code install-hook-codex install-hook-kiro install-hooks \
         install-copilot install-claude-code install-codex install-kiro install-global install \
@@ -6,6 +6,9 @@
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+test: ## Run planning contract tests
+	@bash tests/test-planning-contract.sh
 
 # ---------------------------------------------------------------------------
 # Global installation. Everything is linked back to this repo so local edits are

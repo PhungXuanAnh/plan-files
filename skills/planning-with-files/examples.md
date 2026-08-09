@@ -1,164 +1,113 @@
-# Examples: Planning with Files in Action
+# Compact Examples
 
-## Example 1: Research Task
+## Active task
 
-**User request:** "Research the benefits of morning exercise and write a summary"
-
-### Loop 1: Create planning files
-```bash
-Write tasks.md
-Write findings.md
-Write decisions.md
-```
-
-```markdown
-# Tasks: Morning Exercise Benefits Research
-
-## Goal
-Create a concise research summary on the benefits of morning exercise.
-
-## Current Phase
-Phase 1
-
-## Phases
-
-### Phase 1: Search and gather sources
-- [ ] Search reputable sources
-- [ ] Record source notes in findings.md
-- **Status:** in_progress
-
-### Phase 2: Synthesize findings
-- [ ] Compare physical and mental health benefits
-- [ ] Write summary
-- **Status:** pending
-```
-
-### Loop 2: Research
-```bash
-Read tasks.md
-Read decisions.md
-WebSearch "morning exercise benefits"
-Write findings.md              # external content goes here only
-Edit tasks.md                  # mark Phase 1 complete when done
-```
-
-### Loop 3: Synthesize
-```bash
-Read tasks.md
-Read decisions.md
-Read findings.md
-Write morning_exercise_summary.md
-Edit tasks.md                  # update progress and phase status
-```
-
----
-
-## Example 2: Decision Change
-
-**User request:** "Use SQLite." Later: "Actually use JSON; this should stay portable."
-
-### decisions.md
-```markdown
-# Decisions
-
-## Active Decisions
-| ID | Decision | Rationale | Date |
-|----|----------|-----------|------|
-| D2 | Use JSON file storage | User changed direction; portability matters more than query support | 2026-06-28 |
-
-## Superseded Decisions
-| ID | Old Decision | Replaced By | Reason |
-|----|--------------|-------------|--------|
-| D1 | Use SQLite storage | D2 | User decided portability is more important |
-
-## Open Decision Questions
-- [ ] 
-```
-
-Before editing `decisions.md`, read it first. Do not silently delete D1; keeping the superseded row prevents confusion later.
-
----
-
-## Example 3: Bug Fix Task
-
-**User request:** "Fix the login bug in the authentication module"
-
-### tasks.md
 ```markdown
 # Tasks: Fix Login Bug
 
 ## Goal
-Identify and fix the bug preventing successful login.
+Fix the failed login flow without changing unrelated authentication behavior.
 
 ## Current Phase
 Phase 2
 
+## Workflow Profile
+**Profile:** A
+
+## Resume Checkpoint
+- **Next action:** Patch the missing `await` in `src/auth/login.ts`.
+- **Blocker:** none
+- **Details:** none
+
 ## Phases
 
-### Phase 1: Locate Failure
-- [x] Reproduce login error
-- [x] Locate authentication code
-- **Status:** complete
+### Phase 1: Reproduce and Locate [complete]
 
 ### Phase 2: Implement Fix
-- [ ] Fix root cause
-- [ ] Run auth tests
+- [ ] Await the user lookup
+- [ ] Run `pytest tests/auth/test_login.py`
 - **Status:** in_progress
 
-## Progress Notes
-- Reproduced `TypeError: Cannot read property 'token' of undefined`.
-- Root cause appears to be an unawaited user lookup.
+**Done when:** `pytest tests/auth/test_login.py` passes.
 
-## Errors Encountered
-| Error | Attempt | Resolution |
-|-------|---------|------------|
-| Login TypeError | 1 | Inspect async user lookup before retrying |
+### Phase 3: Verify Regression
+- [ ] Run `pytest tests/auth`
+- **Status:** pending
+
+**Done when:** `pytest tests/auth` passes.
 ```
 
-### findings.md
+Only current/incomplete work stays detailed. The old phase is one line because its evidence has moved to history.
+
+## Archive during compaction
+
+Before:
+
 ```markdown
-# Findings
-
-## Research Findings
-- Auth handler is in `src/auth/login.ts`.
-- `validateToken()` receives undefined user object when lookup is not awaited.
-
-## Resources
-- `src/auth/login.ts`
-- `tests/auth/login.test.ts`
+## Verification
+- Phase 1 reproduction output ...
+- Phase 1 focused test output ...
+- Phase 1 rerun output ...
+- Phase 2 required check: `pytest tests/auth/test_login.py`
 ```
 
----
+After `tasks.md`:
 
-## Example 4: Compaction
-
-When a hook reports a planning file is over its budget (`tasks.md`/`decisions.md` 150, `findings.md` 250), compact before continuing — starting with `## Progress Notes`, then completed phases.
-
-### Before
 ```markdown
-## Progress Notes
-- 60 old entries for completed phases...
-- Current blocker: staging auth callback fails with 403.
+## Verification
+- `pytest tests/auth/test_login.py`: required for current phase.
+- History: `history.md#completed-phases`
 ```
 
-### After
+After `history.md`:
+
 ```markdown
-## Progress Notes
-- Completed setup, implementation, and local verification.
-- Current blocker: staging auth callback fails with 403.
+## Completed Phases
+- Phase 1 — reproduced missing `await`; evidence: `tests/auth/reproduction.md`.
+
+## Verification History
+- Phase 1 — `pytest tests/auth/test_reproduction.py` passed.
 ```
 
-Compaction preserves current work, blockers, verification commands, recent errors, active decisions, and source references. It does not raw-truncate.
+Recurring failures belong in `findings.md` as symptom/root cause/workaround; resolved audit detail belongs in `history.md`.
 
----
+## Optional handoff
 
-## Read-Before-Decide Pattern
+Create this only when a short Resume Checkpoint cannot capture volatile state:
 
-Always refresh the active task and user decisions before important choices:
+```markdown
+# Handoff
 
-```bash
-Read tasks.md
-Read decisions.md
+Updated: 2026-08-09 18:30 Asia/Ho_Chi_Minh
+
+## Resume Checkpoint
+- **Current phase:** Phase 2
+- **Why paused:** waiting for the test database
+- **Exact next action:** run `pytest tests/auth/test_login.py`
+- **Expected result:** login regression passes
+- **Blocker or user input:** test database availability
+
+## Working State
+- **Branch / revision:** `fix-login` / `abc1234`
+- **Modified or untracked files:** `src/auth/login.ts`
+- **Running processes or volatile state:** none
+- **State captured at:** 2026-08-09 18:30; reverify before acting
 ```
 
-Use `findings.md` for detailed discoveries and external content. Use `decisions.md` only for durable user choices.
+Overwrite the file at the next pause. Ignore it when a required planning file is newer.
+
+## Changed user decision
+
+```markdown
+## Active Decisions
+| ID | Decision | Rationale | Date |
+|----|----------|-----------|------|
+| D2 | Use JSON storage | User prioritized portability | 2026-08-09 |
+
+## Superseded Decisions
+| ID | Old Decision | Replaced By | Reason |
+|----|--------------|-------------|--------|
+| D1 | Use SQLite | D2 | User changed the portability requirement |
+```
+
+Read the ledger before editing it; never silently delete the earlier choice.

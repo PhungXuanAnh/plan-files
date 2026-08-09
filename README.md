@@ -15,14 +15,18 @@ For each complex task, the agent uses a pointer plus one task directory:
     └── <task-id>/
         ├── tasks.md
         ├── findings.md
-        └── decisions.md
+        ├── decisions.md
+        ├── history.md       # optional cold archive
+        └── handoff.md       # optional latest resume snapshot
 ```
 
 - `tasks.md` tracks goal, current phase, phases, concise progress, errors, and verification.
 - `findings.md` stores research, discoveries, and untrusted external content.
 - `decisions.md` stores user decisions, changed direction, superseded choices, and open decision questions.
+- `history.md` stores trusted completed-work summaries and is read only when needed.
+- `handoff.md` is overwritten only for an intentional pause whose volatile state does not fit in `tasks.md`.
 
-There is no `progress.md`. Progress notes and test results belong in `tasks.md`.
+There is no `progress.md`. Keep current progress and verification in `tasks.md`; archive completed detail in `history.md` when needed.
 
 ## Repository Layout
 
@@ -36,7 +40,9 @@ planning-with-files/
 │       └── templates/
 │           ├── tasks.md
 │           ├── findings.md
-│           └── decisions.md
+│           ├── decisions.md
+│           ├── history.md
+│           └── handoff.md
 ├── .codex/skills/planning-with-files      -> ../../skills/planning-with-files
 ├── .cursor/skills/planning-with-files     -> ../../skills/planning-with-files
 ├── .gemini/skills/planning-with-files     -> ../../skills/planning-with-files
@@ -59,10 +65,10 @@ planning-with-files/
 Ask the agent to use the `planning-with-files` skill for any multi-step task. The agent should:
 
 1. Read `.plan-with-files` if it exists.
-2. Read `tasks.md`, `decisions.md`, and `findings.md` from the active task folder.
+2. Read `tasks.md`, `decisions.md`, and the current summary in `findings.md`; read a fresh `handoff.md` when present.
 3. Create a new task folder from the templates when starting a new task.
 4. Re-read `tasks.md` and `decisions.md` before major decisions.
-5. Compact planning files when they grow past about 250 lines; never raw-truncate them.
+5. Compact when a file exceeds its line or byte budget; move cold completed history out of `tasks.md` and never raw-truncate.
 
 ## Install Shape
 

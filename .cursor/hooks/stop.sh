@@ -1,63 +1,46 @@
 #!/bin/bash
-# planning-with-files: Stop hook for Cursor
-# Checks if all phases in tasks.md are complete.
-# Returns followup_message to auto-continue if phases are incomplete.
-# Always exits 0 — uses JSON stdout for control.
+# Cursor stop gate for the pointer-selected task.
 
-PLAN_FILE="tasks.md"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# shellcheck source=planning-common.sh
+source "$SCRIPT_DIR/planning-common.sh"
+[ -f "$PLAN_FILE" ] || exit 0
 
-if [ ! -f "$PLAN_FILE" ]; then
-    # No plan file = no planning session, allow stop
+follow_up() {
+    printf '{"followup_message":%s}\n' "$(cursor_json_string "$1")"
+}
+
+count_phases "$PLAN_FILE"
+FORMAT_ISSUE=$(check_task_plan_format "$PLAN_FILE")
+if [ -n "$FORMAT_ISSUE" ]; then
+    follow_up "[planning-with-files] $(task_plan_format_message "$FORMAT_ISSUE" "$PLAN_FILE" "$TOTAL") Fix it before stopping."
     exit 0
 fi
 
-# Phase counting (scoped to `### Phase` blocks; at most 1 status per phase).
-# Avoids false `COMPLETE > TOTAL` when status-looking lines appear OUTSIDE
-# any phase section (e.g. summary blocks). HTML comments are ignored.
-read TOTAL COMPLETE IN_PROGRESS PENDING <<EOF
-$(awk '
-  function flush() {
-    if (in_phase) {
-      if      (status == "complete")    complete++
-      else if (status == "in_progress") in_progress++
-      else if (status == "pending")     pending++
-    }
-  }
-  BEGIN { total=0; complete=0; in_progress=0; pending=0; in_phase=0; status=""; in_comment=0 }
-  /<!--/ { in_comment=1 }
-  in_comment { if (/-->/) in_comment=0; next }
-  /^### Phase/ {
-    flush(); in_phase=1; total++; status=""
-    if      ($0 ~ /\[complete\]/)    status="complete"
-    else if ($0 ~ /\[in_progress\]/) status="in_progress"
-    else if ($0 ~ /\[pending\]/)     status="pending"
-    next
-  }
-  /^### / || /^## / { flush(); in_phase=0; status=""; next }
-  !in_phase { next }
-  status != "" { next }
-  /\*\*Status:\*\*[[:space:]]*complete([^a-zA-Z_]|$)/    { status="complete";    next }
-  /\*\*Status:\*\*[[:space:]]*in_progress([^a-zA-Z_]|$)/ { status="in_progress"; next }
-  /\*\*Status:\*\*[[:space:]]*pending([^a-zA-Z_]|$)/     { status="pending";     next }
-  /\[complete\]/    { status="complete";    next }
-  /\[in_progress\]/ { status="in_progress"; next }
-  /\[pending\]/     { status="pending";     next }
-  END { flush(); printf "%d %d %d %d", total, complete, in_progress, pending }
-' "$PLAN_FILE" 2>/dev/null)
-EOF
-: "${TOTAL:=0}" "${COMPLETE:=0}" "${IN_PROGRESS:=0}" "${PENDING:=0}"
-
-if [ "$TOTAL" -eq 0 ]; then
-    # No `### Phase` headings -> nothing to gate on. Allow stop.
+NON_PHASE_HEADING=$(check_non_phase_work "$PLAN_FILE")
+if [ -n "$NON_PHASE_HEADING" ]; then
+    follow_up "[planning-with-files] Move unchecked work under '$NON_PHASE_HEADING' into a valid '### Phase N: Title' block before stopping."
     exit 0
 fi
 
-if [ "$COMPLETE" -ge "$TOTAL" ]; then
-    # All phases complete — provide re-entry guidance
-    echo "{\"followup_message\": \"[planning-with-files] ALL PHASES COMPLETE ($COMPLETE/$TOTAL). If the user has additional work, add new phases to tasks.md before starting.\"}"
-    exit 0
-else
-    # Phases incomplete — auto-continue via followup_message
-    echo "{\"followup_message\": \"[planning-with-files] Task incomplete ($COMPLETE/$TOTAL phases done). Update tasks.md, then read tasks.md and decisions.md before continuing.\"}"
+while IFS=$'\t' read -r NUM STATUS UNCHECKED FIRST; do
+    if [ "$STATUS" = "complete" ] && [ "${UNCHECKED:-0}" -gt 0 ]; then
+        follow_up "[planning-with-files] Phase $NUM is complete but still has $UNCHECKED unchecked item(s). Finish them or reopen/split the phase."
+        exit 0
+    fi
+done <<< "$(phase_summary "$PLAN_FILE")"
+
+SETTLED=$((COMPLETE + DEFERRED))
+[ "$SETTLED" -ge "$TOTAL" ] && exit 0
+[ "$COMPLETE" -eq 0 ] && [ "$IN_PROGRESS" -eq 0 ] && [ "$DEFERRED" -eq 0 ] && exit 0
+
+CURRENT_BODY=$(current_phase_pointer "$PLAN_FILE")
+CURRENT_NUM=${CURRENT_BODY#Phase }
+CURRENT_STATUS=$(phase_summary "$PLAN_FILE" | awk -F '\t' -v num="$CURRENT_NUM" '$1 == num { print $2; exit }')
+if [ "$CURRENT_STATUS" = "complete" ] || [ "$CURRENT_STATUS" = "deferred" ]; then
+    follow_up "[planning-with-files] STALE Current Phase in $PLAN_FILE: $CURRENT_BODY is $CURRENT_STATUS while work remains. Point it at the next incomplete phase and continue."
     exit 0
 fi
+
+follow_up "[planning-with-files] Task incomplete ($SETTLED/$TOTAL phases settled). Update the Resume Checkpoint in $PLAN_FILE and continue. If the user explicitly requested a pause or an external blocker prevents progress, refresh optional handoff.md after the required planning files and defer only with an allowed explicit reason."
+exit 0

@@ -1,35 +1,13 @@
 ---
 name: planning-with-files
-description: Start the "Planning with Files" pointer workflow (tasks.md / findings.md / decisions.md)
+description: Start or resume the task-scoped Planning with Files workflow
 invokable: true
 ---
 
-You will use the "Planning with Files" pattern for the work ahead: persist tasks, findings, and decisions into task-scoped Markdown files to prevent context drift and forgotten goals.
+Use the canonical `planning-with-files` skill for this task.
 
-## Goal
-
-- Ensure `.plan-with-files` points at an active task id.
-- Ensure these files exist under `tmp/plan-with-files/<task-id>/`: tasks.md, findings.md, decisions.md
-- All key decisions, research conclusions, errors, and fix paths must be written to files
-- Update tasks.md status after completing each phase
-
-## Steps
-
-1. Check `.plan-with-files` at the project root.
-2. If there is no active task, create `tmp/plan-with-files/<task-id>/` and write the task id to `.plan-with-files`.
-3. If the planning files do not exist, create them from the skill templates manually.
-4. Read tasks.md and fill in:
-   - Goal (one sentence)
-   - Phases (3-7 phases, each with Status: pending / in_progress / complete)
-   - Key Questions (critical questions that need answers)
-5. While executing the task, follow these rules:
-   - After every 2 view/search/browse operations, immediately write findings to findings.md
-   - Before every major decision, re-read tasks.md and decisions.md to refresh goals and user choices
-   - Log every error in tasks.md under Errors Encountered, including attempt count and resolution
-6. Write user decisions and changed direction to decisions.md; keep superseded decisions compact.
-7. Compact any active planning file that grows past about 250 lines; do not truncate.
-
-## Output Requirements
-
-- Prioritize referencing the latest content from these files (not chat memory)
-- Before finishing, ensure all phases are marked complete (or clearly explain what remains and why)
+1. Resolve `.plan-with-files`; do not replace a missing, invalid, or mismatched pointer without user confirmation.
+2. Create the three required task files from the skill templates when starting a task.
+3. Restore trusted hot state and read optional handoff/history only under the skill's freshness and on-demand rules.
+4. Follow the exact tasks format, phase, verification, error, budget, archive, security, and Stop contracts in `SKILL.md`.
+5. Keep the Resume Checkpoint current and update planning state after meaningful progress.

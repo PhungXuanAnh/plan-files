@@ -111,11 +111,7 @@ count_phases "$PLAN_FILE"
 log "phases: total=$TOTAL complete=$COMPLETE in_progress=$IN_PROGRESS pending=$PENDING deferred=$DEFERRED"
 
 # --- Remaining-in-current-phase snippet (count + first unchecked) ----------
-PHASE_RAW=$(awk '
-  /^## Current Phase[[:space:]]*$/ { capture=1; next }
-  /^## / { capture=0 }
-  capture { print }
-' "$PLAN_FILE" 2>/dev/null | awk 'BEGIN{c=0} /<!--/{c=1} c==0{print} /-->/{c=0}' | sed -e '/./,$!d')
+PHASE_RAW=$(current_phase_pointer "$PLAN_FILE")
 PHASE_NUM=$(printf '%s' "$PHASE_RAW" | grep -oE 'Phase [0-9]+' | head -1 || true)
 REMAINING_LINE=""
 if [ -n "${PHASE_NUM:-}" ]; then
@@ -144,20 +140,18 @@ if [ -n "${PHASE_NUM:-}" ]; then
     log "remaining: count=${REMAINING_COUNT:-?}"
 fi
 
-# --- Format / Workflow-Profile checks (delegated to common.sh:check_task_plan_format)
-# Active only during the planning phase (COMPLETE=0). Each issue code maps to
-# a specific BLOCK message. Detection logic is shared; messages stay here.
+# --- Format / Workflow-Profile checks (delegated to common.sh) -------------
 FORMAT_ISSUE=$(check_task_plan_format "$PLAN_FILE")
 case "${FORMAT_ISSUE:-}" in
-    NO_PHASES)
-        REASON="[planning-with-files] FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: 0 phases detected. Required heading format is exactly '### Phase N: Title' (level-3, colon, no decorations, no backticks), and each phase MUST end with a line '- **Status:** pending|in_progress|complete'. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Fix the plan file headings/status markers, then continue."
-        log "decision: BLOCK (FORMAT CONTRACT — TOTAL=0)"
+    SECTION_LAYOUT_INVALID|CURRENT_PHASE_INVALID|PHASE_HEADING_INVALID|PHASE_STATUS_INVALID)
+        REASON="[planning-with-files] $(task_plan_format_message "$FORMAT_ISSUE" "$PLAN_FILE" "$TOTAL") Fix the plan structure, then continue."
+        log "decision: BLOCK ($FORMAT_ISSUE)"
         printf '%s\n' "$REASON"
         exit 0
         ;;
-    NO_STATUS_MARKERS)
-        REASON="[planning-with-files] FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: $TOTAL phase heading(s) found but ZERO recognized status markers. Each phase MUST end with a line: '- **Status:** pending' OR '- **Status:** in_progress' OR '- **Status:** complete' OR '- **Status:** deferred (reason)'. The inline form '[complete]'/'[in_progress]'/'[pending]' on the heading is also accepted. Backtick-wrapped or paraphrased markers (e.g. \`[done]\`, \`[not started]\`, (in progress)) are NOT recognized. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Fix the markers, then continue."
-        log "decision: BLOCK (FORMAT CONTRACT — no recognized status markers across $TOTAL phases)"
+    NO_PHASES)
+        REASON="[planning-with-files] FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: 0 phases detected. Required heading format is exactly '### Phase N: Title' (level-3, colon, no decorations, no backticks), and each phase MUST end with a line '- **Status:** pending|in_progress|complete'. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Fix the plan file headings/status markers, then continue."
+        log "decision: BLOCK (FORMAT CONTRACT — TOTAL=0)"
         printf '%s\n' "$REASON"
         exit 0
         ;;
@@ -285,7 +279,7 @@ fi
 SETTLED=$((COMPLETE + DEFERRED))
 DEFERRED_NOTE=""
 [ "$DEFERRED" -gt 0 ] && DEFERRED_NOTE=" (including $DEFERRED deferred)"
-REASON="[planning-with-files] Task incomplete ($SETTLED/$TOTAL phases settled${DEFERRED_NOTE}).${REMAINING_LINE} Update tasks.md, then read ${PLAN_FILE} and continue working on the remaining phases. If you genuinely cannot continue (blocked / waiting on user), either say so explicitly so the user can intervene, or mark the phase '- **Status:** deferred (explicit reason — blocker or user request)' if the deferral was explicitly agreed."
+REASON="[planning-with-files] Task incomplete ($SETTLED/$TOTAL phases settled${DEFERRED_NOTE}).${REMAINING_LINE} Update the Resume Checkpoint in ${PLAN_FILE}, then continue. If the user explicitly requested a pause or an external blocker prevents progress, refresh optional handoff.md after the required planning files and use '- **Status:** deferred (reason)' only when that rule permits it."
 log "decision: BLOCK ($SETTLED/$TOTAL phases settled, deferred=$DEFERRED)"
 printf '%s\n' "$REASON"
 exit 0

@@ -136,7 +136,7 @@ cap() {
 }
 
 GOAL_RAW=$(extract_section 'Goal')
-PHASE_RAW=$(extract_section 'Current Phase')
+PHASE_RAW=$(current_phase_pointer "$PLAN_FILE")
 log "extracted Goal: ${#GOAL_RAW} chars; Current Phase: ${#PHASE_RAW} chars"
 
 GOAL_BODY=$(cap "$GOAL_RAW" $MAX_GOAL_CHARS "Goal")
@@ -281,6 +281,12 @@ if [ -n "$COMPACTION_WARN" ]; then
 ${COMPACTION_WARN}"
     log "compaction warn injected (${#COMPACTION_WARN} chars)"
 fi
+HANDOFF_WARN=$(planning_handoff_warning "$PLAN_DIR")
+if [ -n "$HANDOFF_WARN" ]; then
+    NUDGE="${NUDGE}
+${HANDOFF_WARN}"
+    log "stale handoff warn injected (${#HANDOFF_WARN} chars)"
+fi
 # Only attach REMAINING_LINE on the call where the count actually changed,
 # OR on the first injection in a session (LAST_REMAINING_COUNT empty).
 if [ "$INJECT_FULL" = "true" ] && [ -n "$REMAINING_LINE" ]; then
@@ -288,30 +294,11 @@ if [ "$INJECT_FULL" = "true" ] && [ -n "$REMAINING_LINE" ]; then
 ${REMAINING_LINE}"
 fi
 
-# --- Format / Workflow-Profile reminder (delegated to common.sh:check_task_plan_format)
-# Injected only when INJECT_FULL=true (plan changed since last call) to avoid
-# spamming every tool call. Once any phase is complete (COMPLETE>0) the plan
-# is in active use and we stop reminding about format.
+# --- Format / Workflow-Profile reminder (delegated to common.sh)
+# Re-check when the plan changes; structural validation remains active throughout.
 if [ "$INJECT_FULL" = "true" ]; then
-    FORMAT_WARN=""
     FORMAT_ISSUE=$(check_task_plan_format "$PLAN_FILE")
-    case "${FORMAT_ISSUE:-}" in
-        NO_PHASES)
-            FORMAT_WARN="FORMAT REMINDER: no '### Phase N: Title' headings detected in ${PLAN_FILE}. Use exact level-3 headings: '### Phase 0: Title', '### Phase 1: Title', etc. Each phase must end with '- **Status:** pending'. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT."
-            ;;
-        NO_STATUS_MARKERS)
-            FORMAT_WARN="FORMAT REMINDER: $TOTAL phase heading(s) found in ${PLAN_FILE} but no recognized status markers. Each phase must end with exactly: '- **Status:** pending' (or in_progress / complete / 'deferred (reason)'). See skills/planning-with-files/SKILL.md > FORMAT CONTRACT."
-            ;;
-        DEFERRED_NO_REASON)
-            FORMAT_WARN="FORMAT REMINDER: a phase in ${PLAN_FILE} has '- **Status:** deferred' but is missing the REQUIRED '(reason)'. Replace with exactly '- **Status:** deferred (explicit reason)' — e.g. 'deferred (blocked by upstream API)' or 'deferred (user asked to defer to follow-up PR)'. Bare 'deferred' / 'deferred ()' will block stop."
-            ;;
-        PROFILE_MISSING)
-            FORMAT_WARN="REMINDER: '## Workflow Profile' section is missing from ${PLAN_FILE}. Add it between '## Current Phase' and '## Phases' with '**Profile:** A' (PR-Handoff), B (Staging-Verified), or C (Research/Document) filled in before starting implementation."
-            ;;
-        PROFILE_UNFILLED)
-            FORMAT_WARN="REMINDER: '## Workflow Profile' found in ${PLAN_FILE} but **Profile:** is still the placeholder. Replace '[A | B | C]' with A (PR-Handoff), B (Staging-Verified), or C (Research/Document) before starting implementation."
-            ;;
-    esac
+    FORMAT_WARN=$(task_plan_format_message "$FORMAT_ISSUE" "$PLAN_FILE" "$TOTAL")
     if [ -n "$FORMAT_WARN" ]; then
         NUDGE="${NUDGE}
 [planning-with-files] ${FORMAT_WARN}"

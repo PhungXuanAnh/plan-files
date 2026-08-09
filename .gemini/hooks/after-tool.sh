@@ -1,16 +1,21 @@
 #!/bin/bash
-# planning-with-files: AfterTool hook for Gemini CLI
-# Reminds the agent to update tasks.md after file writes.
-# Reads stdin JSON, outputs JSON to stdout.
+# Remind Gemini to maintain the pointer-selected task after writes.
 
-INPUT=$(cat)
+cat >/dev/null
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# shellcheck source=planning-common.sh
+source "$SCRIPT_DIR/planning-common.sh"
+[ -f "$PLAN_FILE" ] || { echo '{}'; exit 0; }
 
-PLAN_FILE="tasks.md"
-
-if [ ! -f "$PLAN_FILE" ]; then
-    echo '{}'
-    exit 0
-fi
-
-echo '{"additionalContext":"[planning-with-files] Update tasks.md with what you just did. If a phase is now complete, update tasks.md status. Read decisions.md before changing user decisions."}'
+count_phases "$PLAN_FILE"
+MESSAGE="[planning-with-files] Update $PLAN_FILE after meaningful progress and keep its Resume Checkpoint current."
+for WARNING in \
+    "$(planning_file_budget_warning "$PLAN_DIR")" \
+    "$(planning_handoff_warning "$PLAN_DIR")" \
+    "$(task_plan_format_message "$(check_task_plan_format "$PLAN_FILE")" "$PLAN_FILE" "$TOTAL")"; do
+    [ -n "$WARNING" ] && MESSAGE="$MESSAGE
+$WARNING"
+done
+ESCAPED=$(printf '%s' "$MESSAGE" | gemini_json_string)
+echo "{\"additionalContext\":$ESCAPED}"
 exit 0

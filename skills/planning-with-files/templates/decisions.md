@@ -1,5 +1,5 @@
 # Decisions
-<!-- Keep this active file near 150 lines. Read before every edit. Compact by summarizing superseded history; never raw-truncate. -->
+<!-- Trusted ledger. Keep under 150 lines AND 12 KiB. Read before every edit; never raw-truncate. -->
 
 ## Active Decisions
 <!-- Current user-confirmed decisions that affect implementation. -->
@@ -8,10 +8,10 @@
 | D1 |          |           |      |
 
 ## Superseded Decisions
-<!-- Keep old decisions only when they explain why direction changed. Compress older rows aggressively. -->
+<!-- Keep only history that explains the current direction; compress aggressively. -->
 | ID | Old Decision | Replaced By | Reason |
 |----|--------------|-------------|--------|
 
 ## Open Decision Questions
 <!-- Questions that need user input before proceeding. -->
-- [ ] 
+- [ ]

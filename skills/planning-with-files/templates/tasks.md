@@ -1,12 +1,12 @@
 # Tasks: [Brief Description]
-<!-- Keep this active file near 150 lines. Compact ## Progress Notes hardest, then completed phases (keep phase headings + Status lines verbatim); never raw-truncate. -->
+<!-- Trusted hot state. Keep under 150 lines AND 12 KiB; move cold history out instead of truncating. -->
 
 ## Goal
 <!-- One or two short sentences. The hook re-injects this, so keep it concise. -->
 [One sentence describing the end state]
 
 ## Current Phase
-<!-- Leave empty while planning/discussing. Fill only when starting implementation, e.g. "Phase 1". -->
+<!-- Keep empty while planning/discussing. Otherwise the entire body must be exactly "Phase N". -->
 
 ## Workflow Profile
 <!-- Pick exactly one before implementation: A, B, or C. -->
@@ -15,6 +15,11 @@
 - **A - PR-Handoff:** stop after PR opened, CI green, reviewers requested.
 - **B - Staging-Verified:** stop after staging deploy and staging E2E pass.
 - **C - Research/Document:** stop after deliverable file/report is complete.
+
+## Resume Checkpoint
+- **Next action:** [exact next command or edit]
+- **Blocker:** none
+- **Details:** none <!-- Link handoff.md only when a short checkpoint is insufficient. -->
 
 ## Phases
 <!--
@@ -76,15 +81,15 @@ Use `deferred (reason)` only for explicit blockers or user-requested follow-up.
 2. [Question to answer]
 
 ## Verification
-<!-- Exact commands/checks only. Do not substitute cheaper checks for stricter ones. -->
+<!-- Keep exact checks still required plus the latest relevant baseline. Move completed detail to history.md. -->
 - `<exact command or check>`:
 
 ## Progress Notes
-<!-- Concise chronological notes. Summarize or remove stale detail during compaction. -->
+<!-- Keep only current/recent work. -->
 - [YYYY-MM-DD] Created plan.
 
 ## Errors Encountered
-<!-- Log all errors to avoid repeating failures. -->
+<!-- Log immediately. Keep unresolved/current errors; move recurring gotchas to findings.md and resolved audit history to history.md. -->
 | Error | Attempt | Resolution |
 |-------|---------|------------|
 
@@ -92,8 +97,5 @@ Use `deferred (reason)` only for explicit blockers or user-requested follow-up.
 <!-- Keep current and relevant. -->
 - [path]: [why]
 
-## Compaction Notes
-<!-- If this file grows beyond about 150 lines, compact before continuing. -->
-- Preserve: goal, current phase, incomplete tasks, blockers, verification commands, recent errors, and active user decisions referenced from `decisions.md`.
-- Compact in order: (1) `## Progress Notes` hardest — keep only active/recent entries; (2) completed phases → one-line outcome, keeping each `### Phase N:` heading and `- **Status:**` line verbatim; (3) resolved errors → short summaries.
-- Never raw-truncate.
+## History
+- Cold archive: none <!-- Link history.md when created. -->

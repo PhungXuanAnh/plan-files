@@ -1,32 +1,18 @@
 #!/bin/bash
-# planning-with-files: BeforeTool hook for Gemini CLI
-# Reads the first 30 lines of tasks.md before tool use.
-# Receives JSON on stdin, must output ONLY JSON to stdout.
+# Inject trusted hot sections before Gemini tools.
 
-INPUT=$(cat)
+cat >/dev/null
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# shellcheck source=planning-common.sh
+source "$SCRIPT_DIR/planning-common.sh"
+[ -f "$PLAN_FILE" ] || { echo '{}'; exit 0; }
 
-PLAN_FILE="tasks.md"
-
-if [ ! -f "$PLAN_FILE" ]; then
-    echo '{}'
-    exit 0
-fi
-
-CONTEXT=$(head -30 "$PLAN_FILE" 2>/dev/null || echo "")
-
-if [ -z "$CONTEXT" ]; then
-    echo '{}'
-    exit 0
-fi
-
-PYTHON=$(command -v python3 || command -v python)
-if [ -n "$PYTHON" ]; then
-    ESCAPED=$($PYTHON -c "import sys,json; print(json.dumps(sys.stdin.read(), ensure_ascii=False))" <<< "$CONTEXT" 2>/dev/null)
-    if [ -n "$ESCAPED" ] && [ "$ESCAPED" != "\"\"" ]; then
-        echo "{\"systemMessage\":$ESCAPED}"
-        exit 0
-    fi
-fi
-
-echo '{}'
+CONTEXT=$(awk '
+  /^## (Goal|Current Phase|Resume Checkpoint)[[:space:]]*$/ { capture=1; print; next }
+  /^## / { capture=0 }
+  capture { print }
+' "$PLAN_FILE" 2>/dev/null)
+[ -n "$CONTEXT" ] || { echo '{}'; exit 0; }
+ESCAPED=$(printf '%s' "$CONTEXT" | gemini_json_string)
+echo "{\"systemMessage\":$ESCAPED}"
 exit 0

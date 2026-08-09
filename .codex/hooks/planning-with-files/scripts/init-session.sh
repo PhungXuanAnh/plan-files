@@ -75,6 +75,11 @@ Phase 1
 ## Workflow Profile
 **Profile:** [A | B | C]
 
+## Resume Checkpoint
+- **Next action:** [exact next command or edit]
+- **Blocker:** none
+- **Details:** none
+
 ## Phases
 
 ### Phase 1: Requirements & Discovery
@@ -93,17 +98,20 @@ Phase 1
 
 copy_or_create "findings.md" "$FINDINGS_TEMPLATE" "# Findings
 
+## Current Summary
+-
+
 ## Requirements
 -
 
-## Research Findings
+## Discoveries
 -
 
-## Issues Encountered
-| Issue | Resolution |
-|-------|------------|
+## Known Gotchas
+| Symptom | Root Cause | Workaround |
+|---------|------------|------------|
 
-## Resources
+## Sources
 -"
 
 copy_or_create "decisions.md" "$DECISIONS_TEMPLATE" "# Decisions
@@ -122,3 +130,4 @@ copy_or_create "decisions.md" "$DECISIONS_TEMPLATE" "# Decisions
 echo ""
 echo "Planning files initialized!"
 echo "Files: tasks.md, findings.md, decisions.md"
+echo "Optional templates: history.md (cold archive), handoff.md (intentional pause only)"

@@ -3,8 +3,51 @@
 # Source this file from agent-stop.sh and post-tool-use.sh; do NOT execute directly.
 #
 # Provides:
+#   resolve_plan_dir ROOT             — set TASK_ID PLAN_DIR PLAN_FILE from pointer
+#   current_phase_pointer PLAN_FILE   — print only a valid exact `Phase N` pointer
 #   count_phases PLAN_FILE           — set globals TOTAL COMPLETE IN_PROGRESS PENDING
 #   check_task_plan_format PLAN_FILE — echo issue code if plan has a structural problem
+#   task_plan_format_message CODE FILE TOTAL — render concise model-facing guidance
+#   planning_file_budget_warning DIR — echo line/byte/scope warning when needed
+#   planning_handoff_warning DIR     — echo warning when optional handoff.md is stale
+
+# ---------------------------------------------------------------------------
+# resolve_plan_dir ROOT
+# Sets empty globals on a missing/invalid pointer; never guesses another task.
+# ---------------------------------------------------------------------------
+resolve_plan_dir() {
+    local _root="${1:-.}" _pointer _id
+    TASK_ID="" PLAN_DIR="" PLAN_FILE=""
+    _pointer="$_root/.plan-with-files"
+    [ -e "$_root/.plan-with-files-skip" ] && return 0
+    [ -f "$_pointer" ] || return 0
+    _id=$(sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;p;}' "$_pointer" 2>/dev/null)
+    case "$_id" in
+        ""|.|*/*|*..*|*" "*) return 0 ;;
+    esac
+    if ! printf '%s' "$_id" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+        return 0
+    fi
+    TASK_ID="$_id"
+    PLAN_DIR="$_root/tmp/plan-with-files/$_id"
+    PLAN_FILE="$PLAN_DIR/tasks.md"
+}
+
+current_phase_pointer() {
+    local _plan_file="${1:-}" _body
+    _body=$(awk '
+      /^## Current Phase[[:space:]]*$/ { capture=1; next }
+      capture && /^## / { exit }
+      !capture { next }
+      /<!--/ { in_comment=1 }
+      !in_comment && /[^[:space:]]/ { print }
+      in_comment && /-->/ { in_comment=0 }
+    ' "$_plan_file" 2>/dev/null)
+    if [ "$(printf '%s\n' "$_body" | awk 'NF { count++ } END { print count+0 }')" -eq 1 ] \
+        && printf '%s' "$_body" | grep -Eq '^Phase[[:space:]]+[0-9]+[[:space:]]*$'; then
+        printf '%s' "$_body"
+    fi
+}
 
 # ---------------------------------------------------------------------------
 # count_phases PLAN_FILE
@@ -64,10 +107,14 @@ EOF
 # ---------------------------------------------------------------------------
 # check_task_plan_format PLAN_FILE
 # Requires: count_phases already called (reads TOTAL COMPLETE IN_PROGRESS PENDING DEFERRED).
-# Active only while COMPLETE=0 AND DEFERRED=0 (planning phase); silently no-ops once work begins.
+# Structural and profile checks always run.
 # Echoes one of these issue codes to stdout, or nothing if the plan is correct:
+#   SECTION_LAYOUT_INVALID — Current Phase / Phases section is missing, duplicated, ordered
+#                            incorrectly, or contains phase headings outside ## Phases
+#   CURRENT_PHASE_INVALID — pointer body is not empty or exactly one existing `Phase N`
+#   PHASE_HEADING_INVALID — a `### Phase` heading does not match `### Phase N: Title`
 #   NO_PHASES            — zero ### Phase N: headings detected
-#   NO_STATUS_MARKERS    — headings found but zero recognized status markers
+#   PHASE_STATUS_INVALID — a phase has missing or duplicate recognized status markers
 #   DEFERRED_NO_REASON   — `**Status:** deferred` line present but missing required `(reason)`
 #                          (always checked, even during/after work — bare `deferred` is never valid)
 #   PROFILE_MISSING      — ## Workflow Profile section absent
@@ -80,6 +127,76 @@ check_task_plan_format() {
     local _in_progress="${IN_PROGRESS:-0}"
     local _pending="${PENDING:-0}"
     local _deferred="${DEFERRED:-0}"
+
+    local _current_count _phases_count _current_line _phases_line _inside_total
+    _current_count=$(grep -Ec '^## Current Phase[[:space:]]*$' "$_plan_file" 2>/dev/null || true)
+    _phases_count=$(grep -Ec '^## Phases[[:space:]]*$' "$_plan_file" 2>/dev/null || true)
+    _current_count=${_current_count:-0}
+    _phases_count=${_phases_count:-0}
+    if [ "$_current_count" -ne 1 ] || [ "$_phases_count" -ne 1 ]; then
+        printf 'SECTION_LAYOUT_INVALID'
+        return
+    fi
+
+    _current_line=$(grep -nE '^## Current Phase[[:space:]]*$' "$_plan_file" 2>/dev/null | cut -d: -f1 | head -1)
+    _phases_line=$(grep -nE '^## Phases[[:space:]]*$' "$_plan_file" 2>/dev/null | cut -d: -f1 | head -1)
+    if [ "${_current_line:-0}" -ge "${_phases_line:-0}" ]; then
+        printf 'SECTION_LAYOUT_INVALID'
+        return
+    fi
+
+    if grep -E '^### Phase' "$_plan_file" 2>/dev/null \
+        | grep -Ev '^### Phase[[:space:]]+[0-9]+:[[:space:]]+[^[:space:]]' \
+        | grep -q .; then
+        printf 'PHASE_HEADING_INVALID'
+        return
+    fi
+
+    _inside_total=$(awk '
+      /^## Phases[[:space:]]*$/ { in_phases=1; next }
+      in_phases && /^## / { in_phases=0 }
+      in_phases && /^### Phase/ { count++ }
+      END { print count+0 }
+    ' "$_plan_file" 2>/dev/null)
+    _inside_total=${_inside_total:-0}
+    if [ "$_inside_total" -ne "$_total" ]; then
+        printf 'SECTION_LAYOUT_INVALID'
+        return
+    fi
+
+    local _current_body _current_body_lines _current_num
+    _current_body=$(awk '
+      /^## Current Phase[[:space:]]*$/ { capture=1; next }
+      capture && /^## / { exit }
+      !capture { next }
+      /<!--/ { in_comment=1 }
+      !in_comment && /[^[:space:]]/ { print }
+      in_comment && /-->/ { in_comment=0 }
+    ' "$_plan_file" 2>/dev/null)
+    _current_body_lines=$(printf '%s\n' "$_current_body" | awk 'NF { count++ } END { print count+0 }')
+    if [ "$_current_body_lines" -gt 1 ]; then
+        printf 'CURRENT_PHASE_INVALID'
+        return
+    fi
+    if [ -n "$_current_body" ]; then
+        if ! printf '%s' "$_current_body" | grep -Eq '^Phase[[:space:]]+[0-9]+[[:space:]]*$'; then
+            printf 'CURRENT_PHASE_INVALID'
+            return
+        fi
+        _current_num=$(printf '%s' "$_current_body" | grep -oE '[0-9]+' | head -1)
+        if ! awk -v num="$_current_num" '
+          /^## Phases[[:space:]]*$/ { in_phases=1; next }
+          in_phases && /^## / { in_phases=0 }
+          in_phases && $0 ~ ("^### Phase[[:space:]]+" num ":[[:space:]]+") { found=1 }
+          END { exit(found ? 0 : 1) }
+        ' "$_plan_file" 2>/dev/null; then
+            printf 'CURRENT_PHASE_INVALID'
+            return
+        fi
+    elif [ "$_in_progress" -gt 0 ] || [ "$_complete" -gt 0 ] || [ "$_deferred" -gt 0 ]; then
+        printf 'CURRENT_PHASE_INVALID'
+        return
+    fi
 
     # Bare `**Status:** deferred` (no reason / empty parens) is ALWAYS invalid,
     # regardless of how far the plan has progressed. Detect lines that start a
@@ -98,25 +215,40 @@ check_task_plan_format() {
         fi
     fi
 
-    # Once work has begun (any phase complete or deferred), skip planning-phase checks.
-    if [ "$_complete" -gt 0 ] || [ "$_deferred" -gt 0 ]; then
-        return 0
-    fi
-
     if [ "$_total" -eq 0 ]; then
         printf 'NO_PHASES'
         return
     fi
 
-    # COMPLETE=0 and DEFERRED=0 here. If IN_PROGRESS=0 and PENDING=0 too,
-    # all status markers are unrecognized.
-    if [ "$_in_progress" -eq 0 ] && [ "$_pending" -eq 0 ]; then
-        printf 'NO_STATUS_MARKERS'
+    local _bad_phase_status
+    _bad_phase_status=$(awk '
+      function flush() {
+        if (in_phase && markers != 1 && bad == "") bad=1
+      }
+      BEGIN { in_phase=0; markers=0; in_comment=0; bad="" }
+      /<!--/ { in_comment=1 }
+      in_comment { if (/-->/) in_comment=0; next }
+      /^### Phase[[:space:]]+[0-9]+:[[:space:]]+/ {
+        flush(); in_phase=1; markers=0
+        line=$0
+        markers += gsub(/\[(complete|in_progress|pending)\]/, "", line)
+        next
+      }
+      /^### / || /^## / { flush(); in_phase=0; markers=0; next }
+      !in_phase { next }
+      /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*(complete|in_progress|pending)[[:space:]]*$/ { markers++; next }
+      /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*deferred[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)[[:space:]]*$/ { markers++; next }
+      END { flush(); if (bad != "") print bad }
+    ' "$_plan_file" 2>/dev/null)
+    if [ -n "$_bad_phase_status" ]; then
+        printf 'PHASE_STATUS_INVALID'
         return
     fi
 
-    # Phase structure OK — check Workflow Profile section.
-    if ! grep -qE '^## Workflow Profile[[:space:]]*$' "$_plan_file" 2>/dev/null; then
+    local _profile_count
+    _profile_count=$(grep -Ec '^## Workflow Profile[[:space:]]*$' "$_plan_file" 2>/dev/null || true)
+    _profile_count=${_profile_count:-0}
+    if [ "$_profile_count" -ne 1 ]; then
         printf 'PROFILE_MISSING'
         return
     fi
@@ -127,6 +259,40 @@ check_task_plan_format() {
         printf 'PROFILE_UNFILLED'
         return
     fi
+}
+
+# ---------------------------------------------------------------------------
+# task_plan_format_message ISSUE PLAN_FILE TOTAL
+# Keep one model-facing explanation per format rule so hook adapters stay aligned.
+# ---------------------------------------------------------------------------
+task_plan_format_message() {
+    local _issue="${1:-}" _plan_file="${2:-tasks.md}" _total="${3:-0}"
+    case "$_issue" in
+        SECTION_LAYOUT_INVALID)
+            printf 'FORMAT CONTRACT VIOLATION in %s: include exactly one "## Current Phase" followed later by exactly one "## Phases", and keep every "### Phase N: Title" heading inside the Phases section.' "$_plan_file"
+            ;;
+        CURRENT_PHASE_INVALID)
+            printf 'FORMAT CONTRACT VIOLATION in %s: the non-comment body of "## Current Phase" must be empty or exactly "Phase N", and that phase must exist under "## Phases".' "$_plan_file"
+            ;;
+        PHASE_HEADING_INVALID)
+            printf 'FORMAT CONTRACT VIOLATION in %s: every phase heading must be exactly "### Phase N: Title" with an integer, colon, and non-empty title.' "$_plan_file"
+            ;;
+        NO_PHASES)
+            printf 'FORMAT CONTRACT VIOLATION in %s: no valid "### Phase N: Title" headings were found under "## Phases".' "$_plan_file"
+            ;;
+        PHASE_STATUS_INVALID)
+            printf 'FORMAT CONTRACT VIOLATION in %s: every phase must have exactly one recognized inline or body status.' "$_plan_file"
+            ;;
+        DEFERRED_NO_REASON)
+            printf 'FORMAT CONTRACT VIOLATION in %s: deferred requires a non-empty parenthesized reason and is allowed only for an external blocker or explicit user request.' "$_plan_file"
+            ;;
+        PROFILE_MISSING)
+            printf 'FORMAT CONTRACT VIOLATION in %s: add "## Workflow Profile" before "## Phases" and set "**Profile:** A", B, or C before implementation.' "$_plan_file"
+            ;;
+        PROFILE_UNFILLED)
+            printf 'FORMAT CONTRACT VIOLATION in %s: replace the Workflow Profile placeholder with exactly A, B, or C before implementation.' "$_plan_file"
+            ;;
+    esac
 }
 
 # ---------------------------------------------------------------------------
@@ -235,40 +401,72 @@ check_non_phase_work() {
 }
 
 # ---------------------------------------------------------------------------
-# planning_file_budget_warning PLAN_DIR [DEFAULT_LIMIT]
-# Checks the active planning files and prints one compact warning if any file
-# is over its per-file line budget. tasks.md is the hook-parsed dashboard and
-# decisions.md should stay lean, so both target 150 lines; findings.md holds
-# research/detail and targets 250. DEFAULT_LIMIT (fallback 150) applies to any
-# file without a specific budget. Advisory only: hooks never mutate or truncate.
+# planning_file_budget_warning PLAN_DIR
+# Warns on line, byte, or hot-plan phase-count budgets. Advisory only.
 # ---------------------------------------------------------------------------
 planning_file_budget_warning() {
     local _plan_dir="${1:-}"
-    local _default_limit="${2:-150}"
     local _items=""
-    local _name _path _lines _limit
+    local _name _path _lines _bytes _line_limit _byte_limit _phase_count _item
 
     [ -z "$_plan_dir" ] && return 0
 
-    for _name in tasks.md findings.md decisions.md; do
+    for _name in tasks.md findings.md decisions.md handoff.md; do
         _path="$_plan_dir/$_name"
         [ -f "$_path" ] || continue
         case "$_name" in
-            findings.md) _limit=250 ;;
-            *)           _limit="$_default_limit" ;;
+            tasks.md)    _line_limit=150; _byte_limit=12288 ;;
+            findings.md) _line_limit=250; _byte_limit=32768 ;;
+            decisions.md) _line_limit=150; _byte_limit=12288 ;;
+            handoff.md)  _line_limit=50;  _byte_limit=6144 ;;
         esac
         _lines=$(wc -l < "$_path" 2>/dev/null | tr -d ' ' || echo 0)
+        _bytes=$(wc -c < "$_path" 2>/dev/null | tr -d ' ' || echo 0)
         _lines=${_lines:-0}
-        if [ "$_lines" -gt "$_limit" ]; then
+        _bytes=${_bytes:-0}
+        if [ "$_lines" -gt "$_line_limit" ] || [ "$_bytes" -gt "$_byte_limit" ]; then
+            _item="${_name}=${_lines}/${_line_limit} lines;${_bytes}/${_byte_limit} bytes"
             if [ -n "$_items" ]; then
-                _items="${_items}, ${_name}=${_lines}/${_limit}"
+                _items="${_items}, ${_item}"
             else
-                _items="${_name}=${_lines}/${_limit}"
+                _items="${_item}"
             fi
         fi
     done
 
+    if [ -f "$_plan_dir/tasks.md" ]; then
+        _phase_count=$(grep -Ec '^### Phase[[:space:]]+[0-9]+:' "$_plan_dir/tasks.md" 2>/dev/null || true)
+        _phase_count=${_phase_count:-0}
+        if [ "$_phase_count" -gt 12 ]; then
+            _item="tasks.md=${_phase_count}/12 phase entries"
+            [ -n "$_items" ] && _items="${_items}, ${_item}" || _items="${_item}"
+        fi
+    fi
+
     if [ -n "$_items" ]; then
-        printf '[planning-with-files] COMPACTION NEEDED (file=lines/target): %s. Compact before continuing: preserve current goal/phase, incomplete tasks, blockers, verification commands, recent errors, active user decisions, and source references. Compact the ## Progress Notes section hardest, then completed phases (keep each "### Phase N:" heading and its "- **Status:**" line verbatim). Summarize stale completed work and superseded history. Never raw-truncate.' "$_items"
+        printf '[planning-with-files] COMPACTION NEEDED (actual/target): %s. Keep hot current state; move older completed phases, completed verification, and resolved-error summaries to history.md; consolidate findings/decisions by lifecycle; overwrite handoff.md instead of appending. Split independent follow-up work into another task. Never raw-truncate.' "$_items"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# planning_handoff_warning PLAN_DIR
+# A handoff is stale when any required planning file is newer. Optional only.
+# ---------------------------------------------------------------------------
+planning_handoff_warning() {
+    local _plan_dir="${1:-}"
+    local _handoff _name _path _newer=""
+    [ -z "$_plan_dir" ] && return 0
+    _handoff="$_plan_dir/handoff.md"
+    [ -f "$_handoff" ] || return 0
+
+    for _name in tasks.md findings.md decisions.md; do
+        _path="$_plan_dir/$_name"
+        if [ -f "$_path" ] && [ "$_path" -nt "$_handoff" ]; then
+            [ -n "$_newer" ] && _newer="${_newer}, ${_name}" || _newer="${_name}"
+        fi
+    done
+
+    if [ -n "$_newer" ]; then
+        printf '[planning-with-files] STALE HANDOFF: %s is newer than handoff.md. Ignore handoff.md on resume; refresh it only after final planning updates when intentionally pausing.' "$_newer"
     fi
 }
