@@ -2,8 +2,14 @@
 <!-- Trusted hot state. Keep under 150 lines AND 12 KiB; move cold history out instead of truncating. -->
 
 ## Goal
-<!-- One or two short sentences. The hook re-injects this, so keep it concise. -->
+<!-- One or two short sentences. Hooks may inject this, so keep it concise. -->
 [One sentence describing the end state]
+
+## Task Identity
+<!-- Keep this deterministic and concise; session-owned hooks expose it before binding. -->
+- Deliverable: [specific result this task owns]
+- Anchors: [ticket, PR, task id, or other stable identifiers; `none` if absent]
+- Non-goals: [nearby work that must not be mistaken for this task]
 
 ## Current Phase
 <!-- Keep empty while planning/discussing. Otherwise the entire body must be exactly "Phase N". -->

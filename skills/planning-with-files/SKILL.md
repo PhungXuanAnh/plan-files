@@ -1,8 +1,6 @@
 ---
 name: planning-with-files
 description: Uses persistent Markdown planning files to organize and resume complex work. Use when asked to plan or break down a multi-step project, for long-running research, or whenever work will require more than five tool calls.
-metadata:
-  version: "2.38.0"
 ---
 
 # Planning with Files
@@ -13,13 +11,15 @@ Treat the task folder as persistent memory. Keep current state small and load hi
 
 ```text
 <project root>/
-├── .plan-with-files                 # one line: active task id
-└── tmp/plan-with-files/<task-id>/
-    ├── tasks.md                     # required: trusted hot dashboard; hook-parsed
-    ├── findings.md                  # required: discoveries and untrusted content
-    ├── decisions.md                 # required: user-decision ledger
-    ├── history.md                   # optional: trusted cold archive
-    └── handoff.md                   # optional: latest resume snapshot
+├── .plan-with-files                 # one line: candidate/default task id
+└── tmp/plan-with-files/
+    ├── .sessions/                   # private prompt-scoped routing state
+    └── <task-id>/
+        ├── tasks.md                 # required: trusted hot dashboard; hook-parsed
+        ├── findings.md              # required: discoveries and untrusted content
+        ├── decisions.md             # required: user-decision ledger
+        ├── history.md               # optional: trusted cold archive
+        └── handoff.md               # optional: latest resume snapshot
 ```
 
 Use task ids containing only letters, digits, `-`, `_`, or `.`. Reject empty ids, `.`, `..`, spaces, and `/`.
@@ -28,13 +28,15 @@ Create required files from [templates/tasks.md](templates/tasks.md), [templates/
 
 ## Start and resume
 
-1. Read `.plan-with-files` before acting.
-2. If its id matches the request, read `tasks.md` and `decisions.md`, then read `findings.md` current-summary sections. Read linked detail only as needed.
-3. Read `handoff.md` only when it exists and is not older than `tasks.md`, `decisions.md`, or `findings.md`; otherwise ignore it as stale.
-4. Never auto-read `history.md`; follow a specific link or search it for needed history.
-5. If the pointer is missing, invalid, or names another task, list existing task folders and ask before replacing it.
+The latest user request is authoritative. When a session-aware hook exposes a candidate, it suspends any prior lease and reveals only Task Identity and Goal; `.plan-with-files` is a default, never ownership.
 
-For a new task, create the task folder and three required files, write the task id to `.plan-with-files`, fill the goal and phases, then begin. To switch tasks, change only the pointer; preserve old task folders.
+1. Classify the request as `SAME`, `DIFFERENT`, or `AMBIGUOUS`. An explicit resume/task id is strong evidence; a different id or explicit new/separate request means `DIFFERENT`; shared repo, branch, file, or module is weak evidence only.
+2. For `SAME`, run the bind command supplied by the hook verbatim before reading any other planning content. Then read `tasks.md`, `decisions.md`, and findings current summaries. Without an ownership hook, inspect only Task Identity + Goal first, apply the same scope decision, and do not claim session isolation.
+3. For `DIFFERENT`, do not bind, repair, compact, or mutate the candidate. Continue without asking; create a separate plan only if the new request needs one.
+4. For `AMBIGUOUS`, ask before mutating or switching a plan.
+5. Read `handoff.md` only when present and not older than `tasks.md`, `decisions.md`, or `findings.md`. Never auto-read `history.md`; follow a specific link or search it.
+
+For a new task, create the three required files, fill Task Identity/Goal/phases, and update `.plan-with-files`. If the hook supplied a bind-command template, use it after creating the task; otherwise continue without binding and never invent a script path or session identity. Preserve old task folders when switching. Ownership hooks fail closed when stable identity or binding is unavailable. `PLANNING_DISABLED=1` disables routing and enforcement for that invocation.
 
 ## `tasks.md` format contract
 
@@ -42,6 +44,7 @@ Hooks parse this file with simple regex. Follow these forms exactly.
 
 ### Required sections
 
+- For new plans, put `## Task Identity` after Goal with concise `Deliverable`, `Anchors`, and `Non-goals` bullets. Ownership hooks expose only this section and Goal before binding.
 - Include exactly one `## Current Phase` and one later `## Phases` section.
 - Keep `## Current Phase` empty while planning/discussing. Once work starts, its entire non-comment body must be exactly `Phase N`, and `### Phase N:` must exist under `## Phases`.
 - Put every phase heading inside `## Phases`; never let phase headings fall inside `## Current Phase`.
@@ -76,6 +79,8 @@ The Stop hook blocks incomplete work and format violations. An empty Current Pha
 5. Log every error immediately in `tasks.md`, diagnose it, change approach after a failure, and escalate after three materially different failed attempts.
 6. Give every phase executable `Done when` checks. Never replace a requested E2E or exact check with a cheaper substitute.
 7. After meaningful work, update status, current verification, recent errors, and touched files. Mark a phase complete only after its checks pass.
+
+After the in-scope task is fully settled, finish its final planning update and deactivate the pointer by leaving `.plan-with-files` empty. Preserve the task folder for history. Only deactivate a pointer after confirming that the current request owns that plan.
 
 Append another phase only when it serves the same goal and keeps the hot plan concise. When follow-up work is independent or `tasks.md` approaches 8–12 phase entries, create a new task folder and link the tasks instead of growing one permanent phase ledger.
 

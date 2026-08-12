@@ -401,6 +401,35 @@ check_non_phase_work() {
 }
 
 # ---------------------------------------------------------------------------
+# planning_settled_integrity_issue TASKS_FILE
+# Empty only when an all-settled plan is structurally and semantically clean.
+# ---------------------------------------------------------------------------
+planning_settled_integrity_issue() {
+    local _plan_file="${1:-}" _issue _summary _num _status _unchecked _first _hidden
+    [ -f "$_plan_file" ] || { printf 'PLAN_MISSING'; return 0; }
+
+    count_phases "$_plan_file"
+    _issue=$(check_task_plan_format "$_plan_file")
+    if [ -n "$_issue" ]; then
+        printf '%s' "$_issue"
+        return 0
+    fi
+
+    _summary=$(phase_summary "$_plan_file")
+    while IFS=$'\t' read -r _num _status _unchecked _first; do
+        [ -z "${_num:-}" ] && continue
+        if [ "${_status:-}" = "complete" ] && [ "${_unchecked:-0}" -gt 0 ]; then
+            printf 'STATUS_LIES'
+            return 0
+        fi
+    done <<< "$_summary"
+
+    _hidden=$(check_non_phase_work "$_plan_file")
+    [ -n "$_hidden" ] && printf 'NON_PHASE_WORK'
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # planning_file_budget_warning PLAN_DIR
 # Warns on line, byte, or hot-plan phase-count budgets. Advisory only.
 # ---------------------------------------------------------------------------

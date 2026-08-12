@@ -36,3 +36,4 @@ DISCUSSION_2_CONTENT.md
 tmp/
 .mcp.json
 .kiro/settings/mcp.json
+temp.sh

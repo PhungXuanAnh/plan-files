@@ -6,12 +6,13 @@ The canonical skill lives in [skills/planning-with-files](./skills/planning-with
 
 ## Current Workflow
 
-For each complex task, the agent uses a pointer plus one task directory:
+For each complex task, the agent uses a default pointer, prompt-scoped routing, and one task directory:
 
 ```text
 <project root>/
 ├── .plan-with-files
 └── tmp/plan-with-files/
+    ├── .sessions/       # private hook-owned routing state
     └── <task-id>/
         ├── tasks.md
         ├── findings.md
@@ -20,7 +21,7 @@ For each complex task, the agent uses a pointer plus one task directory:
         └── handoff.md       # optional latest resume snapshot
 ```
 
-- `tasks.md` tracks goal, current phase, phases, concise progress, errors, and verification.
+- `tasks.md` tracks task identity, goal, current phase, phases, concise progress, errors, and verification.
 - `findings.md` stores research, discoveries, and untrusted external content.
 - `decisions.md` stores user decisions, changed direction, superseded choices, and open decision questions.
 - `history.md` stores trusted completed-work summaries and is read only when needed.
@@ -37,23 +38,16 @@ planning-with-files/
 │       ├── SKILL.md
 │       ├── examples.md
 │       ├── reference.md
+│       ├── scripts/                 # Canonical prompt/session routing helper
 │       └── templates/
 │           ├── tasks.md
 │           ├── findings.md
 │           ├── decisions.md
 │           ├── history.md
 │           └── handoff.md
-├── .codex/skills/planning-with-files      -> ../../skills/planning-with-files
-├── .cursor/skills/planning-with-files     -> ../../skills/planning-with-files
-├── .gemini/skills/planning-with-files     -> ../../skills/planning-with-files
-├── .continue/skills/planning-with-files   -> ../../skills/planning-with-files
-├── .opencode/skills/planning-with-files   -> ../../skills/planning-with-files
 ├── .claude/hooks/                         # Claude Code hook scripts
 ├── .codex/hooks/                          # Codex hook scripts
-├── .cursor/hooks/                         # Cursor hook scripts
-├── .gemini/hooks/                         # Gemini hook scripts
 ├── .github/hooks/                         # GitHub Copilot hook scripts
-├── .kiro/hooks/                           # Kiro hook scripts
 ├── CHANGELOG.md
 ├── CONTRIBUTORS.md
 ├── LICENSE
@@ -64,11 +58,17 @@ planning-with-files/
 
 Ask the agent to use the `planning-with-files` skill for any multi-step task. The agent should:
 
-1. Read `.plan-with-files` if it exists.
-2. Read `tasks.md`, `decisions.md`, and the current summary in `findings.md`; read a fresh `handoff.md` when present.
-3. Create a new task folder from the templates when starting a new task.
-4. Re-read `tasks.md` and `decisions.md` before major decisions.
-5. Compact when a file exceeds its line or byte budget; move cold completed history out of `tasks.md` and never raw-truncate.
+1. Treat `.plan-with-files` as a candidate, not proof that the conversation owns that task.
+2. Compare only candidate Task Identity + Goal with the latest request and classify it as `SAME`, `DIFFERENT`, or `AMBIGUOUS`.
+3. When an ownership hook supplies a bind command, bind `SAME` before loading full hot state; ignore `DIFFERENT` without mutating it; ask only for `AMBIGUOUS`.
+4. Create a new task folder when a separate complex request needs one, and bind it when the adapter supports ownership.
+5. Re-read `tasks.md` and `decisions.md` before major decisions, and compact cold completed detail instead of raw-truncating it.
+
+Codex, Claude Code, and GitHub Copilot hooks implement this prompt-scoped ownership handshake. An unbound or unidentified session receives no full plan injection and no hard Stop/PostTool enforcement. Future adapters can implement the same generic ownership interface without changing the shared skill contract.
+
+The canonical skill remains host-neutral. Each ownership-aware hook adapter resolves its own session identity and injects a directly executable bind command, so the skill never hardcodes `/home/...` or requires the agent to discover hook scripts. An absolute command produced by a hook may point through a symlink or to the source tree; both are valid.
+
+The GitHub `user-prompt-transformed.py` file is intentionally adapter-specific: that event must preserve the incoming transformed prompt and return it as `modifiedTransformedPrompt` with candidate context appended. Shared candidate selection and state remain in the canonical skill scripts.
 
 ## Install Shape
 

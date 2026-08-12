@@ -1,6 +1,13 @@
 {
   "version": 1,
   "hooks": {
+    "userPromptTransformed": [
+      {
+        "type": "command",
+        "bash": "/home/xuananh/repo/planning-with-files/.github/hooks/scripts/user-prompt-transformed.py",
+        "timeout": 5
+      }
+    ],
     "PostToolUse": [
       {
         "type": "command",

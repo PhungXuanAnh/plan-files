@@ -1,5 +1,27 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel)\" && cd \"$ROOT\" && bash \"$ROOT/.claude/hooks/planning-with-files/scripts/session-start.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel)\" && cd \"$ROOT\" && bash \"$ROOT/.claude/hooks/planning-with-files/scripts/user-prompt-submit.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "hooks": [

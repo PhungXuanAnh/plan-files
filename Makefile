@@ -1,7 +1,7 @@
 .PHONY: help test check-installs injected-content \
         install-skill-copilot install-skill-claude-code install-skill-codex install-skill-kiro install-skills \
-        install-hook-copilot install-hook-claude-code install-hook-codex install-hook-kiro install-hooks \
-        install-copilot install-claude-code install-codex install-kiro install-global install \
+        install-hook-copilot install-hook-claude-code install-hook-codex install-hooks \
+        install-copilot install-claude-code install-codex install-global install \
         sync-upstream sync-upstream-rebase sync-upstream-merge
 
 help: ## Show this help
@@ -9,6 +9,7 @@ help: ## Show this help
 
 test: ## Run planning contract tests
 	@bash tests/test-planning-contract.sh
+	@bash tests/test-session-ownership.sh
 
 # ---------------------------------------------------------------------------
 # Global installation. Everything is linked back to this repo so local edits are
@@ -24,12 +25,10 @@ CLAUDE_CODE_SETTINGS := $(HOME)/.claude/settings.json
 COPILOT_SKILL := $(HOME)/Dropbox/Work/copilot/skills/planning-with-files
 COPILOT_HOOKS := $(HOME)/Dropbox/Work/copilot/hooks/planning-with-files.json
 KIRO_SKILL := $(HOME)/.kiro/skills/planning-with-files
-KIRO_HOOKS := $(HOME)/.kiro/hooks/planning-with-files.json
 
 CODEX_HOOKS_SRC := $(REPO_ROOT)/.codex/hooks.json
 CLAUDE_CODE_SETTINGS_SRC := $(REPO_ROOT)/.claude/settings.json
 COPILOT_HOOKS_SRC := $(REPO_ROOT)/.github/hooks/planning-with-files.json
-KIRO_HOOKS_SRC := $(REPO_ROOT)/.kiro/hooks/planning-with-files.json
 
 define link_path
 	@target='$(1)'; dest='$(2)'; \
@@ -72,7 +71,6 @@ check-installs: ## Show global skill/hook install status
 	$(call check_path,$(COPILOT_SKILL))
 	$(call check_path,$(COPILOT_HOOKS))
 	$(call check_path,$(KIRO_SKILL))
-	$(call check_path,$(KIRO_HOOKS))
 
 install-skill-codex: ## Link skill into global Codex skills
 	$(call link_path,$(SKILL_SRC),$(CODEX_SKILL))
@@ -101,16 +99,11 @@ install-copilot: install-skill-copilot install-hook-copilot ## Link GitHub Copil
 install-skill-kiro: ## Link skill into global Kiro skills
 	$(call link_path,$(SKILL_SRC),$(KIRO_SKILL))
 
-install-hook-kiro: ## Link hook JSON into global Kiro hooks
-	$(call link_path,$(KIRO_HOOKS_SRC),$(KIRO_HOOKS))
-
-install-kiro: install-skill-kiro install-hook-kiro ## Link Kiro skill and hook JSON globally
-
 install-skills: install-skill-codex install-skill-claude-code install-skill-copilot install-skill-kiro ## Link skills globally
 
-install-hooks: install-hook-codex install-hook-claude-code install-hook-copilot install-hook-kiro ## Link hook JSON/settings globally
+install-hooks: install-hook-codex install-hook-claude-code install-hook-copilot ## Link hook JSON/settings globally
 
-install-global install: install-codex install-claude-code install-copilot install-kiro ## Link skills and hook JSON/settings globally
+install-global install: install-skills install-hooks ## Link skills and available hook JSON/settings globally
 
 # ---------------------------------------------------------------------------
 injected-content: ## Show what the post-tool-use hook would inject from the active tasks.md

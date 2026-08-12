@@ -12,11 +12,27 @@ The workflow treats the context window as limited working memory and the filesys
 
 This separation prevents completed work, old test output, and resolved failures from displacing the current goal, next action, blockers, and active decisions.
 
+## Routing and ownership
+
+Task memory and conversation routing are separate. `.plan-with-files` names the default candidate; a private session route names what the current prompt has confirmed. Each prompt suspends the previous lease, exposes only Task Identity + Goal, and waits for an agent `SAME` decision before full loading or enforcement.
+
+An ownership-aware hook adapter must:
+
+1. Extract a stable session id from its trusted hook payload or tool environment.
+2. Pass a safe adapter id plus that session id to the shared state helper.
+3. Translate candidate context and enforcement results into its host's event envelope.
+4. Supply a directly executable bind command; the command may use an absolute symlink path or resolved source path.
+
+The shared helper accepts any safe adapter id rather than a fixed host list. Missing identity, missing lease, malformed ids, and ownership mismatches fail closed with no plan injection or block. Host event names, environment variables, and output schemas belong in adapter directories, not in the shared skill contract.
+
+Never hardcode a machine-specific repository path in the skill. Use a hook-supplied command verbatim; when none is available, remain unbound instead of guessing where a script lives.
+
 ## Route information by future use
 
 | Information | Destination |
 |-------------|-------------|
 | Current phase, next action, blocker, required checks | `tasks.md` |
+| Deliverable, stable identifiers, nearby non-goals | `tasks.md` Task Identity |
 | External content, discoveries, recurring gotchas | `findings.md` |
 | User-confirmed choices and changed direction | `decisions.md` |
 | Completed outcomes, old verification, resolved audit history | `history.md` |

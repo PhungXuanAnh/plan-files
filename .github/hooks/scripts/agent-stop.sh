@@ -5,7 +5,7 @@
 # Always exits 0 — outputs JSON to stdout. Debug log written to
 #   tmp/hook-logs/plan-with-files/agent-stop.log
 #
-# Pure bash (no python dependency). Tested on bash 4+ (Ubuntu/Debian/Arch).
+# Bash 4+ hook; session JSON uses jq, Python 3, or Node and otherwise fails closed.
 
 set -u
 set -o pipefail 2>/dev/null || true
@@ -14,17 +14,17 @@ set -o pipefail 2>/dev/null || true
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 INPUT=$(cat)
+PROVIDER=copilot
+REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
+STATE_TOOL="$REPO_ROOT/skills/planning-with-files/scripts/session-state.sh"
 
-# --- Early skip: hooks only run when a real task pointer is present ---------
-# Skip silently (emit `{}` and exit 0) if ANY of the following is true:
-#   1. `.plan-with-files-skip` marker file exists at CWD (manual opt-out)
-#   2. `.plan-with-files` pointer file is missing
-#   3. `.plan-with-files` pointer file is empty (whitespace-only counts as empty)
-# This makes the pointer file the explicit opt-in: worktrees, worktree-
-# container workspaces, and unrelated projects all stay silent.
-if [ -e .plan-with-files-skip ] \
-    || [ ! -f .plan-with-files ] \
-    || [ -z "$(tr -d '[:space:]' < .plan-with-files 2>/dev/null)" ]; then
+if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e .plan-with-files-skip ]; then
+    printf '{}'
+    exit 0
+fi
+SESSION_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" session-id 2>/dev/null || true)
+PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" resolve "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+if [ -z "$PLAN_DIR" ]; then
     printf '{}'
     exit 0
 fi
@@ -47,27 +47,8 @@ json_escape() {
 gcount()  { local n; n=$(grep -c  "$1" "$2" 2>/dev/null || true); printf '%d' "${n:-0}"; }
 gcountF() { local n; n=$(grep -cF "$1" "$2" 2>/dev/null || true); printf '%d' "${n:-0}"; }
 
-# --- Resolve plan directory (see post-tool-use.sh for full doc) -------------
-PLAN_DIR=""
-PLAN_SOURCE=""
-if [ -f .plan-with-files ]; then
-    TASK_ID=$(head -n 1 .plan-with-files 2>/dev/null | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    if printf '%s' "$TASK_ID" | grep -Eq '^[A-Za-z0-9._-]+$' && [ "$TASK_ID" != "." ] && [ "$TASK_ID" != ".." ]; then
-        CANDIDATE="tmp/plan-with-files/$TASK_ID"
-        if [ -d "$CANDIDATE" ]; then
-            PLAN_DIR="$CANDIDATE"
-            PLAN_SOURCE=".plan-with-files -> $CANDIDATE"
-        else
-            PLAN_SOURCE=".plan-with-files -> $CANDIDATE (DIR MISSING -> no-op)"
-        fi
-    else
-        PLAN_SOURCE=".plan-with-files -> '$TASK_ID' (INVALID id -> no-op)"
-    fi
-else
-    PLAN_SOURCE="no .plan-with-files pointer -> no-op"
-fi
-PLAN_FILE=""
-[ -n "$PLAN_DIR" ] && PLAN_FILE="$PLAN_DIR/tasks.md"
+PLAN_SOURCE="$PROVIDER session lease -> $PLAN_DIR"
+PLAN_FILE="$PLAN_DIR/tasks.md"
 
 # --- Logging setup (flock-protected against parallel hook processes) --------
 LOG_DIR="tmp/hook-logs/plan-with-files"

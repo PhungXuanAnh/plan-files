@@ -1,5 +1,17 @@
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel)\" && cd \"$ROOT\" && bash \"$ROOT/.codex/hooks/planning-with-files/scripts/user-prompt-submit.sh\"",
+            "timeout": 5,
+            "statusMessage": "Checking planning scope"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "hooks": [

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+STATE_TOOL="$REPO_ROOT/skills/planning-with-files/scripts/session-state.sh"
 # shellcheck source=../.codex/hooks/planning-with-files/scripts/common.sh
 source "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/common.sh"
 
@@ -22,6 +23,11 @@ write_valid_plan() {
 
 ## Goal
 Verify the planning contract.
+
+## Task Identity
+- Deliverable: Verify the planning contract
+- Anchors: contract-fixture
+- Non-goals: unrelated hook behavior
 
 ## Current Phase
 Phase 1
@@ -91,52 +97,47 @@ assert_eq "$(planning_handoff_warning "$PLAN_DIR")" "" "fresh handoff"
 
 cmp "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/common.sh" "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/common.sh"
 cmp "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/common.sh" "$REPO_ROOT/.github/hooks/scripts/common.sh"
-cmp "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/common.sh" "$REPO_ROOT/.kiro/hooks/scripts/common.sh"
-bash -n "$REPO_ROOT"/.cursor/hooks/*.sh "$REPO_ROOT"/.gemini/hooks/*.sh \
-    "$REPO_ROOT"/.codex/hooks/planning-with-files/scripts/*.sh \
+bash -n "$REPO_ROOT"/.codex/hooks/planning-with-files/scripts/*.sh \
     "$REPO_ROOT"/.claude/hooks/planning-with-files/scripts/*.sh \
-    "$REPO_ROOT"/.github/hooks/scripts/*.sh "$REPO_ROOT"/.kiro/hooks/scripts/*.sh
+    "$REPO_ROOT"/.github/hooks/scripts/*.sh
 
-CODEX_OUTPUT=$(cd "$PROJECT" && printf '{}\n' | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")
-CLAUDE_OUTPUT=$(cd "$PROJECT" && printf '{}\n' | "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/agent-stop.sh")
-GITHUB_OUTPUT=$(cd "$PROJECT" && printf '{}\n' | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")
-KIRO_OUTPUT=$(cd "$PROJECT" && printf '{}\n' | "$REPO_ROOT/.kiro/hooks/scripts/agent-stop.sh")
-CURSOR_OUTPUT=$(printf '{}\n' | CURSOR_PROJECT_DIR="$PROJECT" "$REPO_ROOT/.cursor/hooks/stop.sh")
-GEMINI_OUTPUT=$(printf '{}\n' | GEMINI_PROJECT_DIR="$PROJECT" "$REPO_ROOT/.gemini/hooks/session-end.sh")
+CODEX_PAYLOAD='{"session_id":"codex-contract","hook_event_name":"Stop","stop_hook_active":false}'
+CLAUDE_PAYLOAD='{"session_id":"claude-contract","hook_event_name":"Stop","stop_hook_active":false}'
+COPILOT_PAYLOAD='{"session_id":"copilot-contract","hook_event_name":"Stop","stop_hook_active":false}'
+
+CODEX_CANDIDATE=$(cd "$PROJECT" && printf '%s\n' '{"session_id":"codex-contract","hook_event_name":"UserPromptSubmit","prompt":"continue contract-fixture"}' | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/user-prompt-submit.sh")
+CLAUDE_CANDIDATE=$(cd "$PROJECT" && printf '%s\n' '{"session_id":"claude-contract","hook_event_name":"UserPromptSubmit","prompt":"continue contract-fixture"}' | "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/user-prompt-submit.sh")
+COPILOT_CANDIDATE=$(cd "$PROJECT" && printf '%s\n' '{"sessionId":"copilot-contract","transformedPrompt":"continue contract-fixture"}' | "$REPO_ROOT/.github/hooks/scripts/user-prompt-transformed.py")
+for OUTPUT in "$CODEX_CANDIDATE" "$CLAUDE_CANDIDATE" "$COPILOT_CANDIDATE"; do
+    assert_contains "$OUTPUT" "Task Identity" "candidate identity injection"
+done
+PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=codex PWF_SESSION_ID=codex-contract "$STATE_TOOL" bind test-task >/dev/null
+PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=claude PWF_SESSION_ID=claude-contract "$STATE_TOOL" bind test-task >/dev/null
+PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=copilot PWF_SESSION_ID=copilot-contract "$STATE_TOOL" bind test-task >/dev/null
+
+CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")
+CLAUDE_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CLAUDE_PAYLOAD" | "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/agent-stop.sh")
+GITHUB_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$COPILOT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")
 assert_contains "$CODEX_OUTPUT" "Task incomplete" "Codex Stop adapter"
 assert_contains "$CLAUDE_OUTPUT" "Task incomplete" "Claude Stop adapter"
 assert_contains "$GITHUB_OUTPUT" "Task incomplete" "Copilot Stop adapter"
-assert_contains "$KIRO_OUTPUT" "Task incomplete" "Kiro Stop adapter"
-assert_contains "$CURSOR_OUTPUT" "Task incomplete" "Cursor Stop adapter"
-assert_contains "$GEMINI_OUTPUT" "is incomplete" "Gemini SessionEnd adapter"
 
 sed -i '/\*\*Status:\*\* pending/d' "$PLAN_DIR/tasks.md"
-CODEX_OUTPUT=$(cd "$PROJECT" && printf '{}\n' | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")
-CLAUDE_OUTPUT=$(cd "$PROJECT" && printf '{}\n' | "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/agent-stop.sh")
-GITHUB_OUTPUT=$(cd "$PROJECT" && printf '{}\n' | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")
-KIRO_OUTPUT=$(cd "$PROJECT" && printf '{}\n' | "$REPO_ROOT/.kiro/hooks/scripts/agent-stop.sh")
-CURSOR_OUTPUT=$(printf '{}\n' | CURSOR_PROJECT_DIR="$PROJECT" "$REPO_ROOT/.cursor/hooks/stop.sh")
-GEMINI_OUTPUT=$(printf '{}\n' | GEMINI_PROJECT_DIR="$PROJECT" "$REPO_ROOT/.gemini/hooks/session-end.sh")
-for OUTPUT in "$CODEX_OUTPUT" "$CLAUDE_OUTPUT" "$GITHUB_OUTPUT" "$KIRO_OUTPUT" "$CURSOR_OUTPUT" "$GEMINI_OUTPUT"; do
+CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")
+CLAUDE_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CLAUDE_PAYLOAD" | "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/agent-stop.sh")
+GITHUB_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$COPILOT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")
+for OUTPUT in "$CODEX_OUTPUT" "$CLAUDE_OUTPUT" "$GITHUB_OUTPUT"; do
     assert_contains "$OUTPUT" "exactly one recognized" "phase-status adapter routing"
 done
 
 write_valid_plan
 sed -i 's/^Phase 1$//; s/in_progress/pending/' "$PLAN_DIR/tasks.md"
-CODEX_OUTPUT=$(cd "$PROJECT" && printf '{}\n' | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")
-CURSOR_OUTPUT=$(printf '{}\n' | CURSOR_PROJECT_DIR="$PROJECT" "$REPO_ROOT/.cursor/hooks/stop.sh")
-GEMINI_OUTPUT=$(printf '{}\n' | GEMINI_PROJECT_DIR="$PROJECT" "$REPO_ROOT/.gemini/hooks/session-end.sh")
+CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")
 assert_eq "$CODEX_OUTPUT" "{}" "Codex discussion mode"
-assert_eq "$CURSOR_OUTPUT" "" "Cursor discussion mode"
-assert_eq "$GEMINI_OUTPUT" "{}" "Gemini discussion mode"
 
 write_valid_plan
 sed -i 's/^- \[ \] Make the change/- [x] Make the change/; s/in_progress/complete/' "$PLAN_DIR/tasks.md"
-CODEX_OUTPUT=$(cd "$PROJECT" && printf '{}\n' | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")
-CURSOR_OUTPUT=$(printf '{}\n' | CURSOR_PROJECT_DIR="$PROJECT" "$REPO_ROOT/.cursor/hooks/stop.sh")
-GEMINI_OUTPUT=$(printf '{}\n' | GEMINI_PROJECT_DIR="$PROJECT" "$REPO_ROOT/.gemini/hooks/session-end.sh")
+CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")
 assert_contains "$CODEX_OUTPUT" "STALE" "Codex stale Current Phase"
-assert_contains "$CURSOR_OUTPUT" "STALE" "Cursor stale Current Phase"
-assert_contains "$GEMINI_OUTPUT" "STALE" "Gemini stale Current Phase"
 
 printf 'planning contract tests: PASS\n'

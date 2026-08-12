@@ -8,6 +8,11 @@
 ## Goal
 Fix the failed login flow without changing unrelated authentication behavior.
 
+## Task Identity
+- Deliverable: Restore successful login after a valid credential check
+- Anchors: AUTH-421
+- Non-goals: session storage refactors, signup validation
+
 ## Current Phase
 Phase 2
 
@@ -38,6 +43,8 @@ Phase 2
 ```
 
 Only current/incomplete work stays detailed. The old phase is one line because its evidence has moved to history.
+
+On a new prompt, ownership hooks expose only the Task Identity and Goal above. A request to continue `AUTH-421` is `SAME`, so the agent runs the supplied bind command; a report-performance request is `DIFFERENT` even if it touches the same auth module; only unclear wording requires a question.
 
 ## Archive during compaction
 

@@ -6,7 +6,7 @@
 # Always exits 0 - outputs JSON to stdout. Debug log written to
 #   tmp/hook-logs/plan-with-files/post-tool-use.log
 #
-# Pure bash (no python dependency). Tested on bash 4+ (Ubuntu/Debian/Arch).
+# Bash 4+ hook; session JSON uses jq, Python 3, or Node and otherwise fails closed.
 
 set -u
 set -o pipefail 2>/dev/null || true
@@ -15,17 +15,17 @@ set -o pipefail 2>/dev/null || true
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 INPUT=$(cat)
+PROVIDER=codex
+REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)
+STATE_TOOL="$REPO_ROOT/skills/planning-with-files/scripts/session-state.sh"
 
-# --- Early skip: hooks only run when a real task pointer is present ---------
-# Skip silently (emit `{}` and exit 0) if ANY of the following is true:
-#   1. `.plan-with-files-skip` marker file exists at CWD (manual opt-out)
-#   2. `.plan-with-files` pointer file is missing
-#   3. `.plan-with-files` pointer file is empty (whitespace-only counts as empty)
-# This makes the pointer file the explicit opt-in: worktrees, worktree-
-# container workspaces, and unrelated projects all stay silent.
-if [ -e .plan-with-files-skip ] \
-    || [ ! -f .plan-with-files ] \
-    || [ -z "$(tr -d '[:space:]' < .plan-with-files 2>/dev/null)" ]; then
+if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e .plan-with-files-skip ]; then
+    printf '{}'
+    exit 0
+fi
+SESSION_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" session-id 2>/dev/null || true)
+PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" resolve "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+if [ -z "$PLAN_DIR" ]; then
     printf '{}'
     exit 0
 fi
@@ -41,37 +41,8 @@ json_escape() {
     printf '"%s"' "$s"
 }
 
-# --- Resolve plan directory --------------------------------------------------
-# Strict resolution: requires `.plan-with-files` pointer (workspace root) whose
-# first line is a task id, e.g.
-#   $ cat .plan-with-files
-#   JIRA-1234
-# -> hook reads tmp/plan-with-files/JIRA-1234/tasks.md
-# If pointer missing / invalid / target dir missing -> no-op (zero pollution).
-# The planning-with-files skill is responsible for creating both the pointer
-# and the per-task directory; hooks never write files (except the per-task
-# delta-state cache `.hook-state` used to suppress repeated injections).
-PLAN_DIR=""
-PLAN_SOURCE=""
-if [ -f .plan-with-files ]; then
-    TASK_ID=$(head -n 1 .plan-with-files 2>/dev/null | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    # whitelist: alnum, dash, underscore, dot; reject empty / .. / path separators
-    if printf '%s' "$TASK_ID" | grep -Eq '^[A-Za-z0-9._-]+$' && [ "$TASK_ID" != "." ] && [ "$TASK_ID" != ".." ]; then
-        CANDIDATE="tmp/plan-with-files/$TASK_ID"
-        if [ -d "$CANDIDATE" ]; then
-            PLAN_DIR="$CANDIDATE"
-            PLAN_SOURCE=".plan-with-files -> $CANDIDATE"
-        else
-            PLAN_SOURCE=".plan-with-files -> $CANDIDATE (DIR MISSING -> no-op)"
-        fi
-    else
-        PLAN_SOURCE=".plan-with-files -> '$TASK_ID' (INVALID id -> no-op)"
-    fi
-else
-    PLAN_SOURCE="no .plan-with-files pointer -> no-op"
-fi
-PLAN_FILE=""
-[ -n "$PLAN_DIR" ] && PLAN_FILE="$PLAN_DIR/tasks.md"
+PLAN_SOURCE="$PROVIDER session lease -> $PLAN_DIR"
+PLAN_FILE="$PLAN_DIR/tasks.md"
 
 # --- Logging setup (flock-protected against parallel hook processes) --------
 LOG_DIR="tmp/hook-logs/plan-with-files"
@@ -118,6 +89,17 @@ log "${PLAN_FILE}: present (${PLAN_BYTES} bytes)"
 # --- Phase counting (delegated to common.sh:count_phases) ------------------
 count_phases "$PLAN_FILE"
 log "phases: total=$TOTAL complete=$COMPLETE in_progress=$IN_PROGRESS pending=$PENDING"
+
+SETTLED_ISSUE=""
+if [ "$TOTAL" -gt 0 ] && [ $((COMPLETE + DEFERRED)) -ge "$TOTAL" ]; then
+    SETTLED_ISSUE=$(planning_settled_integrity_issue "$PLAN_FILE")
+    if [ -z "$SETTLED_ISSUE" ]; then
+        log "decision: valid owned plan is settled -> emitting {}"
+        echo '{}'
+        exit 0
+    fi
+    log "settled plan remains active because integrity check found: $SETTLED_ISSUE"
+fi
 
 # Per-section hard caps. Prevents runaway model verbosity from inflating
 # per-tool-call cost while preserving BOTH sections (the previous combined
@@ -204,7 +186,8 @@ fi
 #    burst of 8 simultaneous reads) collapse to at most one emission per window;
 #    the rest exit silently with {}.
 NUDGE_DEBOUNCE_SECS=60   # max one nudge per minute during stable runs
-STATE_FILE="$PLAN_DIR/.hook-state"
+STATE_FILE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" cache "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+[ -n "$STATE_FILE" ] || { echo '{}'; exit 0; }
 STATE_LOCK="$STATE_FILE.lock"
 LAST_PHASE_NUM=""
 LAST_REMAINING_COUNT=""
@@ -263,6 +246,11 @@ INJECT_FULL=false
 
 log "emit_nudge=$EMIT_NUDGE inject_full=$INJECT_FULL nudge_age=$((NOW_TS - LAST_NUDGE_TS))s debounce=${NUDGE_DEBOUNCE_SECS}s"
 
+if [ -n "$SETTLED_ISSUE" ]; then
+    EMIT_NUDGE=true
+    INJECT_FULL=true
+fi
+
 if [ "$EMIT_NUDGE" = "false" ]; then
     log "debounce active -> {} (silent)"
     echo '{}'
@@ -289,6 +277,10 @@ ${PHASE_BODY}"
 fi
 
 NUDGE="[planning-with-files] Update tasks.md with what you just did. If a phase is now complete, update ${PLAN_FILE} status. If you no longer see the planning-with-files SKILL.md rules in your context (post-/compact, or you have forgotten them), reload the planning-with-files skill by yourself before continuing."
+if [ -n "$SETTLED_ISSUE" ]; then
+    NUDGE="${NUDGE}
+[planning-with-files] Settled markers failed integrity check (${SETTLED_ISSUE}); keep this owned plan active and fix it before stopping."
+fi
 COMPACTION_WARN=$(planning_file_budget_warning "$PLAN_DIR")
 if [ -n "$COMPACTION_WARN" ]; then
     NUDGE="${NUDGE}
