@@ -2,7 +2,7 @@
         install-skill-copilot install-skill-claude-code install-skill-codex install-skill-kiro install-skills \
         install-hook-copilot install-hook-claude-code install-hook-codex install-hooks \
         install-copilot install-claude-code install-codex install-global install \
-        sync-upstream sync-upstream-rebase sync-upstream-merge
+        sync-upstream sync-upstream-rebase sync-upstream-merge install-hooks-json
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -10,6 +10,7 @@ help: ## Show this help
 test: ## Run planning contract tests
 	@bash tests/test-planning-contract.sh
 	@bash tests/test-session-ownership.sh
+	@bash tests/test-codex-global-hooks.sh
 
 # ---------------------------------------------------------------------------
 # Global installation. Everything is linked back to this repo so local edits are
@@ -75,8 +76,8 @@ check-installs: ## Show global skill/hook install status
 install-skill-codex: ## Link skill into global Codex skills
 	$(call link_path,$(SKILL_SRC),$(CODEX_SKILL))
 
-install-hook-codex: ## Link hook JSON into global Codex
-	$(call link_path,$(CODEX_HOOKS_SRC),$(CODEX_HOOKS))
+install-hook-codex: ## Install global Codex hook wrapper without overwriting unrelated hooks
+	@python3 scripts/install-codex-hooks.py "$(CODEX_HOOKS_SRC)" "$(CODEX_HOOKS)"
 
 install-codex: install-skill-codex install-hook-codex ## Link Codex skill and hook JSON globally
 

@@ -1,5 +1,17 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "statusMessage": "Checking planning ownership",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && cd \"$ROOT\" && bash \"$ROOT/.codex/hooks/planning-with-files/scripts/pre-tool-use.sh\""
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [

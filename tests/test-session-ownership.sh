@@ -198,7 +198,7 @@ assert_eq "$(post_hook codex codex-a)" "{}" "same-session debounce"
 printf '%s\n' task-b > "$PROJECT/.plan-with-files"
 RENEWED=$(prompt codex codex-a)
 assert_contains "$RENEWED" "Candidate task 'task-a'" "session candidate overrides global pointer"
-assert_eq "$(stop_hook codex codex-a)" "{}" "new prompt suspends old lease"
+assert_eq "$(stop_hook codex codex-a)" "{}" "Stop does not own pending binding enforcement"
 bind codex codex-a
 
 # Settled state is checked for integrity before either Stop or PostTool no-ops.

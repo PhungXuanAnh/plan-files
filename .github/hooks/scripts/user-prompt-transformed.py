@@ -27,6 +27,16 @@ def run_state(tool: Path, root: Path, *args: str) -> str:
 
 
 def main() -> None:
+    log_file = Path("tmp/hook-logs/plan-with-files/user-prompt-submit.log")
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    def log(message: str) -> None:
+        try:
+            with log_file.open("a", encoding="utf-8") as handle:
+                handle.write(f"[{__import__('datetime').datetime.utcnow().isoformat()}Z] {message}\n")
+        except OSError:
+            pass
+
+    log("event=UserPromptSubmit provider=copilot")
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, OSError):
@@ -57,9 +67,11 @@ def main() -> None:
     candidate = run_state(state_tool, root, "pending", "copilot", session_id)
     context = run_state(state_tool, root, "candidate-context", candidate, str(bind_tool)) if candidate else ""
     if not context:
+        log("candidate=none")
         print("{}")
         return
 
+    log("candidate_context=emitted")
     print(json.dumps({"modifiedTransformedPrompt": f"{transformed}\n\n{context}"}))
 
 

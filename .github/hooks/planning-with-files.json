@@ -1,6 +1,13 @@
 {
   "version": 1,
   "hooks": {
+    "PreToolUse": [
+      {
+        "type": "command",
+        "bash": "/home/xuananh/repo/planning-with-files/.github/hooks/scripts/pre-tool-use.sh",
+        "timeout": 5
+      }
+    ],
     "userPromptTransformed": [
       {
         "type": "command",

@@ -37,3 +37,4 @@ tmp/
 .mcp.json
 .kiro/settings/mcp.json
 temp.sh
+__pycache__

@@ -18,8 +18,18 @@ PROVIDER=codex
 REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)
 STATE_TOOL="$REPO_ROOT/skills/planning-with-files/scripts/session-state.sh"
 
-# A pointer is only a candidate. Stop enforcement requires a prompt-confirmed
-# lease for this exact provider session.
+json_escape() {
+    local s=${1:-}
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    s=${s//$'\t'/\\t}
+    s=${s//$'\r'/\\r}
+    s=${s//$'\n'/\\n}
+    printf '"%s"' "$s"
+}
+
+# Ownership enforcement happens at UserPromptSubmit + PreToolUse. Stop only
+# checks completion state for an owned session.
 if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e .plan-with-files-skip ]; then
     printf '{}'
     exit 0

@@ -113,6 +113,17 @@ resolve_owned() {
     printf '%s/%s' "$PLAN_ROOT" "$task"
 }
 
+pending_candidate() {
+    local adapter_id=$1 session_id=$2 file status candidate
+    file=$(route_file "$adapter_id" "$session_id") || return 1
+    [ -f "$file" ] || return 1
+    status=$(read_value "$file" status)
+    [ "$status" = "pending" ] || return 1
+    candidate=$(read_value "$file" candidate)
+    task_exists "$candidate" || return 1
+    printf '%s' "$candidate"
+}
+
 cache_file() {
     local file
     file=$(route_file "$1" "$2") || return 1
@@ -156,6 +167,43 @@ bind_current() {
     printf 'planning task bound for this prompt: %s\n' "$task_id"
 }
 
+release_current() {
+    local task_id=$1 identity adapter_id session_id file candidate pointer_id=""
+    if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e "$PROJECT_ROOT/.plan-with-files-skip" ]; then
+        printf 'planning-with-files is disabled for this project or session\n' >&2
+        return 1
+    fi
+    valid_task_id "$task_id" || {
+        printf 'invalid planning task id: %s\n' "$task_id" >&2
+        return 1
+    }
+    identity=$(current_identity) || {
+        printf 'no verified planning session identity is available\n' >&2
+        return 1
+    }
+    adapter_id=${identity%%$'\t'*}
+    session_id=${identity#*$'\t'}
+    file=$(route_file "$adapter_id" "$session_id") || return 1
+    candidate=$(pending_candidate "$adapter_id" "$session_id" 2>/dev/null || true)
+    [ "$candidate" = "$task_id" ] || {
+        printf 'planning lease is not pending for candidate: %s\n' "$task_id" >&2
+        return 1
+    }
+
+    if [ -f "$PROJECT_ROOT/.plan-with-files" ]; then
+        pointer_id=$(head -n 1 "$PROJECT_ROOT/.plan-with-files" 2>/dev/null \
+            | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    fi
+
+    rm -f "$file" "${file%.state}.hook-state" "${file%.state}.hook-state.lock"
+    if [ "$pointer_id" = "$task_id" ]; then
+        : > "$PROJECT_ROOT/.plan-with-files"
+        printf 'planning candidate released and pointer cleared: %s\n' "$task_id"
+    else
+        printf 'planning candidate released; pointer left unchanged: %s\n' "$task_id"
+    fi
+}
+
 extract_section() {
     local file=$1 name=$2 max_chars=$3 text
     text=$(awk -v name="$name" '
@@ -190,10 +238,10 @@ candidate_context() {
     printf -v project_root_arg '%q' "$PROJECT_ROOT"
     printf -v bind_tool_arg '%q' "$bind_tool"
     printf -v task_arg '%q' "$task_id"
-    printf '\n%s\n' "Classify the latest request using deterministic identity evidence first, then semantics: SAME, DIFFERENT, or AMBIGUOUS."
+    printf '\n%s\n' "Classify the latest request using deterministic identity evidence first, then semantics: SAME, DIFFERENT, or AMBIGUOUS. A pending candidate MUST be resolved before any tool use: bind it for SAME, or release it when you will not continue it."
     printf '%s\n' "- SAME: run \`PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg bind $task_arg\` before reading tasks.md, decisions.md, findings.md, or handoff.md."
-    printf '%s\n' "- DIFFERENT: do not bind or mutate this candidate. If the new request needs a plan, create it, then run \`PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg bind <new-task-id>\`."
-    printf '%s\n' "- AMBIGUOUS: ask the user before mutating or switching any plan."
+    printf '%s\n' "- DIFFERENT: first run \`PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg release $task_arg\`; this clears .plan-with-files only if it still points to this candidate. Then continue separately, creating/binding a new plan only if needed."
+    printf '%s\n' "- AMBIGUOUS: ask the user before mutating or switching a plan. If you must stop while waiting, release this candidate first so no unresolved pointer survives the turn."
 }
 
 extract_session_id() {
@@ -248,6 +296,10 @@ case "$command" in
         [ "$#" -eq 3 ] || exit 2
         resolve_owned "$2" "$3"
         ;;
+    pending-candidate)
+        [ "$#" -eq 3 ] || exit 2
+        pending_candidate "$2" "$3"
+        ;;
     cache)
         [ "$#" -eq 3 ] || exit 2
         cache_file "$2" "$3"
@@ -256,12 +308,16 @@ case "$command" in
         [ "$#" -eq 2 ] || exit 2
         bind_current "$2"
         ;;
+    release)
+        [ "$#" -eq 2 ] || exit 2
+        release_current "$2"
+        ;;
     candidate-context)
         [ "$#" -eq 3 ] || exit 2
         candidate_context "$2" "$3"
         ;;
     *)
-        printf 'usage: %s {bind TASK_ID|pending ADAPTER_ID SESSION_ID|resolve ADAPTER_ID SESSION_ID|cache ADAPTER_ID SESSION_ID|session-id|candidate-context TASK_ID BIND_TOOL}\n' "$0" >&2
+        printf 'usage: %s {bind TASK_ID|release TASK_ID|pending ADAPTER_ID SESSION_ID|pending-candidate ADAPTER_ID SESSION_ID|resolve ADAPTER_ID SESSION_ID|cache ADAPTER_ID SESSION_ID|session-id|candidate-context TASK_ID BIND_TOOL}\n' "$0" >&2
         exit 2
         ;;
 esac

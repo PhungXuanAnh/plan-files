@@ -101,6 +101,44 @@ bash -n "$REPO_ROOT"/.codex/hooks/planning-with-files/scripts/*.sh \
     "$REPO_ROOT"/.claude/hooks/planning-with-files/scripts/*.sh \
     "$REPO_ROOT"/.github/hooks/scripts/*.sh
 
+# Compaction gate: observations stay possible, mutations stay in planning scope.
+printf '%s' '{"tool_name":"rg","tool_input":{"command":"rg Phase ."}}' | python3 "$REPO_ROOT/skills/planning-with-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR" || fail "compaction allows read search"
+printf '%s' '{"tool_name":"mcp__serena__search_for_pattern","tool_input":{"substring_pattern":"Phase","relative_path":"src"}}' | python3 "$REPO_ROOT/skills/planning-with-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR" || fail "compaction allows Serena read search"
+printf '%s' '{"tool_name":"Bash","tool_input":{"command":"git status --short"}}' | python3 "$REPO_ROOT/skills/planning-with-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR" || fail "compaction allows read-only git status"
+if printf '%s' '{"tool_name":"Bash","tool_input":{"command":"git checkout -- src/main.py"}}' | python3 "$REPO_ROOT/skills/planning-with-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR"; then
+    fail "compaction blocks mutating git command"
+fi
+if printf '%s' '{"tool_name":"apply_patch","tool_input":{"patch":"*** Update File: src/main.py"}}' | python3 "$REPO_ROOT/skills/planning-with-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR"; then
+    fail "compaction blocks source mutation"
+fi
+printf '%s' "{\"tool_name\":\"apply_patch\",\"tool_input\":{\"patch\":\"*** Update File: $PLAN_DIR/tasks.md\"}}" | python3 "$REPO_ROOT/skills/planning-with-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR" || fail "compaction allows plan mutation"
+printf '%s' "{\"tool_name\":\"apply_patch\",\"tool_input\":{\"command\":\"*** Begin Patch\\n*** Update File: $PLAN_DIR/history.md\\n*** End Patch\"}}" | python3 "$REPO_ROOT/skills/planning-with-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR" || fail "compaction allows bridge apply_patch command payload"
+printf '%s' "{\"tool_name\":\"codex_apply_patch\",\"tool_input\":{\"opaque\":\"write $PLAN_DIR/history.md\"}}" | python3 "$REPO_ROOT/skills/planning-with-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR" || fail "compaction allows unknown mutation tool with exact owned plan reference"
+if printf '%s' '{"tool_name":"codex_apply_patch","tool_input":{"opaque":"write history.md"}}' | python3 "$REPO_ROOT/skills/planning-with-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR"; then
+    fail "compaction does not trust plan basenames without owned plan path"
+fi
+if printf '%s' "{\"tool_name\":\"apply_patch\",\"tool_input\":{\"patch\":\"*** Update File: $PLAN_DIR/tasks.md\\n*** Update File: src/main.py\"}}" | python3 "$REPO_ROOT/skills/planning-with-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR"; then
+    fail "compaction requires every patch target inside plan"
+fi
+printf '%s' "{\"tool_name\":\"mcp__serena__replace_content\",\"tool_input\":{\"relative_path\":\"$PLAN_DIR/findings.md\",\"needle\":\"old\",\"repl\":\"new\"}}" | python3 "$REPO_ROOT/skills/planning-with-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR" || fail "compaction allows Serena plan mutation"
+if printf '%s' '{"tool_name":"mcp__serena__replace_content","tool_input":{"relative_path":"src/main.py","needle":"old","repl":"new"}}' | python3 "$REPO_ROOT/skills/planning-with-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR"; then
+    fail "compaction blocks Serena source mutation"
+fi
+
+# The actual blocked PreToolUse response tells the model what remains allowed.
+write_valid_plan
+head -c 33000 /dev/zero | tr '\0' x > "$PLAN_DIR/findings.md"
+PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" pending codex codex-compaction >/dev/null
+PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=codex PWF_SESSION_ID=codex-compaction "$STATE_TOOL" bind test-task >/dev/null
+COMPACTION_BLOCK=$(cd "$PROJECT" && printf '%s\n' '{"session_id":"codex-compaction","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"npm test"}}' | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/pre-tool-use.sh")
+assert_contains "$COMPACTION_BLOCK" "demonstrably read-only" "compaction block explains project reads"
+assert_contains "$COMPACTION_BLOCK" "does not require a specific mutation tool name" "compaction block explains schema-independent plan mutations"
+assert_contains "$COMPACTION_BLOCK" "$PLAN_DIR" "compaction block names owned plan directory"
+COMPACTION_LOG=$(cat "$PROJECT/tmp/hook-logs/plan-with-files/pre-tool-use.log")
+assert_contains "$COMPACTION_LOG" "tool_call tool_name=Bash" "pre-tool log records full tool name"
+assert_contains "$COMPACTION_LOG" 'tool_input={"command":"npm test"}' "pre-tool log records full tool parameters"
+assert_contains "$COMPACTION_LOG" "decision=block-compaction tool=Bash" "pre-tool log correlates blocked decision"
+
 CODEX_PAYLOAD='{"session_id":"codex-contract","hook_event_name":"Stop","stop_hook_active":false}'
 CLAUDE_PAYLOAD='{"session_id":"claude-contract","hook_event_name":"Stop","stop_hook_active":false}'
 COPILOT_PAYLOAD='{"session_id":"copilot-contract","hook_event_name":"Stop","stop_hook_active":false}'
