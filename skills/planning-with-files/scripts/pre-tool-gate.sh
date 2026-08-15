@@ -145,7 +145,7 @@ if [ -z "$PLAN_DIR" ]; then
         log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-exact-release tool=$TOOL_NAME"
         printf '{}'; exit 0
     fi
-    REASON_TEXT="[planning-with-files] Tool use blocked while candidate '$CANDIDATE' is pending. Run exactly one ownership action first: $EXPECTED_BIND OR $EXPECTED_RELEASE"
+    REASON_TEXT="[planning-with-files] OWNERSHIP ACTION REQUIRED (not a permission failure and not an external blocker). Candidate '$CANDIDATE' is pending for this prompt. Do not stop or report that the environment is blocked. Resolve ownership now by running exactly one action: SAME task -> $EXPECTED_BIND OR DIFFERENT task -> $EXPECTED_RELEASE. After bind/release succeeds, retry the original tool call."
     log "session=$SESSION_ID candidate=$CANDIDATE decision=block-ownership tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
     printf '{"decision":"block","reason":%s}' "$(json_escape "$REASON_TEXT")"
     exit 0

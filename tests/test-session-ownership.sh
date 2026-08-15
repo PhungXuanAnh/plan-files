@@ -193,12 +193,17 @@ assert_contains "$FIRST_POST" "Update tasks.md" "first session PostTool"
 assert_contains "$SECOND_POST" "Update tasks.md" "second session PostTool"
 assert_eq "$(post_hook codex codex-a)" "{}" "same-session debounce"
 
+# Pending ownership must be recoverable, not interpreted as an environment block.
+PENDING_OUTPUT=$(prompt codex codex-pending)
+assert_contains "$PENDING_OUTPUT" "Candidate task" "pending ownership candidate"
+assert_contains "$(cd "$PROJECT" && printf '%s\n' '{"session_id":"codex-pending","hook_event_name":"Stop"}' | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")" "OWNERSHIP ACTION REQUIRED" "pending ownership Stop block"
+
 # A prior owned task overrides a changed global candidate, but every prompt
 # suspends enforcement until SAME is confirmed again.
 printf '%s\n' task-b > "$PROJECT/.plan-with-files"
 RENEWED=$(prompt codex codex-a)
 assert_contains "$RENEWED" "Candidate task 'task-a'" "session candidate overrides global pointer"
-assert_eq "$(stop_hook codex codex-a)" "{}" "Stop does not own pending binding enforcement"
+assert_contains "$(stop_hook codex codex-a)" "OWNERSHIP ACTION REQUIRED" "Stop enforces pending ownership"
 bind codex codex-a
 
 # Settled state is checked for integrity before either Stop or PostTool no-ops.

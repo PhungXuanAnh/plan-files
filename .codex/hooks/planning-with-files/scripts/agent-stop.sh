@@ -37,6 +37,13 @@ fi
 SESSION_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" session-id 2>/dev/null || true)
 PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" resolve "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
 if [ -z "$PLAN_DIR" ]; then
+    CANDIDATE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" pending-candidate "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+    if [ -n "$CANDIDATE" ]; then
+        REASON="[planning-with-files] OWNERSHIP ACTION REQUIRED before stopping. Candidate '$CANDIDATE' is still pending. Do not stop or report a blocker. Run the provided bind or release command from the ownership prompt, then continue."
+        ESCAPED_REASON=$(json_escape "$REASON")
+        printf '{"decision":"block","reason":%s}' "$ESCAPED_REASON"
+        exit 0
+    fi
     printf '{}'
     exit 0
 fi
@@ -97,6 +104,17 @@ log "cwd: $(pwd)"
 log "plan source: $PLAN_SOURCE -> $PLAN_FILE"
 INPUT_PREVIEW=$(printf '%s' "$INPUT" | tr '\n' ' ' | cut -c 1-300)
 log "stdin (first 300 chars, ${#INPUT} total): $INPUT_PREVIEW"
+
+# Runtime recursion guard: after a Stop hook blocks, Codex re-enters the same
+# Stop cycle with stop_hook_active=true so the block reason can be delivered
+# back to the model. Blocking that recursive invocation deadlocks the runtime
+# inside the hook loop. Fresh Stop attempts still arrive with false and are
+# evaluated normally below, so unfinished work is enforced again next cycle.
+if printf '%s' "$INPUT" | grep -Eq '"stop_hook_active"[[:space:]]*:[[:space:]]*true([^a-zA-Z]|$)'; then
+    log "decision: REENTRY ALLOW (stop_hook_active=true) -> emitting {}"
+    echo '{}'
+    exit 0
+fi
 
 if [ ! -f "$PLAN_FILE" ]; then
     log "${PLAN_FILE:-tasks.md}: ABSENT -> emitting {} (no-op)"

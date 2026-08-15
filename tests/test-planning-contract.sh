@@ -161,8 +161,10 @@ GITHUB_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$COPILOT_PAYLOAD" | "$REPO_ROOT/
 assert_contains "$CODEX_OUTPUT" "Task incomplete" "Codex Stop adapter"
 assert_contains "$CLAUDE_OUTPUT" "Task incomplete" "Claude Stop adapter"
 assert_contains "$GITHUB_OUTPUT" "Task incomplete" "Copilot Stop adapter"
-assert_contains "$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")" "Task incomplete" "Codex repeated Stop stays blocked"
-assert_contains "$(cd "$PROJECT" && printf '%s\n' "$COPILOT_REPEAT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")" "Task incomplete" "Copilot repeated Stop stays blocked"
+assert_eq "$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")" "{}" "Codex recursive Stop re-entry is allowed"
+assert_eq "$(cd "$PROJECT" && printf '%s\n' "$COPILOT_REPEAT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")" "{}" "Copilot recursive Stop re-entry is allowed"
+assert_contains "$(cd "$PROJECT" && printf '%s\n' "$CODEX_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")" "Task incomplete" "Codex next fresh Stop is blocked again"
+assert_contains "$(cd "$PROJECT" && printf '%s\n' "$COPILOT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")" "Task incomplete" "Copilot next fresh Stop is blocked again"
 
 write_valid_plan
 sed -i 's/in_progress/deferred (external dependency unavailable)/; s/pending/deferred (external dependency unavailable)/' "$PLAN_DIR/tasks.md"
