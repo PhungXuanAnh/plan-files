@@ -86,24 +86,6 @@ log "plan source: $PLAN_SOURCE -> $PLAN_FILE"
 INPUT_PREVIEW=$(printf '%s' "$INPUT" | tr '\n' ' ' | cut -c 1-300)
 log "stdin (first 300 chars, ${#INPUT} total): $INPUT_PREVIEW"
 
-# --- stop_hook_active guard --------------------------------------------------
-# Per docs: if we previously blocked the Stop and the agent is now stopping
-# again (after running our reason), `stop_hook_active=true` is set in stdin.
-# We MUST emit {} in that case to avoid an infinite loop that burns premium
-# requests. Pure-grep parse: matches `"stop_hook_active": true` with optional
-# whitespace and a non-letter trailer (so `truthy`/`truely` won't false-match).
-if printf '%s' "$INPUT" | grep -Eq '"stop_hook_active"[[:space:]]*:[[:space:]]*true([^a-zA-Z]|$)'; then
-    STOP_HOOK_ACTIVE=true
-else
-    STOP_HOOK_ACTIVE=false
-fi
-log "stop_hook_active: $STOP_HOOK_ACTIVE"
-if [ "$STOP_HOOK_ACTIVE" = "true" ]; then
-    log "decision: GUARDED (stop_hook_active=true) -> emitting {} to break loop"
-    echo '{}'
-    exit 0
-fi
-
 if [ ! -f "$PLAN_FILE" ]; then
     log "${PLAN_FILE:-tasks.md}: ABSENT -> emitting {} (no-op)"
     echo '{}'
