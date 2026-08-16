@@ -5,7 +5,7 @@ REPO_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-SOURCE="$REPO_ROOT/.codex/hooks.json"
+SOURCE="$REPO_ROOT/.codex/hooks.json.sample"
 DEST="$TMP_DIR/hooks.json"
 
 python3 "$REPO_ROOT/scripts/install-codex-hooks.py" "$SOURCE" "$DEST"

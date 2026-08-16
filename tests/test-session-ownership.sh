@@ -74,21 +74,32 @@ write_valid_settled() {
 }
 
 prompt() {
-    local provider=$1 session=$2
+    local provider=$1 session=$2 text=${3:-continue task-a}
     case "$provider" in
         codex)
-            (cd "$PROJECT" && printf '{"session_id":"%s","hook_event_name":"UserPromptSubmit","prompt":"continue task-a"}\n' "$session" \
+            (cd "$PROJECT" && printf '{"session_id":"%s","hook_event_name":"UserPromptSubmit","prompt":"%s"}\n' "$session" "$text" \
                 | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/user-prompt-submit.sh")
             ;;
         claude)
-            (cd "$PROJECT" && printf '{"session_id":"%s","hook_event_name":"UserPromptSubmit","prompt":"continue task-a"}\n' "$session" \
+            (cd "$PROJECT" && printf '{"session_id":"%s","hook_event_name":"UserPromptSubmit","prompt":"%s"}\n' "$session" "$text" \
                 | "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/user-prompt-submit.sh")
             ;;
         copilot)
-            (cd "$PROJECT" && printf '{"sessionId":"%s","transformedPrompt":"continue task-a"}\n' "$session" \
+            (cd "$PROJECT" && printf '{"sessionId":"%s","transformedPrompt":"%s"}\n' "$session" "$text" \
                 | "$REPO_ROOT/.github/hooks/scripts/user-prompt-transformed.py")
             ;;
     esac
+}
+
+pre_tool_patch() {
+    local provider=$1 session=$2 patch=$3 script
+    case "$provider" in
+        codex) script="$REPO_ROOT/.codex/hooks/planning-with-files/scripts/pre-tool-use.sh" ;;
+        claude) script="$REPO_ROOT/.claude/hooks/planning-with-files/scripts/pre-tool-use.sh" ;;
+        copilot) script="$REPO_ROOT/.github/hooks/scripts/pre-tool-use.sh" ;;
+    esac
+    (cd "$PROJECT" && python3 -c 'import json,sys
+print(json.dumps({"session_id": sys.argv[1], "hook_event_name": "PreToolUse", "tool_name": "apply_patch", "tool_input": {"patch": sys.argv[2]}}))' "$session" "$patch" | "$script")
 }
 
 bind() {
@@ -137,6 +148,46 @@ error_hook() {
 
 write_incomplete task-a
 write_incomplete task-b
+printf '%s\n' task-a > "$PROJECT/.plan-with-files"
+
+# An explicit prompt path seeds a candidate even when the global pointer is empty.
+: > "$PROJECT/.plan-with-files"
+EXPLICIT_PLAN_PATH="$PROJECT/tmp/plan-with-files/task-a/tasks.md"
+for SPEC in 'codex codex-path' 'claude claude-path' 'copilot copilot-path'; do
+    set -- $SPEC
+    assert_contains "$(prompt "$1" "$2" "edit $EXPLICIT_PLAN_PATH")" \
+        "Candidate task 'task-a'" "$1 explicit prompt-path candidate"
+done
+
+# A plan mutation is stronger evidence than a skipped prompt handshake: claim
+# an empty pending lease immediately before the mutation for every provider.
+for SPEC in 'codex codex-auto' 'claude claude-auto' 'copilot copilot-auto'; do
+    set -- $SPEC
+    PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" pending "$1" "$2" >/dev/null
+    PATCH="*** Begin Patch
+*** Update File: $EXPLICIT_PLAN_PATH
+*** End Patch"
+    assert_eq "$(pre_tool_patch "$1" "$2" "$PATCH")" "{}" "$1 plan mutation auto-claim"
+    assert_eq "$(PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" resolve "$1" "$2")" \
+        "$PROJECT/tmp/plan-with-files/task-a" "$1 auto-claim ownership"
+done
+assert_eq "$(cat "$PROJECT/.plan-with-files")" "" "auto-claim leaves global pointer empty"
+
+# Ownership never switches silently and a multi-plan mutation is ambiguous.
+CONFLICT_PATCH="*** Update File: $PROJECT/tmp/plan-with-files/task-b/tasks.md"
+assert_contains "$(pre_tool_patch codex codex-auto "$CONFLICT_PATCH")" \
+    "owns 'task-a'" "owned-plan mutation conflict"
+assert_eq "$(PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" resolve codex codex-auto)" \
+    "$PROJECT/tmp/plan-with-files/task-a" "conflict preserves ownership"
+PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" pending codex codex-pending-conflict task-b >/dev/null
+assert_contains "$(pre_tool_patch codex codex-pending-conflict \
+    "*** Update File: $EXPLICIT_PLAN_PATH")" "pending for task-b" \
+    "different pending candidate blocks auto-claim"
+MULTI_PATCH="*** Update File: $PROJECT/tmp/plan-with-files/task-a/tasks.md
+*** Update File: $PROJECT/tmp/plan-with-files/task-b/tasks.md"
+assert_contains "$(pre_tool_patch codex codex-multi "$MULTI_PATCH")" \
+    "more than one planning task" "multi-plan mutation blocks"
+
 printf '%s\n' task-a > "$PROJECT/.plan-with-files"
 
 # Shared state accepts a future safe adapter id and works through a skill symlink.

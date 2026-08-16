@@ -143,6 +143,7 @@ CODEX_PAYLOAD='{"session_id":"codex-contract","hook_event_name":"Stop","stop_hoo
 CLAUDE_PAYLOAD='{"session_id":"claude-contract","hook_event_name":"Stop","stop_hook_active":false}'
 COPILOT_PAYLOAD='{"session_id":"copilot-contract","hook_event_name":"Stop","stop_hook_active":false}'
 CODEX_REPEAT_PAYLOAD='{"session_id":"codex-contract","hook_event_name":"Stop","stop_hook_active":true}'
+CLAUDE_REPEAT_PAYLOAD='{"session_id":"claude-contract","hook_event_name":"Stop","stop_hook_active":true}'
 COPILOT_REPEAT_PAYLOAD='{"session_id":"copilot-contract","hook_event_name":"Stop","stop_hook_active":true}'
 
 CODEX_CANDIDATE=$(cd "$PROJECT" && printf '%s\n' '{"session_id":"codex-contract","hook_event_name":"UserPromptSubmit","prompt":"continue contract-fixture"}' | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/user-prompt-submit.sh")
@@ -161,16 +162,17 @@ GITHUB_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$COPILOT_PAYLOAD" | "$REPO_ROOT/
 assert_contains "$CODEX_OUTPUT" "Task incomplete" "Codex Stop adapter"
 assert_contains "$CLAUDE_OUTPUT" "Task incomplete" "Claude Stop adapter"
 assert_contains "$GITHUB_OUTPUT" "Task incomplete" "Copilot Stop adapter"
-assert_eq "$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")" "{}" "Codex recursive Stop re-entry is allowed"
-assert_eq "$(cd "$PROJECT" && printf '%s\n' "$COPILOT_REPEAT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")" "{}" "Copilot recursive Stop re-entry is allowed"
-assert_contains "$(cd "$PROJECT" && printf '%s\n' "$CODEX_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")" "Task incomplete" "Codex next fresh Stop is blocked again"
-assert_contains "$(cd "$PROJECT" && printf '%s\n' "$COPILOT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")" "Task incomplete" "Copilot next fresh Stop is blocked again"
+assert_contains "$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")" "Task incomplete" "Codex active Stop remains blocked"
+assert_contains "$(cd "$PROJECT" && printf '%s\n' "$CLAUDE_REPEAT_PAYLOAD" | "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/agent-stop.sh")" "Task incomplete" "Claude active Stop remains blocked"
+assert_contains "$(cd "$PROJECT" && printf '%s\n' "$COPILOT_REPEAT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")" "Task incomplete" "Copilot active Stop remains blocked"
 
 write_valid_plan
 sed -i 's/in_progress/deferred (external dependency unavailable)/; s/pending/deferred (external dependency unavailable)/' "$PLAN_DIR/tasks.md"
 CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")
+CLAUDE_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CLAUDE_REPEAT_PAYLOAD" | "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/agent-stop.sh")
 GITHUB_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$COPILOT_REPEAT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")
 assert_eq "$CODEX_OUTPUT" "{}" "Codex repeated Stop allows valid deferred phases"
+assert_eq "$CLAUDE_OUTPUT" "{}" "Claude repeated Stop allows valid deferred phases"
 assert_eq "$GITHUB_OUTPUT" "{}" "Copilot repeated Stop allows valid deferred phases"
 
 write_valid_plan

@@ -86,16 +86,6 @@ log "plan source: $PLAN_SOURCE -> $PLAN_FILE"
 INPUT_PREVIEW=$(printf '%s' "$INPUT" | tr '\n' ' ' | cut -c 1-300)
 log "stdin (first 300 chars, ${#INPUT} total): $INPUT_PREVIEW"
 
-# Runtime recursion guard: after a Stop hook blocks, the host may re-enter the
-# same Stop cycle with stop_hook_active=true. Allow that recursive invocation
-# so the continuation reason can reach the model. Every fresh Stop attempt is
-# still evaluated normally and remains blocked while work is incomplete.
-if printf '%s' "$INPUT" | grep -Eq '"stop_hook_active"[[:space:]]*:[[:space:]]*true([^a-zA-Z]|$)'; then
-    log "decision: REENTRY ALLOW (stop_hook_active=true) -> emitting {}"
-    echo '{}'
-    exit 0
-fi
-
 if [ ! -f "$PLAN_FILE" ]; then
     log "${PLAN_FILE:-tasks.md}: ABSENT -> emitting {} (no-op)"
     echo '{}'

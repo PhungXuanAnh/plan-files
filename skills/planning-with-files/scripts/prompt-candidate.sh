@@ -8,6 +8,7 @@ ADAPTER_ID=${1:-}
 BIND_TOOL=${2:-}
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 STATE_TOOL="$SCRIPT_DIR/session-state.sh"
+TARGET_TOOL="$SCRIPT_DIR/maintenance-tool-allowed.py"
 INPUT=$(cat)
 
 if [ -z "$ADAPTER_ID" ] || [ ! -x "$BIND_TOOL" ] \
@@ -20,7 +21,10 @@ if [ -z "$SESSION_ID" ]; then
     exit 0
 fi
 
-CANDIDATE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" pending "$ADAPTER_ID" "$SESSION_ID" 2>/dev/null || true)
+PROMPT_CANDIDATE=$(printf '%s' "$INPUT" \
+    | python3 "$TARGET_TOOL" prompt-plan-id "$PWD" 2>/dev/null || true)
+CANDIDATE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" pending \
+    "$ADAPTER_ID" "$SESSION_ID" "$PROMPT_CANDIDATE" 2>/dev/null || true)
 if [ -z "$CANDIDATE" ]; then
     exit 0
 fi

@@ -2,7 +2,7 @@
 
 Persistent file-based planning for AI coding agents.
 
-The canonical skill lives in [skills/planning-with-files](./skills/planning-with-files). IDE-specific skill folders should link to that folder instead of copying it. IDE hook scripts stay in the IDE-specific folders because each tool expects hooks in a different location and format.
+The canonical skill lives in [skills/planning-with-files](./skills/planning-with-files). IDE-specific skill folders should link to that folder instead of copying it. IDE hook scripts stay in the IDE-specific folders because each tool expects hooks in a different location and format. Repository hook configs end in `.sample`; only the global hook layer is enabled by default.
 
 ## Current Workflow
 
@@ -66,19 +66,25 @@ Ask the agent to use the `planning-with-files` skill for any multi-step task. Th
 
 Codex, Claude Code, and GitHub Copilot hooks implement this prompt-scoped ownership handshake. An unbound or unidentified session receives no full plan injection and no hard Stop/PostTool enforcement. Future adapters can implement the same generic ownership interface without changing the shared skill contract.
 
+When `.plan-with-files` is empty, an exact `tmp/plan-with-files/<task-id>/*.md` path in the user prompt becomes the fallback candidate. As a stronger safety net, PreToolUse auto-claims an unowned session immediately before a recognized mutation that targets Markdown in exactly one existing plan directory. It never changes `.plan-with-files`, never silently switches an owned or different pending task, and blocks multi-plan mutations as ambiguous.
+
+Stop completion is re-evaluated on every invocation, including recursive invocations marked `stop_hook_active=true`. Incomplete or structurally invalid active work remains blocked indefinitely; the existing planning-mode, deferred-phase, disabled-session, unowned-session, and fully settled allow conditions still apply.
+
 The canonical skill remains host-neutral. Each ownership-aware hook adapter resolves its own session identity and injects a directly executable bind command, so the skill never hardcodes `/home/...` or requires the agent to discover hook scripts. An absolute command produced by a hook may point through a symlink or to the source tree; both are valid.
 
 The GitHub `user-prompt-transformed.py` file is intentionally adapter-specific: that event must preserve the incoming transformed prompt and return it as `modifiedTransformedPrompt` with candidate context appended. Shared candidate selection and state remain in the canonical skill scripts.
 
 ## Install Shape
 
-Use the canonical skill folder as the source of truth:
+Install all supported skills and hooks globally from this checkout:
 
 ```bash
-ln -s ../../skills/planning-with-files .codex/skills/planning-with-files
+make install-global
 ```
 
-Adjust the relative path for the target IDE folder. Keep hook scripts in the IDE-specific hook directories.
+`make install-hooks` installs only the hooks. Claude Code and Copilot global configs are symlinks to the corresponding `.sample` files in this repository. Codex merges its sample into `~/.codex/hooks.json` to preserve unrelated global hooks, while the generated commands point back to this repository's scripts. Hook script edits therefore apply globally without reinstalling; rerun `make install-hooks` only after changing hook config JSON or moving this checkout.
+
+Do not rename the `.sample` files back to active project-local config names unless a second local hook layer is intentional. Codex runs every matching global and project hook, so enabling both layers executes both configurations.
 
 ## License
 

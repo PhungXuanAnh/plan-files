@@ -10,13 +10,16 @@ import sys
 from pathlib import Path
 
 
-def run_state(tool: Path, root: Path, *args: str) -> str:
+def run_prompt_candidate(
+    tool: Path, root: Path, bind_tool: Path, payload: str
+) -> str:
     env = {**os.environ, "PWF_PROJECT_ROOT": str(root)}
     try:
         result = subprocess.run(
-            [str(tool), *args],
+            [str(tool), "copilot", str(bind_tool)],
             cwd=root,
             env=env,
+            input=payload,
             text=True,
             capture_output=True,
             check=False,
@@ -38,7 +41,8 @@ def main() -> None:
 
     log("event=UserPromptSubmit provider=copilot")
     try:
-        payload = json.load(sys.stdin)
+        raw_payload = sys.stdin.read()
+        payload = json.loads(raw_payload)
     except (json.JSONDecodeError, OSError):
         print("{}")
         return
@@ -62,10 +66,9 @@ def main() -> None:
         return
 
     repo_root = Path(__file__).resolve().parents[3]
-    state_tool = repo_root / "skills/planning-with-files/scripts/session-state.sh"
+    prompt_tool = repo_root / "skills/planning-with-files/scripts/prompt-candidate.sh"
     bind_tool = repo_root / ".github/hooks/scripts/bind-session.sh"
-    candidate = run_state(state_tool, root, "pending", "copilot", session_id)
-    context = run_state(state_tool, root, "candidate-context", candidate, str(bind_tool)) if candidate else ""
+    context = run_prompt_candidate(prompt_tool, root, bind_tool, raw_payload)
     if not context:
         log("candidate=none")
         print("{}")

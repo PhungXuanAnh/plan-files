@@ -117,17 +117,63 @@ maintenance_tool_allowed() {
     printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" "$plan_dir"
 }
 
+mutation_plan_id() {
+    command -v python3 >/dev/null 2>&1 || return 1
+    printf '%s' "$INPUT" \
+        | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" mutation-plan-id "$PWD"
+}
+
+block() {
+    local reason=$1
+    printf '{"decision":"block","reason":%s}' "$(json_escape "$reason")"
+    exit 0
+}
+
 TOOL_NAME=$(extract_tool_name)
 TOOL_INPUT_JSON=$(extract_tool_input_json)
 log "event=PreToolUse input_bytes=${#INPUT}"
 log "tool_call tool_name=$TOOL_NAME tool_input=$TOOL_INPUT_JSON"
 [ -n "$PROVIDER" ] && [ -x "$BIND_TOOL" ] || { log "decision=allow reason=invalid-adapter-config"; printf '{}'; exit 0; }
+[ "${PLANNING_DISABLED:-0}" != "1" ] && [ ! -e .plan-with-files-skip ] \
+    || { log "decision=allow reason=planning-disabled"; printf '{}'; exit 0; }
 
 SESSION_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" session-id 2>/dev/null || true)
 [ -n "$SESSION_ID" ] || { log "decision=allow reason=no-verified-session"; printf '{}'; exit 0; }
 
 TOOL_COMMAND=$(extract_tool_command)
+MUTATION_STATUS=0
+MUTATION_PLAN=$(mutation_plan_id 2>/dev/null) || MUTATION_STATUS=$?
+if [ "$MUTATION_STATUS" -eq 2 ]; then
+    REASON_TEXT="[planning-with-files] PLAN MUTATION BLOCKED. This tool call targets Markdown in more than one planning task. Split it into one plan directory per call so session ownership is deterministic."
+    log "session=$SESSION_ID decision=block-ambiguous-plan-mutation tool=$TOOL_NAME"
+    block "$REASON_TEXT"
+fi
+
 PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" resolve "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+
+if [ -n "$MUTATION_PLAN" ]; then
+    if [ -n "$PLAN_DIR" ]; then
+        OWNED_PLAN=$(basename "$PLAN_DIR")
+        if [ "$OWNED_PLAN" != "$MUTATION_PLAN" ]; then
+            REASON_TEXT="[planning-with-files] PLAN MUTATION BLOCKED. This session owns '$OWNED_PLAN', but the tool call targets plan '$MUTATION_PLAN'. Finish/release the current scope or use the correct session; ownership will not switch silently."
+            log "session=$SESSION_ID owned=$OWNED_PLAN target=$MUTATION_PLAN decision=block-plan-conflict tool=$TOOL_NAME"
+            block "$REASON_TEXT"
+        fi
+    else
+        CLAIM_STATUS=0
+        PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" claim \
+            "$PROVIDER" "$SESSION_ID" "$MUTATION_PLAN" 2>/dev/null) || CLAIM_STATUS=$?
+        if [ "$CLAIM_STATUS" -ne 0 ] || [ -z "$PLAN_DIR" ]; then
+            CURRENT_SCOPE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" pending-candidate \
+                "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+            [ -n "$CURRENT_SCOPE" ] || CURRENT_SCOPE="another task or concurrent claim"
+            REASON_TEXT="[planning-with-files] PLAN MUTATION BLOCKED. The call targets '$MUTATION_PLAN', but this session is pending for $CURRENT_SCOPE. Resolve that ownership first; the hook will not overwrite it."
+            log "session=$SESSION_ID target=$MUTATION_PLAN current=$CURRENT_SCOPE decision=block-plan-claim tool=$TOOL_NAME status=$CLAIM_STATUS"
+            block "$REASON_TEXT"
+        fi
+        log "session=$SESSION_ID plan=$MUTATION_PLAN decision=auto-claim-plan-mutation tool=$TOOL_NAME"
+    fi
+fi
 
 if [ -z "$PLAN_DIR" ]; then
     CANDIDATE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" pending-candidate "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
@@ -147,8 +193,7 @@ if [ -z "$PLAN_DIR" ]; then
     fi
     REASON_TEXT="[planning-with-files] OWNERSHIP ACTION REQUIRED (not a permission failure and not an external blocker). Candidate '$CANDIDATE' is pending for this prompt. Do not stop or report that the environment is blocked. Resolve ownership now by running exactly one action: SAME task -> $EXPECTED_BIND OR DIFFERENT task -> $EXPECTED_RELEASE. After bind/release succeeds, retry the original tool call."
     log "session=$SESSION_ID candidate=$CANDIDATE decision=block-ownership tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
-    printf '{"decision":"block","reason":%s}' "$(json_escape "$REASON_TEXT")"
-    exit 0
+    block "$REASON_TEXT"
 fi
 
 COMPACTION_WARN=$(budget_warning "$PLAN_DIR")
@@ -166,4 +211,4 @@ fi
 
 REASON_TEXT="$COMPACTION_WARN Planning maintenance is mandatory before unrelated work. Allowed while compacting: (1) use any tool that is demonstrably read-only to inspect/search/read anywhere in the current project (for example Read, rg/grep/cat/head/tail, git status/diff/show/log, and Serena find/get/list/search tools); (2) use any mutation tool when its tool_input targets or explicitly references the owned plan directory $PLAN_DIR, including tasks.md, findings.md, decisions.md, handoff.md, and history.md. The gate does not require a specific mutation tool name; when explicit writable targets can be recognized, every target must stay inside that plan directory. Blocked until budgets clear: recognized mutations outside that plan folder and unknown calls that neither prove read-only behavior nor reference the owned plan directory. The gate re-checks budgets on every tool call."
 log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") maintenance=required decision=block-compaction tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
-printf '{"decision":"block","reason":%s}' "$(json_escape "$REASON_TEXT")"
+block "$REASON_TEXT"

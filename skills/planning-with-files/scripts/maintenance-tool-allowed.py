@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Classify compaction-mode tool calls.
+"""Classify planning tool calls and extract deterministic plan targets.
 
 Read operations may inspect the project. Plan maintenance is recognized from
-the tool input itself rather than from a particular mutation tool name.
+the tool input itself rather than from a particular mutation tool name. The
+optional extraction modes support prompt candidate routing and mutation-time
+session ownership without trusting incidental plan prose.
 """
 
 from __future__ import annotations
@@ -47,6 +49,25 @@ READ_GIT_SUBCOMMANDS = {
     "show",
     "status",
 }
+MUTATION_TOOL_TOKENS = {
+    "create",
+    "delete",
+    "edit",
+    "insert",
+    "move",
+    "patch",
+    "remove",
+    "rename",
+    "replace",
+    "write",
+}
+SHELL_TOOL_NAMES = {"bash", "shell", "terminal", "exec", "exec_command", "run_command"}
+TASK_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+TEXT_PLAN_PATH_RE = re.compile(
+    r"(?P<path>(?:[A-Za-z]:)?[^\s\"'`<>|]*?tmp[\\/]+plan-with-files[\\/]"
+    r"[A-Za-z0-9._-]+[\\/]+[^\s\"'`<>|]*?\.md)"
+    r"(?=$|[\s\"'`<>|)\]},;:])"
+)
 
 
 def strings(value: object):
@@ -115,6 +136,108 @@ def mutation_targets(tool_input: object) -> list[str]:
     return list(dict.fromkeys(explicit_paths(tool_input) + patch_paths(tool_input)))
 
 
+def text_plan_paths(value: object) -> list[str]:
+    """Extract exact plan Markdown path tokens from strings in a payload."""
+    paths: list[str] = []
+    for text in strings(value):
+        normalized = text.replace("\\", "/")
+        paths.extend(match.group("path") for match in TEXT_PLAN_PATH_RE.finditer(normalized))
+    return list(dict.fromkeys(paths))
+
+
+def plan_id_for_path(path: str, project_root: Path) -> str | None:
+    """Resolve a path under this project's plan root and return its task id."""
+    cleaned = path.strip().lstrip("([{=:").rstrip(")]},;:")
+    candidate = Path(cleaned)
+    if not candidate.is_absolute():
+        candidate = project_root / candidate
+    candidate = Path(os.path.realpath(candidate))
+    plan_root = Path(os.path.realpath(project_root / "tmp/plan-with-files"))
+    try:
+        relative = candidate.relative_to(plan_root)
+    except ValueError:
+        return None
+    if len(relative.parts) < 2 or candidate.suffix.lower() != ".md":
+        return None
+    task_id = relative.parts[0]
+    if (
+        not TASK_ID_RE.fullmatch(task_id)
+        or task_id in {".", "..", ".sessions"}
+        or not (plan_root / task_id / "tasks.md").is_file()
+    ):
+        return None
+    return task_id
+
+
+def plan_ids(paths: list[str], project_root: Path) -> set[str]:
+    return {
+        task_id
+        for path in paths
+        if (task_id := plan_id_for_path(path, project_root)) is not None
+    }
+
+
+def shell_has_mutation_intent(tool_input: object) -> bool:
+    command = ""
+    if isinstance(tool_input, dict):
+        command = tool_input.get("command") or tool_input.get("cmd") or ""
+    elif isinstance(tool_input, str):
+        command = tool_input
+    if not isinstance(command, str):
+        return False
+    if patch_paths(tool_input):
+        return True
+    mutation_command = re.compile(
+        r"(^|[;&|]\s*)(apply_patch|cp|install|mv|rm|touch|truncate|tee|chmod|chown)\b"
+        r"|(^|[;&|]\s*)(sed|perl)\b[^\n;&|]*\s-[A-Za-z]*i[A-Za-z]*\b"
+        r"|(^|[^<>])>{1,2}(?!=)",
+        re.IGNORECASE,
+    )
+    return mutation_command.search(command) is not None
+
+
+def is_mutation_tool(tool_name: str, tool_input: object) -> bool:
+    simple_name = tool_name.lower().rsplit("__", 1)[-1]
+    if simple_name in SHELL_TOOL_NAMES:
+        return shell_has_mutation_intent(tool_input)
+    tokens = set(re.split(r"[^a-z0-9]+", simple_name))
+    return bool(tokens & MUTATION_TOOL_TOKENS)
+
+
+def payload_tool_input(payload: dict) -> object:
+    if "tool_input" in payload:
+        return payload.get("tool_input")
+    return payload.get("toolInput")
+
+
+def print_single_plan_id(ids: set[str]) -> int:
+    if len(ids) == 1:
+        sys.stdout.write(next(iter(ids)))
+        return 0
+    return 2 if ids else 1
+
+
+def extract_prompt_plan_id(payload: dict, project_root: Path) -> int:
+    prompt_values = [
+        payload.get("prompt"),
+        payload.get("transformedPrompt"),
+        payload.get("transformed_prompt"),
+    ]
+    paths = text_plan_paths([value for value in prompt_values if isinstance(value, str)])
+    return print_single_plan_id(plan_ids(paths, project_root))
+
+
+def extract_mutation_plan_id(payload: dict, project_root: Path) -> int:
+    tool_name = str(payload.get("tool_name") or payload.get("toolName") or "")
+    tool_input = payload_tool_input(payload)
+    if not is_mutation_tool(tool_name, tool_input):
+        return 1
+    targets = mutation_targets(tool_input)
+    if not targets:
+        targets = text_plan_paths(tool_input)
+    return print_single_plan_id(plan_ids(targets, project_root))
+
+
 def references_owned_plan(tool_input: object, plan_dir: Path) -> bool:
     """Fallback for unknown schemas: require the exact owned plan directory."""
     roots = {str(plan_dir).replace("\\", "/")}
@@ -157,21 +280,37 @@ def bash_is_read_only(tool_input: object) -> bool:
     return False
 
 
-def main() -> int:
-    if len(sys.argv) != 2:
-        return 1
-    plan_dir = Path(os.path.realpath(sys.argv[1]))
+def load_payload() -> dict | None:
     try:
         payload = json.load(sys.stdin)
     except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] in {"prompt-plan-id", "mutation-plan-id"}:
+        payload = load_payload()
+        if payload is None:
+            return 1
+        project_root = Path(os.path.realpath(sys.argv[2]))
+        if sys.argv[1] == "prompt-plan-id":
+            return extract_prompt_plan_id(payload, project_root)
+        return extract_mutation_plan_id(payload, project_root)
+
+    if len(sys.argv) != 2:
+        return 1
+    plan_dir = Path(os.path.realpath(sys.argv[1]))
+    payload = load_payload()
+    if payload is None:
         return 1
     tool_name = str(payload.get("tool_name") or payload.get("toolName") or "").lower()
     simple_name = tool_name.rsplit("__", 1)[-1]
-    tool_input = payload.get("tool_input")
+    tool_input = payload_tool_input(payload)
 
     if any(simple_name.startswith(prefix) for prefix in READ_TOOL_PREFIXES):
         return 0
-    if simple_name in {"bash", "shell", "terminal", "exec", "exec_command", "run_command"}:
+    if simple_name in SHELL_TOOL_NAMES:
         if bash_is_read_only(tool_input):
             return 0
 

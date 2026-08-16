@@ -17,6 +17,10 @@ decisions.md
 research_notes.md
 notes.md
 
+# Generated agent instruction files
+/AGENTS.md
+/CLAUDE.md
+
 # But keep example and template files
 !examples/*.md
 !examples/**/*.md

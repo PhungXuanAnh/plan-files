@@ -88,7 +88,7 @@ write_route() {
 }
 
 mark_pending() {
-    local adapter_id=$1 session_id=$2 file status candidate=""
+    local adapter_id=$1 session_id=$2 preferred=${3:-} file status candidate=""
     file=$(route_file "$adapter_id" "$session_id") || return 1
     if [ -f "$file" ]; then
         status=$(read_value "$file" status)
@@ -97,9 +97,64 @@ mark_pending() {
             pending) candidate=$(read_value "$file" candidate) ;;
         esac
     fi
-    task_exists "$candidate" || candidate=$(pointer_candidate 2>/dev/null || true)
+    if ! task_exists "$candidate"; then
+        if task_exists "$preferred"; then
+            candidate=$preferred
+        else
+            candidate=$(pointer_candidate 2>/dev/null || true)
+        fi
+    fi
     write_route "$file" pending "" "$candidate" || return 1
     printf '%s' "$candidate"
+}
+
+claim_task() {
+    local adapter_id=$1 session_id=$2 task_id=$3 file lock status current="" result=0
+    if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e "$PROJECT_ROOT/.plan-with-files-skip" ]; then
+        printf 'planning-with-files is disabled for this project or session\n' >&2
+        return 1
+    fi
+    task_exists "$task_id" || {
+        printf 'invalid or missing planning task: %s\n' "$task_id" >&2
+        return 1
+    }
+    file=$(route_file "$adapter_id" "$session_id") || return 1
+    mkdir -p "$(dirname "$file")" || return 1
+    lock="$file.claim.lock"
+    if command -v flock >/dev/null 2>&1; then
+        exec 9>"$lock"
+        if ! flock -n 9; then
+            printf 'planning lease claim is already in progress\n' >&2
+            exec 9>&-
+            return 4
+        fi
+    fi
+
+    if [ -f "$file" ]; then
+        status=$(read_value "$file" status)
+        case "$status" in
+            owned) current=$(read_value "$file" task) ;;
+            pending) current=$(read_value "$file" candidate) ;;
+            *)
+                printf 'planning lease has an invalid state\n' >&2
+                result=3
+                ;;
+        esac
+        if [ -n "$current" ] && [ "$current" != "$task_id" ]; then
+            printf 'planning lease conflicts with task: %s\n' "$current" >&2
+            result=3
+        fi
+    fi
+
+    if [ "$result" -eq 0 ]; then
+        write_route "$file" owned "$task_id" "" || result=1
+    fi
+    if command -v flock >/dev/null 2>&1; then
+        flock -u 9 2>/dev/null || true
+        exec 9>&-
+    fi
+    [ "$result" -eq 0 ] || return "$result"
+    printf '%s/%s' "$PLAN_ROOT" "$task_id"
 }
 
 resolve_owned() {
@@ -289,8 +344,12 @@ case "$command" in
         extract_session_id
         ;;
     pending)
-        [ "$#" -eq 3 ] || exit 2
-        mark_pending "$2" "$3"
+        { [ "$#" -eq 3 ] || [ "$#" -eq 4 ]; } || exit 2
+        mark_pending "$2" "$3" "${4:-}"
+        ;;
+    claim)
+        [ "$#" -eq 4 ] || exit 2
+        claim_task "$2" "$3" "$4"
         ;;
     resolve)
         [ "$#" -eq 3 ] || exit 2
@@ -317,7 +376,7 @@ case "$command" in
         candidate_context "$2" "$3"
         ;;
     *)
-        printf 'usage: %s {bind TASK_ID|release TASK_ID|pending ADAPTER_ID SESSION_ID|pending-candidate ADAPTER_ID SESSION_ID|resolve ADAPTER_ID SESSION_ID|cache ADAPTER_ID SESSION_ID|session-id|candidate-context TASK_ID BIND_TOOL}\n' "$0" >&2
+        printf 'usage: %s {bind TASK_ID|release TASK_ID|pending ADAPTER_ID SESSION_ID [PREFERRED_TASK_ID]|claim ADAPTER_ID SESSION_ID TASK_ID|pending-candidate ADAPTER_ID SESSION_ID|resolve ADAPTER_ID SESSION_ID|cache ADAPTER_ID SESSION_ID|session-id|candidate-context TASK_ID BIND_TOOL}\n' "$0" >&2
         exit 2
         ;;
 esac

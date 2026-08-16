@@ -13,8 +13,10 @@ test: ## Run planning contract tests
 	@bash tests/test-codex-global-hooks.sh
 
 # ---------------------------------------------------------------------------
-# Global installation. Everything is linked back to this repo so local edits are
-# picked up immediately by the installed agents.
+# Global installation. Hook configs are samples so this repository does not
+# register a second project-local hook layer. Claude Code and Copilot link the
+# samples globally. Codex merges its sample into ~/.codex/hooks.json so unrelated
+# global hooks survive; generated commands still dispatch to this repository.
 # ---------------------------------------------------------------------------
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
 SKILL_SRC := $(REPO_ROOT)/skills/planning-with-files
@@ -27,9 +29,9 @@ COPILOT_SKILL := $(HOME)/Dropbox/Work/copilot/skills/planning-with-files
 COPILOT_HOOKS := $(HOME)/Dropbox/Work/copilot/hooks/planning-with-files.json
 KIRO_SKILL := $(HOME)/.kiro/skills/planning-with-files
 
-CODEX_HOOKS_SRC := $(REPO_ROOT)/.codex/hooks.json
-CLAUDE_CODE_SETTINGS_SRC := $(REPO_ROOT)/.claude/settings.json
-COPILOT_HOOKS_SRC := $(REPO_ROOT)/.github/hooks/planning-with-files.json
+CODEX_HOOKS_SRC := $(REPO_ROOT)/.codex/hooks.json.sample
+CLAUDE_CODE_SETTINGS_SRC := $(REPO_ROOT)/.claude/settings.json.sample
+COPILOT_HOOKS_SRC := $(REPO_ROOT)/.github/hooks/planning-with-files.json.sample
 
 define link_path
 	@target='$(1)'; dest='$(2)'; \
@@ -84,7 +86,7 @@ install-codex: install-skill-codex install-hook-codex ## Link Codex skill and ho
 install-skill-claude-code: ## Link skill into global Claude Code skills
 	$(call link_path,$(SKILL_SRC),$(CLAUDE_CODE_SKILL))
 
-install-hook-claude-code: ## Link repo Claude Code settings globally
+install-hook-claude-code: ## Link sample Claude Code settings globally
 	$(call link_path,$(CLAUDE_CODE_SETTINGS_SRC),$(CLAUDE_CODE_SETTINGS))
 
 install-claude-code: install-skill-claude-code install-hook-claude-code ## Link Claude Code skill and settings globally
@@ -92,7 +94,7 @@ install-claude-code: install-skill-claude-code install-hook-claude-code ## Link 
 install-skill-copilot: ## Link skill into global GitHub Copilot skills
 	$(call link_path,$(SKILL_SRC),$(COPILOT_SKILL))
 
-install-hook-copilot: ## Link hook JSON into global GitHub Copilot hooks
+install-hook-copilot: ## Link sample hook JSON into global GitHub Copilot hooks
 	$(call link_path,$(COPILOT_HOOKS_SRC),$(COPILOT_HOOKS))
 
 install-copilot: install-skill-copilot install-hook-copilot ## Link GitHub Copilot skill and hook JSON globally
