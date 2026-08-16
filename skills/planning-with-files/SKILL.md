@@ -61,14 +61,15 @@ Use `### Phase N: Title`, with an integer and colon. Each phase must have exactl
 - **Status:** pending
 - **Status:** in_progress
 - **Status:** complete
-- **Status:** deferred (explicit reason)
+- **Status:** blocked (external dependency reason)
+- **Status:** deferred (explicit user-directed reason)
 ```
 
-Use `deferred` only for an external blocker or an explicit user request. The parenthesized reason is mandatory. A complete phase may not contain unchecked `- [ ]` items.
+Use `blocked (reason)` only when a genuine external dependency leaves no actionable path. Use `deferred (reason)` only when the user explicitly postpones or excludes the phase. A non-empty parenthesized reason is mandatory for both. A complete phase may not contain unchecked `- [ ]` items; blocked and deferred phases may.
 
 Any `###` work section containing unchecked items must be a valid phase heading. Do not hide work under `Step`, `Task`, `Stage`, or similar headings.
 
-The Stop hook blocks incomplete work and format violations. An empty Current Phase with no completed/deferred work is discussion mode and may stop.
+The Stop hook blocks incomplete work and format violations. An empty Current Phase with no completed, blocked, or deferred work is discussion mode and may stop.
 
 ## Work loop
 
@@ -79,6 +80,8 @@ The Stop hook blocks incomplete work and format violations. An empty Current Pha
 5. Log every error immediately in `tasks.md`, diagnose it, change approach after a failure, and escalate after three materially different failed attempts.
 6. Give every phase executable `Done when` checks. Never replace a requested E2E or exact check with a cheaper substitute.
 7. After meaningful work, update status, current verification, recent errors, and touched files. Mark a phase complete only after its checks pass.
+8. Keep working through every actionable unchecked item in every non-settled phase without emitting a final answer or handoff between items or phases. Completing one item, one phase, or updating the Resume Checkpoint is progress, not a stopping boundary.
+9. Start with `## Current Phase`; whenever it settles, advance it to the next non-settled phase and continue in the same turn. Stop only after every phase in the plan is `complete`, validly `blocked (reason)`, or validly `deferred (reason)`.
 
 After the in-scope task is fully settled, finish its final planning update and deactivate the pointer by leaving `.plan-with-files` empty. Preserve the task folder for history. Only deactivate a pointer after confirming that the current request owns that plan.
 
@@ -112,7 +115,7 @@ Keep `## Resume Checkpoint` in `tasks.md` current: exact next action, blocker, a
 
 Create or overwrite `handoff.md` only when intentionally pausing and the resume state cannot fit concisely in `tasks.md`—for example live processes, volatile runtime state, partial commands, or a multi-repo working state. Use the template, write it after the required planning files, timestamp volatile facts, and re-verify them on resume. Never append history or duplicate the goal, decisions, findings, or completed-work narrative.
 
-When Stop fires on incomplete work, continue. If the user explicitly requested a pause or an external blocker prevents progress, update the Resume Checkpoint, refresh `handoff.md` only if needed, and use `deferred (reason)` only when the deferred rule permits it.
+When Stop fires on incomplete work, resume immediately and preserve the all-phase work loop; do not emit another item-level or phase-level final answer. If a genuine external dependency leaves a phase with no actionable path, update its Resume Checkpoint and mark it `blocked (reason)`. If the user explicitly postpones a phase, mark it `deferred (reason)`. Refresh `handoff.md` only if needed, then continue every other non-settled phase before stopping.
 
 ## Security and VCS boundary
 

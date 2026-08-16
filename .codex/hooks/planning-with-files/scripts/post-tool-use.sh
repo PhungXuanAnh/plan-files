@@ -88,10 +88,10 @@ log "${PLAN_FILE}: present (${PLAN_BYTES} bytes)"
 
 # --- Phase counting (delegated to common.sh:count_phases) ------------------
 count_phases "$PLAN_FILE"
-log "phases: total=$TOTAL complete=$COMPLETE in_progress=$IN_PROGRESS pending=$PENDING"
+log "phases: total=$TOTAL complete=$COMPLETE in_progress=$IN_PROGRESS pending=$PENDING blocked=$BLOCKED deferred=$DEFERRED"
 
 SETTLED_ISSUE=""
-if [ "$TOTAL" -gt 0 ] && [ $((COMPLETE + DEFERRED)) -ge "$TOTAL" ]; then
+if [ "$TOTAL" -gt 0 ] && [ $((COMPLETE + BLOCKED + DEFERRED)) -ge "$TOTAL" ]; then
     SETTLED_ISSUE=$(planning_settled_integrity_issue "$PLAN_FILE")
     if [ -z "$SETTLED_ISSUE" ]; then
         log "decision: valid owned plan is settled -> emitting {}"

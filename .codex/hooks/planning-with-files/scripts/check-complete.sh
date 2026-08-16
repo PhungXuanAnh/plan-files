@@ -17,11 +17,13 @@ TOTAL=$(grep -c "### Phase" "$PLAN_FILE" || true)
 COMPLETE=$(grep -cF "**Status:** complete" "$PLAN_FILE" || true)
 IN_PROGRESS=$(grep -cF "**Status:** in_progress" "$PLAN_FILE" || true)
 PENDING=$(grep -cF "**Status:** pending" "$PLAN_FILE" || true)
+# Blocked: only count when "(non-empty reason)" is present.
+BLOCKED=$(grep -cE '\*\*Status:\*\*[[:space:]]*blocked[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)' "$PLAN_FILE" || true)
 # Deferred: only count when "(non-empty reason)" is present.
 DEFERRED=$(grep -cE '\*\*Status:\*\*[[:space:]]*deferred[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)' "$PLAN_FILE" || true)
 
 # Fallback: check for [complete] inline format if **Status:** not found
-if [ "$COMPLETE" -eq 0 ] && [ "$IN_PROGRESS" -eq 0 ] && [ "$PENDING" -eq 0 ] && [ "$DEFERRED" -eq 0 ]; then
+if [ "$COMPLETE" -eq 0 ] && [ "$IN_PROGRESS" -eq 0 ] && [ "$PENDING" -eq 0 ] && [ "$BLOCKED" -eq 0 ] && [ "$DEFERRED" -eq 0 ]; then
     COMPLETE=$(grep -c "\[complete\]" "$PLAN_FILE" || true)
     IN_PROGRESS=$(grep -c "\[in_progress\]" "$PLAN_FILE" || true)
     PENDING=$(grep -c "\[pending\]" "$PLAN_FILE" || true)
@@ -32,19 +34,20 @@ fi
 : "${COMPLETE:=0}"
 : "${IN_PROGRESS:=0}"
 : "${PENDING:=0}"
+: "${BLOCKED:=0}"
 : "${DEFERRED:=0}"
 
-SETTLED=$((COMPLETE + DEFERRED))
+SETTLED=$((COMPLETE + BLOCKED + DEFERRED))
 
 # Report status (always exit 0 — incomplete task is a normal state)
 if [ "$SETTLED" -eq "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
-    if [ "$DEFERRED" -gt 0 ]; then
-        echo "[planning-with-files] ALL PHASES SETTLED ($COMPLETE complete + $DEFERRED deferred / $TOTAL). If the user has additional work, add new phases to tasks.md before starting."
+    if [ "$BLOCKED" -gt 0 ] || [ "$DEFERRED" -gt 0 ]; then
+        echo "[planning-with-files] ALL PHASES SETTLED ($COMPLETE complete + $BLOCKED blocked + $DEFERRED deferred / $TOTAL). If the user has additional work, add new phases to tasks.md before starting."
     else
         echo "[planning-with-files] ALL PHASES COMPLETE ($COMPLETE/$TOTAL). If the user has additional work, add new phases to tasks.md before starting."
     fi
 else
-    echo "[planning-with-files] Task in progress ($SETTLED/$TOTAL phases settled - $COMPLETE complete, $DEFERRED deferred). Update tasks.md before stopping."
+    echo "[planning-with-files] Task in progress ($SETTLED/$TOTAL phases settled - $COMPLETE complete, $BLOCKED blocked, $DEFERRED deferred). Update tasks.md before stopping."
     if [ "$IN_PROGRESS" -gt 0 ]; then
         echo "[planning-with-files] $IN_PROGRESS phase(s) still in progress."
     fi

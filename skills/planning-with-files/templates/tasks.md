@@ -32,9 +32,9 @@
 Required phase format:
 ### Phase N: Title
 - [ ] Task item
-- **Status:** pending | in_progress | complete | deferred (reason)
+- **Status:** pending | in_progress | complete | blocked (external reason) | deferred (user-directed reason)
 
-Use `deferred (reason)` only for explicit blockers or user-requested follow-up.
+Use `blocked (reason)` only for a genuine external dependency and `deferred (reason)` only when the user explicitly postpones the phase.
 -->
 
 ### Phase 1: Requirements & Discovery

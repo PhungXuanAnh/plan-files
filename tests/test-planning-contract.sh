@@ -58,7 +58,7 @@ write_valid_plan
 count_phases "$PLAN_DIR/tasks.md"
 assert_eq "$(check_task_plan_format "$PLAN_DIR/tasks.md")" "" "valid plan"
 assert_eq "$(current_phase_pointer "$PLAN_DIR/tasks.md")" "Phase 1" "exact current pointer"
-assert_eq "$TOTAL/$IN_PROGRESS/$PENDING" "2/1/1" "phase counts"
+assert_eq "$TOTAL/$IN_PROGRESS/$PENDING/$BLOCKED/$DEFERRED" "2/1/1/0/0" "phase counts"
 
 sed '/^## Phases$/d' "$PLAN_DIR/tasks.md" > "$PLAN_DIR/bad-layout.md"
 count_phases "$PLAN_DIR/bad-layout.md"
@@ -79,6 +79,10 @@ assert_eq "$(check_task_plan_format "$PLAN_DIR/missing-status.md")" "PHASE_STATU
 sed '/\*\*Status:\*\* pending/a\- **Status:** complete' "$PLAN_DIR/tasks.md" > "$PLAN_DIR/duplicate-status.md"
 count_phases "$PLAN_DIR/duplicate-status.md"
 assert_eq "$(check_task_plan_format "$PLAN_DIR/duplicate-status.md")" "PHASE_STATUS_INVALID" "duplicate phase status"
+
+sed 's/in_progress/blocked/' "$PLAN_DIR/tasks.md" > "$PLAN_DIR/blocked-without-reason.md"
+count_phases "$PLAN_DIR/blocked-without-reason.md"
+assert_eq "$(check_task_plan_format "$PLAN_DIR/blocked-without-reason.md")" "BLOCKED_NO_REASON" "blocked phase requires reason"
 
 head -c 33000 /dev/zero | tr '\0' x > "$PLAN_DIR/findings.md"
 assert_contains "$(planning_file_budget_warning "$PLAN_DIR")" "findings.md=" "byte budget"
@@ -162,18 +166,30 @@ GITHUB_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$COPILOT_PAYLOAD" | "$REPO_ROOT/
 assert_contains "$CODEX_OUTPUT" "Task incomplete" "Codex Stop adapter"
 assert_contains "$CLAUDE_OUTPUT" "Task incomplete" "Claude Stop adapter"
 assert_contains "$GITHUB_OUTPUT" "Task incomplete" "Copilot Stop adapter"
+for OUTPUT in "$CODEX_OUTPUT" "$CLAUDE_OUTPUT" "$GITHUB_OUTPUT"; do
+    assert_contains "$OUTPUT" "progress, not a stopping boundary" "phase persistence rejects item-level Stop"
+    assert_contains "$OUTPUT" "every unchecked item in every non-settled phase" "phase persistence covers every phase"
+    assert_contains "$OUTPUT" "advance Current Phase" "phase persistence advances later phases"
+    assert_contains "$OUTPUT" "blocked (reason)" "external blocker has a terminating state"
+    assert_contains "$OUTPUT" "deferred (reason)" "user deferral has a terminating state"
+done
 assert_contains "$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")" "Task incomplete" "Codex active Stop remains blocked"
 assert_contains "$(cd "$PROJECT" && printf '%s\n' "$CLAUDE_REPEAT_PAYLOAD" | "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/agent-stop.sh")" "Task incomplete" "Claude active Stop remains blocked"
 assert_contains "$(cd "$PROJECT" && printf '%s\n' "$COPILOT_REPEAT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")" "Task incomplete" "Copilot active Stop remains blocked"
 
 write_valid_plan
-sed -i 's/in_progress/deferred (external dependency unavailable)/; s/pending/deferred (external dependency unavailable)/' "$PLAN_DIR/tasks.md"
+sed -i 's/in_progress/blocked (external dependency unavailable)/; s/pending/deferred (user postponed validation)/' "$PLAN_DIR/tasks.md"
 CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")
 CLAUDE_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CLAUDE_REPEAT_PAYLOAD" | "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/agent-stop.sh")
 GITHUB_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$COPILOT_REPEAT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")
-assert_eq "$CODEX_OUTPUT" "{}" "Codex repeated Stop allows valid deferred phases"
-assert_eq "$CLAUDE_OUTPUT" "{}" "Claude repeated Stop allows valid deferred phases"
-assert_eq "$GITHUB_OUTPUT" "{}" "Copilot repeated Stop allows valid deferred phases"
+assert_eq "$CODEX_OUTPUT" "{}" "Codex repeated Stop allows blocked/deferred phases"
+assert_eq "$CLAUDE_OUTPUT" "{}" "Claude repeated Stop allows blocked/deferred phases"
+assert_eq "$GITHUB_OUTPUT" "{}" "Copilot repeated Stop allows blocked/deferred phases"
+
+write_valid_plan
+sed -i 's/in_progress/blocked (external dependency unavailable)/' "$PLAN_DIR/tasks.md"
+CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")
+assert_contains "$CODEX_OUTPUT" "STALE" "blocked current phase advances to later actionable phase"
 
 write_valid_plan
 

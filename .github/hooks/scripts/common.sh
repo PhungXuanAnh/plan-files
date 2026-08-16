@@ -5,7 +5,7 @@
 # Provides:
 #   resolve_plan_dir ROOT             — set TASK_ID PLAN_DIR PLAN_FILE from pointer
 #   current_phase_pointer PLAN_FILE   — print only a valid exact `Phase N` pointer
-#   count_phases PLAN_FILE           — set globals TOTAL COMPLETE IN_PROGRESS PENDING
+#   count_phases PLAN_FILE           — set phase-count globals
 #   check_task_plan_format PLAN_FILE — echo issue code if plan has a structural problem
 #   task_plan_format_message CODE FILE TOTAL — render concise model-facing guidance
 #   planning_file_budget_warning DIR — echo line/byte/scope warning when needed
@@ -51,11 +51,13 @@ current_phase_pointer() {
 
 # ---------------------------------------------------------------------------
 # count_phases PLAN_FILE
-# Parses all ### Phase blocks in PLAN_FILE and sets five globals:
+# Parses all ### Phase blocks in PLAN_FILE and sets six globals:
 #   TOTAL        — total number of ### Phase N: headings found
 #   COMPLETE     — phases with status=complete
 #   IN_PROGRESS  — phases with status=in_progress
 #   PENDING      — phases with status=pending
+#   BLOCKED      — phases with status=blocked (reason); only counted when
+#                  the parenthesised reason is non-empty
 #   DEFERRED     — phases with status=deferred (reason); only counted when
 #                  the parenthesised reason is non-empty. `deferred` without
 #                  a valid `(reason)` is NOT counted here — check_task_plan_format
@@ -66,17 +68,18 @@ current_phase_pointer() {
 # ---------------------------------------------------------------------------
 count_phases() {
     local _plan_file="${1:-}"
-    read TOTAL COMPLETE IN_PROGRESS PENDING DEFERRED <<EOF
+    read TOTAL COMPLETE IN_PROGRESS PENDING BLOCKED DEFERRED <<EOF
 $(awk '
   function flush() {
     if (in_phase) {
       if      (status == "complete")    complete++
       else if (status == "in_progress") in_progress++
       else if (status == "pending")     pending++
+      else if (status == "blocked")     blocked++
       else if (status == "deferred")    deferred++
     }
   }
-  BEGIN { total=0; complete=0; in_progress=0; pending=0; deferred=0; in_phase=0; status=""; in_comment=0 }
+  BEGIN { total=0; complete=0; in_progress=0; pending=0; blocked=0; deferred=0; in_phase=0; status=""; in_comment=0 }
   /<!--/ { in_comment=1 }
   in_comment { if (/-->/) in_comment=0; next }
   /^### Phase/ {
@@ -92,21 +95,22 @@ $(awk '
   /\*\*Status:\*\*[[:space:]]*complete([^a-zA-Z_]|$)/    { status="complete";    next }
   /\*\*Status:\*\*[[:space:]]*in_progress([^a-zA-Z_]|$)/ { status="in_progress"; next }
   /\*\*Status:\*\*[[:space:]]*pending([^a-zA-Z_]|$)/     { status="pending";     next }
+  /\*\*Status:\*\*[[:space:]]*blocked[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)/ { status="blocked"; next }
   # Deferred: only credit when "(reason)" with at least one non-whitespace char is present.
   # Bare "deferred" or "deferred ()" is left with status="" so format check can flag it.
   /\*\*Status:\*\*[[:space:]]*deferred[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)/ { status="deferred"; next }
   /\[complete\]/    { status="complete";    next }
   /\[in_progress\]/ { status="in_progress"; next }
   /\[pending\]/     { status="pending";     next }
-  END { flush(); printf "%d %d %d %d %d", total, complete, in_progress, pending, deferred }
+  END { flush(); printf "%d %d %d %d %d %d", total, complete, in_progress, pending, blocked, deferred }
 ' "$_plan_file" 2>/dev/null)
 EOF
-    : "${TOTAL:=0}" "${COMPLETE:=0}" "${IN_PROGRESS:=0}" "${PENDING:=0}" "${DEFERRED:=0}"
+    : "${TOTAL:=0}" "${COMPLETE:=0}" "${IN_PROGRESS:=0}" "${PENDING:=0}" "${BLOCKED:=0}" "${DEFERRED:=0}"
 }
 
 # ---------------------------------------------------------------------------
 # check_task_plan_format PLAN_FILE
-# Requires: count_phases already called (reads TOTAL COMPLETE IN_PROGRESS PENDING DEFERRED).
+# Requires: count_phases already called (reads all phase-count globals).
 # Structural and profile checks always run.
 # Echoes one of these issue codes to stdout, or nothing if the plan is correct:
 #   SECTION_LAYOUT_INVALID — Current Phase / Phases section is missing, duplicated, ordered
@@ -115,6 +119,7 @@ EOF
 #   PHASE_HEADING_INVALID — a `### Phase` heading does not match `### Phase N: Title`
 #   NO_PHASES            — zero ### Phase N: headings detected
 #   PHASE_STATUS_INVALID — a phase has missing or duplicate recognized status markers
+#   BLOCKED_NO_REASON    — `**Status:** blocked` line present but missing required `(reason)`
 #   DEFERRED_NO_REASON   — `**Status:** deferred` line present but missing required `(reason)`
 #                          (always checked, even during/after work — bare `deferred` is never valid)
 #   PROFILE_MISSING      — ## Workflow Profile section absent
@@ -126,6 +131,7 @@ check_task_plan_format() {
     local _total="${TOTAL:-0}"
     local _in_progress="${IN_PROGRESS:-0}"
     local _pending="${PENDING:-0}"
+    local _blocked="${BLOCKED:-0}"
     local _deferred="${DEFERRED:-0}"
 
     local _current_count _phases_count _current_line _phases_line _inside_total
@@ -193,8 +199,15 @@ check_task_plan_format() {
             printf 'CURRENT_PHASE_INVALID'
             return
         fi
-    elif [ "$_in_progress" -gt 0 ] || [ "$_complete" -gt 0 ] || [ "$_deferred" -gt 0 ]; then
+    elif [ "$_in_progress" -gt 0 ] || [ "$_complete" -gt 0 ] || [ "$_blocked" -gt 0 ] || [ "$_deferred" -gt 0 ]; then
         printf 'CURRENT_PHASE_INVALID'
+        return
+    fi
+
+    if grep -E '\*\*Status:\*\*[[:space:]]*blocked' "$_plan_file" 2>/dev/null \
+        | grep -Ev '\*\*Status:\*\*[[:space:]]*blocked[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)' \
+        | grep -q .; then
+        printf 'BLOCKED_NO_REASON'
         return
     fi
 
@@ -237,6 +250,7 @@ check_task_plan_format() {
       /^### / || /^## / { flush(); in_phase=0; markers=0; next }
       !in_phase { next }
       /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*(complete|in_progress|pending)[[:space:]]*$/ { markers++; next }
+      /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*blocked[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)[[:space:]]*$/ { markers++; next }
       /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*deferred[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)[[:space:]]*$/ { markers++; next }
       END { flush(); if (bad != "") print bad }
     ' "$_plan_file" 2>/dev/null)
@@ -283,8 +297,11 @@ task_plan_format_message() {
         PHASE_STATUS_INVALID)
             printf 'FORMAT CONTRACT VIOLATION in %s: every phase must have exactly one recognized inline or body status.' "$_plan_file"
             ;;
+        BLOCKED_NO_REASON)
+            printf 'FORMAT CONTRACT VIOLATION in %s: blocked requires a non-empty parenthesized reason naming a genuine external dependency.' "$_plan_file"
+            ;;
         DEFERRED_NO_REASON)
-            printf 'FORMAT CONTRACT VIOLATION in %s: deferred requires a non-empty parenthesized reason and is allowed only for an external blocker or explicit user request.' "$_plan_file"
+            printf 'FORMAT CONTRACT VIOLATION in %s: deferred requires a non-empty parenthesized reason and is allowed only when the user explicitly postpones the phase.' "$_plan_file"
             ;;
         PROFILE_MISSING)
             printf 'FORMAT CONTRACT VIOLATION in %s: add "## Workflow Profile" before "## Phases" and set "**Profile:** A", B, or C before implementation.' "$_plan_file"
@@ -301,7 +318,7 @@ task_plan_format_message() {
 #   <phase_num>\t<status>\t<unchecked_count>\t<first_unchecked_text>
 # Where:
 #   phase_num             — integer N from "### Phase N:" (or empty if unparsable)
-#   status                — complete | in_progress | pending | "" (no marker)
+#   status                — complete | in_progress | pending | blocked | deferred | ""
 #   unchecked_count       — count of "- [ ]" lines inside the phase block
 #   first_unchecked_text  — text of first "- [ ]" line (truncated to 200 chars)
 # Phase block boundaries: from the heading until the next ### or ## heading.
@@ -344,6 +361,7 @@ phase_summary() {
       /\*\*Status:\*\*[[:space:]]*complete([^a-zA-Z_]|$)/    { status="complete";    next }
       /\*\*Status:\*\*[[:space:]]*in_progress([^a-zA-Z_]|$)/ { status="in_progress"; next }
       /\*\*Status:\*\*[[:space:]]*pending([^a-zA-Z_]|$)/     { status="pending";     next }
+      /\*\*Status:\*\*[[:space:]]*blocked[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)/ { status="blocked"; next }
       /\*\*Status:\*\*[[:space:]]*deferred[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)/ { status="deferred"; next }
       /\[complete\]/    { status="complete";    next }
       /\[in_progress\]/ { status="in_progress"; next }
