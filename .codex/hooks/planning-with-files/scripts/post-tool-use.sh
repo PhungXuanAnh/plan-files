@@ -178,14 +178,28 @@ if [ -n "${PHASE_NUM:-}" ]; then
     log "remaining: count=${REMAINING_COUNT:-?} first(${#REMAINING_FIRST} chars)"
 fi
 
-# --- Delta + timestamp debounce -----------------------------------------------
-# Two-tier suppression for parallel-safe, low-noise context injection:
-# 1. INJECT_FULL=true when plan state changes (phase, remaining count, content).
-# 2. EMIT_NUDGE=true when INJECT_FULL or the debounce window has expired.
-#    Both decisions are made under flock so parallel hook processes (e.g. a
-#    burst of 8 simultaneous reads) collapse to at most one emission per window;
-#    the rest exit silently with {}.
-NUDGE_DEBOUNCE_SECS=60   # max one nudge per minute during stable runs
+# --- Contracted item context ------------------------------------------------
+PLAN_FINGERPRINT=$(planning_progress_fingerprint "$PLAN_FILE" 2>/dev/null || true)
+ITEM_CONTEXT=$(planning_item_context "$PLAN_FILE" 2>/dev/null || true)
+ITEM_FIELDS=""
+if [ -n "$ITEM_CONTEXT" ] && command -v python3 >/dev/null 2>&1; then
+    ITEM_FIELDS=$(printf '%s' "$ITEM_CONTEXT" | python3 -c '
+import json, sys
+p=json.load(sys.stdin)
+def clean(value): return " ".join(str(value or "").split()).replace("\t", " ")
+print("\t".join(("true" if p.get("contracted") else "false", clean(p.get("active_item")), clean(p.get("active_text")), clean(p.get("active_evidence")))))
+' 2>/dev/null || true)
+fi
+CONTRACTED=false ACTIVE_ITEM="" ACTIVE_TEXT="" ACTIVE_EVIDENCE=""
+IFS=$'\t' read -r CONTRACTED ACTIVE_ITEM ACTIVE_TEXT ACTIVE_EVIDENCE <<< "$ITEM_FIELDS"
+
+# --- Semantic delta + item-aware stale detection ---------------------------
+# Contracted plans receive one immediate reminder after the first unchanged
+# tool result and then at most one per interval. Parallel bursts share the same
+# flock-protected counter/timestamp and collapse into the same window.
+NUDGE_DEBOUNCE_SECS=60
+ITEM_NUDGE_DEBOUNCE_SECS=30
+STALE_TOOL_THRESHOLD=3
 STATE_FILE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" cache "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
 [ -n "$STATE_FILE" ] || { echo '{}'; exit 0; }
 STATE_LOCK="$STATE_FILE.lock"
@@ -194,24 +208,38 @@ LAST_REMAINING_COUNT=""
 LAST_GOAL_LEN=""
 LAST_PHASE_LEN=""
 LAST_NUDGE_TS=0
+LAST_PLAN_FINGERPRINT=""
+UNCHANGED_TOOL_COUNT=0
+LAST_CHECKPOINT_TS=0
+LAST_ITEM_NUDGE_TS=0
 if [ -f "$STATE_FILE" ]; then
     LAST_PHASE_NUM=$(grep -E '^last_phase_num='        "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
     LAST_REMAINING_COUNT=$(grep -E '^last_remaining_count=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
     LAST_GOAL_LEN=$(grep -E '^last_goal_len='         "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
     LAST_PHASE_LEN=$(grep -E '^last_phase_len='        "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
     LAST_NUDGE_TS=$(grep -E '^last_nudge_ts='         "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
+    LAST_PLAN_FINGERPRINT=$(grep -E '^last_plan_fingerprint=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
+    UNCHANGED_TOOL_COUNT=$(grep -E '^unchanged_tool_count=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
+    LAST_CHECKPOINT_TS=$(grep -E '^last_checkpoint_ts=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
+    LAST_ITEM_NUDGE_TS=$(grep -E '^last_item_nudge_ts=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
 fi
 LAST_NUDGE_TS=${LAST_NUDGE_TS:-0}
+UNCHANGED_TOOL_COUNT=${UNCHANGED_TOOL_COUNT:-0}
+LAST_CHECKPOINT_TS=${LAST_CHECKPOINT_TS:-0}
+LAST_ITEM_NUDGE_TS=${LAST_ITEM_NUDGE_TS:-0}
 
 CUR_GOAL_LEN=${#GOAL_BODY}
 CUR_PHASE_LEN=${#PHASE_BODY}
 NOW_TS=$(date +%s)
-log "delta (pre-lock): phase='${PHASE_NUM:-}' (was '${LAST_PHASE_NUM:-}') remaining='${REMAINING_COUNT:-}' (was '${LAST_REMAINING_COUNT:-}') goal_len=$CUR_GOAL_LEN (was '${LAST_GOAL_LEN:-}') phase_len=$CUR_PHASE_LEN (was '${LAST_PHASE_LEN:-}') nudge_age=$((NOW_TS - LAST_NUDGE_TS))s"
+log "delta (pre-lock): fingerprint='${PLAN_FINGERPRINT:-}' (was '${LAST_PLAN_FINGERPRINT:-}') active_item='${ACTIVE_ITEM:-}' unchanged_tools=$UNCHANGED_TOOL_COUNT checkpoint_age=$((LAST_CHECKPOINT_TS > 0 ? NOW_TS - LAST_CHECKPOINT_TS : 0))s"
 
 # Flock-protected decision + state update.
 # Re-read state under lock to avoid TOCTOU with parallel hook processes.
 EMIT_NUDGE=false
 INJECT_FULL=false
+PLAN_CHANGED=false
+STALE_CHECKPOINT=false
+CHECKPOINT_LAG_SECS=0
 {
     flock -x 8 || true
     _st_phase=$(grep -E '^last_phase_num='        "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
@@ -219,32 +247,66 @@ INJECT_FULL=false
     _st_goal=$(grep -E '^last_goal_len='         "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
     _st_phase_len=$(grep -E '^last_phase_len='   "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
     _st_nudge_ts=$(grep -E '^last_nudge_ts='     "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
+    _st_fingerprint=$(grep -E '^last_plan_fingerprint=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
+    _st_unchanged=$(grep -E '^unchanged_tool_count=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
+    _st_checkpoint_ts=$(grep -E '^last_checkpoint_ts=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
+    _st_item_nudge_ts=$(grep -E '^last_item_nudge_ts=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
     _st_nudge_ts=${_st_nudge_ts:-0}
+    _st_unchanged=${_st_unchanged:-0}
+    _st_checkpoint_ts=${_st_checkpoint_ts:-0}
+    _st_item_nudge_ts=${_st_item_nudge_ts:-0}
     _time_since=$(( NOW_TS - _st_nudge_ts ))
 
     _delta=false
-    if [ "${PHASE_NUM:-}"       != "${_st_phase:-}" ] \
+    if [ -n "$PLAN_FINGERPRINT" ] && [ "$PLAN_FINGERPRINT" != "${_st_fingerprint:-}" ]; then
+        _delta=true
+    elif [ "${PHASE_NUM:-}"       != "${_st_phase:-}" ] \
     || [ "${REMAINING_COUNT:-}" != "${_st_remaining:-}" ] \
     || [ "$CUR_GOAL_LEN"        != "${_st_goal:-}" ] \
     || [ "$CUR_PHASE_LEN"       != "${_st_phase_len:-}" ]; then
         _delta=true
     fi
 
-    if [ "$_delta" = "true" ] || [ "$_time_since" -ge "$NUDGE_DEBOUNCE_SECS" ]; then
+    if [ "$_delta" = "true" ]; then
+        PLAN_CHANGED=true
         EMIT_NUDGE=true
-        [ "$_delta" = "true" ] && INJECT_FULL=true
-        {
-            printf 'last_phase_num=%s\n'       "${PHASE_NUM:-}"
-            printf 'last_remaining_count=%s\n' "${REMAINING_COUNT:-}"
-            printf 'last_goal_len=%s\n'        "$CUR_GOAL_LEN"
-            printf 'last_phase_len=%s\n'       "$CUR_PHASE_LEN"
-            printf 'last_nudge_ts=%s\n'        "$NOW_TS"
-        } > "$STATE_FILE.tmp" 2>/dev/null \
-            && mv "$STATE_FILE.tmp" "$STATE_FILE" 2>/dev/null || true
+        INJECT_FULL=true
+        _st_unchanged=0
+        _st_checkpoint_ts=$NOW_TS
+        _st_item_nudge_ts=0
+    else
+        _st_unchanged=$((_st_unchanged + 1))
+        if [ "$CONTRACTED" = "true" ] && [ -n "$ACTIVE_ITEM" ]; then
+            CHECKPOINT_LAG_SECS=$(( _st_checkpoint_ts > 0 ? NOW_TS - _st_checkpoint_ts : 0 ))
+            [ "$_st_unchanged" -ge "$STALE_TOOL_THRESHOLD" ] && STALE_CHECKPOINT=true
+            if [ "$_st_item_nudge_ts" -eq 0 ] || [ $((NOW_TS - _st_item_nudge_ts)) -ge "$ITEM_NUDGE_DEBOUNCE_SECS" ]; then
+                EMIT_NUDGE=true
+                _st_item_nudge_ts=$NOW_TS
+            fi
+        elif [ "$_time_since" -ge "$NUDGE_DEBOUNCE_SECS" ]; then
+            EMIT_NUDGE=true
+        fi
     fi
+
+    UNCHANGED_TOOL_COUNT=$_st_unchanged
+    LAST_CHECKPOINT_TS=$_st_checkpoint_ts
+    LAST_ITEM_NUDGE_TS=$_st_item_nudge_ts
+    [ "$EMIT_NUDGE" = "true" ] && LAST_NUDGE_TS=$NOW_TS
+    {
+        printf 'last_phase_num=%s\n'       "${PHASE_NUM:-}"
+        printf 'last_remaining_count=%s\n' "${REMAINING_COUNT:-}"
+        printf 'last_goal_len=%s\n'        "$CUR_GOAL_LEN"
+        printf 'last_phase_len=%s\n'       "$CUR_PHASE_LEN"
+        printf 'last_nudge_ts=%s\n'        "$LAST_NUDGE_TS"
+        printf 'last_plan_fingerprint=%s\n' "$PLAN_FINGERPRINT"
+        printf 'unchanged_tool_count=%s\n' "$UNCHANGED_TOOL_COUNT"
+        printf 'last_checkpoint_ts=%s\n'   "$LAST_CHECKPOINT_TS"
+        printf 'last_item_nudge_ts=%s\n'   "$LAST_ITEM_NUDGE_TS"
+    } > "$STATE_FILE.tmp" 2>/dev/null \
+        && mv "$STATE_FILE.tmp" "$STATE_FILE" 2>/dev/null || true
 } 8>>"$STATE_LOCK" 2>/dev/null || true
 
-log "emit_nudge=$EMIT_NUDGE inject_full=$INJECT_FULL nudge_age=$((NOW_TS - LAST_NUDGE_TS))s debounce=${NUDGE_DEBOUNCE_SECS}s"
+log "item_state fingerprint=${PLAN_FINGERPRINT:-unavailable} active_item=${ACTIVE_ITEM:-none} plan_changed=$PLAN_CHANGED unchanged_tools=$UNCHANGED_TOOL_COUNT checkpoint_lag=${CHECKPOINT_LAG_SECS}s stale=$STALE_CHECKPOINT emit_nudge=$EMIT_NUDGE inject_full=$INJECT_FULL"
 
 if [ -n "$SETTLED_ISSUE" ]; then
     EMIT_NUDGE=true
@@ -276,7 +338,16 @@ ${PHASE_BODY}"
     fi
 fi
 
-NUDGE="[planning-with-files] Update tasks.md with what you just did. If a phase is now complete, update ${PLAN_FILE} status. If you no longer see the planning-with-files SKILL.md rules in your context (post-/compact, or you have forgotten them), reload the planning-with-files skill by yourself before continuing."
+if [ "$CONTRACTED" = "true" ] && [ -n "$ACTIVE_ITEM" ]; then
+    NUDGE="[planning-with-files] Active Item ${ACTIVE_ITEM}: ${ACTIVE_TEXT} Evidence: ${ACTIVE_EVIDENCE:-pending}
+[planning-with-files] If this tool result satisfies the outcome, your next workflow operation must be the structured checkpoint before any unrelated tool. Otherwise continue the same item and record material partial/error evidence; arbitrary tool success is not semantic completion."
+    if [ "$STALE_CHECKPOINT" = "true" ]; then
+        NUDGE="${NUDGE}
+[planning-with-files] STALE ITEM STATE: ${UNCHANGED_TOOL_COUNT} tool result(s) without a semantic plan checkpoint (${CHECKPOINT_LAG_SECS}s since the last detected plan change). Checkpoint now if the evidence predicate is true; otherwise keep working ${ACTIVE_ITEM}, not a different item."
+    fi
+else
+    NUDGE="[planning-with-files] Update tasks.md with what you just did. If a phase is now complete, update ${PLAN_FILE} status. If you no longer see the planning-with-files SKILL.md rules in your context (post-/compact, or you have forgotten them), reload the planning-with-files skill by yourself before continuing."
+fi
 if [ -n "$SETTLED_ISSUE" ]; then
     NUDGE="${NUDGE}
 [planning-with-files] Settled markers failed integrity check (${SETTLED_ISSUE}); keep this owned plan active and fix it before stopping."

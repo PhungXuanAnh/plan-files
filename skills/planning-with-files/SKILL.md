@@ -71,19 +71,52 @@ Any `###` work section containing unchecked items must be a valid phase heading.
 
 The Stop hook blocks incomplete work and format violations. An empty Current Phase with no completed, blocked, or deferred work is discussion mode and may stop.
 
+### Outcome-item form
+
+New plans use a machine-checkable item contract. A legacy plan without `## Active Item` remains readable, but before its next implementation mutation add this section and migrate its current/future incomplete phases; archived completed phases may stay compact.
+
+Put `## Active Item` immediately after `## Current Phase`. Its non-comment body is empty while discussing or after all phases settle. During actionable work it contains exactly one unchecked ID from Current Phase:
+
+```markdown
+## Active Item
+P2.1
+```
+
+Use `P<phase>.<item>` for outcome work and `V<phase>.<item>` for phase acceptance. IDs are unique and their phase number matches the containing phase. Every checkbox in a contracted phase has one indented evidence line:
+
+```markdown
+- [ ] [P2.1] Legacy MX records are absent from authoritative DNS.
+  - Evidence: pending
+- [ ] [V2.1] The routing integration check passes.
+  - Evidence: pending
+```
+
+Write falsifiable outcomes, not broad activities. Keep scope constraints and invariants as prose guardrails, not work checkboxes. A checked item requires concise non-placeholder evidence such as a command result, UI/API state, test result, or artifact reference. Partial evidence may remain on an unchecked active item; attempted work is not completion.
+
+When an item's evidence predicate becomes true, the next workflow operation must checkpoint the plan: record evidence, check the item, and select the next Active Item before any unrelated tool call. Do not batch item bookkeeping at phase end. Prefer the structured checkpoint script in `scripts/plan-checkpoint.py`, resolved relative to this SKILL.md, over hand-editing state transitions.
+
+```bash
+python3 <skill-dir>/scripts/plan-checkpoint.py --plan <tasks.md> start P2.1
+python3 <skill-dir>/scripts/plan-checkpoint.py --plan <tasks.md> progress P2.1 --evidence "partial observable state"
+python3 <skill-dir>/scripts/plan-checkpoint.py --plan <tasks.md> complete P2.1 --evidence "completion evidence"
+python3 <skill-dir>/scripts/plan-checkpoint.py --plan <tasks.md> assert-finalizable --project-root <project-root>
+```
+
 ## Work loop
 
 1. Create the plan before starting complex work.
 2. Before a phase, re-read `tasks.md`, `decisions.md`, and relevant findings; set Current Phase and that phase to `in_progress` before acting.
 3. Record discoveries in `findings.md`. After every two view/browser/search operations, write findings immediately.
 4. Read `decisions.md` before editing it. Record only durable user choices; move changed choices to `## Superseded Decisions` and unresolved choices to `## Open Decision Questions`.
-5. Log every error immediately in `tasks.md`, diagnose it, change approach after a failure, and escalate after three materially different failed attempts.
+5. Log every error immediately in `tasks.md`, diagnose it, and change approach after a failure. A failed click, selector, timeout, safety-rejected execution path, or tool route is not an external blocker while a materially different actionable path remains; escalate after three materially different failed attempts.
 6. Give every phase executable `Done when` checks. Never replace a requested E2E or exact check with a cheaper substitute.
-7. After meaningful work, update status, current verification, recent errors, and touched files. Mark a phase complete only after its checks pass.
-8. Keep working through every actionable unchecked item in every non-settled phase without emitting a final answer or handoff between items or phases. Completing one item, one phase, or updating the Resume Checkpoint is progress, not a stopping boundary.
+7. After meaningful work, update status, current verification, recent errors, and touched files. For contracted plans, use the immediate item checkpoint barrier above. Mark a phase complete only after its checks pass.
+8. Progress reporting belongs in commentary; final output is reserved for terminal plan state. Keep working through every actionable unchecked item in every non-settled phase without emitting a final answer or handoff between items or phases. Completing one item, one phase, or updating the Resume Checkpoint is progress, not a stopping boundary.
 9. Start with `## Current Phase`; whenever it settles, advance it to the next non-settled phase and continue in the same turn. Stop only after every phase in the plan is `complete`, validly `blocked (reason)`, or validly `deferred (reason)`.
 
 After the in-scope task is fully settled, finish its final planning update and deactivate the pointer by leaving `.plan-with-files` empty. Preserve the task folder for history. Only deactivate a pointer after confirming that the current request owns that plan.
+
+Before final output, re-read `tasks.md` from disk and run the structured `assert-finalizable` check. If it fails, do not summarize and stop: continue the named Active Item or exact first unchecked item. Stop-hook feedback is a recovery instruction, never a request for another progress summary.
 
 Append another phase only when it serves the same goal and keeps the hot plan concise. When follow-up work is independent or `tasks.md` approaches 8–12 phase entries, create a new task folder and link the tasks instead of growing one permanent phase ledger.
 
@@ -125,9 +158,10 @@ Keep planning metadata private. Do not mention internal phase labels, task ids, 
 
 ## Restore check
 
-Before resuming, confirm: goal, current phase, exact next action, remaining phases, blockers, required verification, active decisions, and relevant findings. If any answer is missing, repair the planning files before implementation.
+Before resuming, at every phase transition, and before finalization, re-read persistent plan state. Confirm: goal, current phase, Active Item when contracted, exact next action, remaining phases, blockers, required verification, active decisions, and relevant findings. If any answer is missing, repair the planning files before implementation.
 
 ## Further reading
 
 - [Context-engineering rationale](reference.md)
 - [Compact examples](examples.md)
+- For persistence/checkpoint diagnostics and controlled comparisons, read [observing long runs](references/observing-runs.md).

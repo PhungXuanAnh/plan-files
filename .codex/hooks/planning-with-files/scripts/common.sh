@@ -5,6 +5,8 @@
 # Provides:
 #   resolve_plan_dir ROOT             — set TASK_ID PLAN_DIR PLAN_FILE from pointer
 #   current_phase_pointer PLAN_FILE   — print only a valid exact `Phase N` pointer
+#   planning_item_context PLAN_FILE   — print contracted item state as compact JSON
+#   planning_progress_fingerprint FILE — print semantic plan progress fingerprint
 #   count_phases PLAN_FILE           — set phase-count globals
 #   check_task_plan_format PLAN_FILE — echo issue code if plan has a structural problem
 #   task_plan_format_message CODE FILE TOTAL — render concise model-facing guidance
@@ -46,6 +48,58 @@ current_phase_pointer() {
     if [ "$(printf '%s\n' "$_body" | awk 'NF { count++ } END { print count+0 }')" -eq 1 ] \
         && printf '%s' "$_body" | grep -Eq '^Phase[[:space:]]+[0-9]+[[:space:]]*$'; then
         printf '%s' "$_body"
+    fi
+}
+
+planning_state_tool() {
+    local _dir _candidate
+    _dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd) || return 1
+    for _candidate in \
+        "$_dir/../../../../skills/planning-with-files/scripts/plan_state.py" \
+        "$_dir/../../../skills/planning-with-files/scripts/plan_state.py"; do
+        if [ -f "$_candidate" ]; then
+            (cd "$(dirname "$_candidate")" && printf '%s/%s' "$PWD" "$(basename "$_candidate")")
+            return 0
+        fi
+    done
+    return 1
+}
+
+planning_item_contract_issue() {
+    local _plan_file="${1:-}" _tool _output _status=0
+    grep -qE '^## Active Item[[:space:]]*$' "$_plan_file" 2>/dev/null || return 0
+    _tool=$(planning_state_tool 2>/dev/null) || { printf 'ITEM_STATE_TOOL_UNAVAILABLE'; return 0; }
+    command -v python3 >/dev/null 2>&1 || { printf 'ITEM_STATE_TOOL_UNAVAILABLE'; return 0; }
+    _output=$(python3 "$_tool" validate "$_plan_file" 2>/dev/null) || _status=$?
+    if [ "$_status" -eq 2 ] && [ -n "$_output" ]; then
+        printf '%s' "$_output"
+    elif [ "$_status" -ne 0 ]; then
+        printf 'ITEM_STATE_TOOL_UNAVAILABLE'
+    fi
+}
+
+planning_item_context() {
+    local _tool
+    _tool=$(planning_state_tool 2>/dev/null) || return 1
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 "$_tool" context "${1:-}" 2>/dev/null
+}
+
+planning_progress_fingerprint() {
+    local _tool
+    _tool=$(planning_state_tool 2>/dev/null) || return 1
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 "$_tool" fingerprint "${1:-}" 2>/dev/null
+}
+
+planning_assert_finalizable() {
+    local _plan_file="${1:-}" _project_root="${2:-}" _tool
+    _tool=$(planning_state_tool 2>/dev/null) || return 1
+    command -v python3 >/dev/null 2>&1 || return 1
+    if [ -n "$_project_root" ]; then
+        python3 "$_tool" assert-finalizable "$_plan_file" --project-root "$_project_root" 2>/dev/null
+    else
+        python3 "$_tool" assert-finalizable "$_plan_file" 2>/dev/null
     fi
 }
 
@@ -273,6 +327,13 @@ check_task_plan_format() {
         printf 'PROFILE_UNFILLED'
         return
     fi
+
+    local _item_issue
+    _item_issue=$(planning_item_contract_issue "$_plan_file")
+    if [ -n "$_item_issue" ]; then
+        printf '%s' "$_item_issue"
+        return
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -308,6 +369,9 @@ task_plan_format_message() {
             ;;
         PROFILE_UNFILLED)
             printf 'FORMAT CONTRACT VIOLATION in %s: replace the Workflow Profile placeholder with exactly A, B, or C before implementation.' "$_plan_file"
+            ;;
+        ACTIVE_ITEM_SECTION_INVALID|ACTIVE_ITEM_REQUIRED|ACTIVE_ITEM_INVALID|ITEM_ID_INVALID|ITEM_ID_DUPLICATE|ITEM_PHASE_MISMATCH|ITEM_EVIDENCE_MISSING|CHECKED_ITEM_EVIDENCE_PENDING|ITEM_STATE_TOOL_UNAVAILABLE)
+            printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s (%s): keep one valid Active Item in Current Phase, use unique phase-matching P/V IDs for every actionable checkbox, and give every checked item non-placeholder Evidence.' "$_plan_file" "$_issue"
             ;;
     esac
 }

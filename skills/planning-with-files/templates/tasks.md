@@ -14,6 +14,9 @@
 ## Current Phase
 <!-- Keep empty while planning/discussing. Otherwise the entire body must be exactly "Phase N". -->
 
+## Active Item
+<!-- Keep empty while planning/discussing or after settlement. During work use exactly one unchecked ID from Current Phase, for example P2.1 or V2.1. -->
+
 ## Workflow Profile
 <!-- Pick exactly one before implementation: A, B, or C. -->
 **Profile:** [A | B | C]
@@ -31,56 +34,57 @@
 <!--
 Required phase format:
 ### Phase N: Title
-- [ ] Task item
+- [ ] [PN.N] Observable outcome
+  - Evidence: pending
 - **Status:** pending | in_progress | complete | blocked (external reason) | deferred (user-directed reason)
 
 Use `blocked (reason)` only for a genuine external dependency and `deferred (reason)` only when the user explicitly postpones the phase.
+Use P IDs for work and V IDs for phase acceptance. IDs are unique and match the containing phase number.
 -->
 
 ### Phase 1: Requirements & Discovery
-- [ ] Understand user intent
-- [ ] Identify constraints, non-goals, and verification needs
-- [ ] Record discoveries in `findings.md`
-- [ ] Record confirmed user choices in `decisions.md`
-- **Status:** in_progress
+- [ ] [P1.1] User intent, constraints, non-goals, and verification needs are recorded.
+  - Evidence: pending
+- [ ] [P1.2] Relevant discoveries and confirmed user choices are recorded in their durable files.
+  - Evidence: pending
+- **Status:** pending
 
 **Done when:**
-- [ ] `findings.md` answers the key questions below
-- [ ] `decisions.md` contains current user decisions that affect implementation
-- [ ] Workflow Profile is A, B, or C
+- [ ] [V1.1] `findings.md` answers the key questions, `decisions.md` reflects current choices, and Workflow Profile is selected.
+  - Evidence: pending
 
 ### Phase 2: Planning
-- [ ] Define approach
-- [ ] Update `decisions.md` for non-obvious or user-confirmed choices
-- [ ] Name exact verification commands or checks
+- [ ] [P2.1] The implementation approach and non-obvious decisions are recorded.
+  - Evidence: pending
+- [ ] [P2.2] Exact verification commands or observable checks are named.
+  - Evidence: pending
 - **Status:** pending
 
 **Done when:**
-- [ ] Every non-obvious choice is captured in `decisions.md`
-- [ ] No open question blocks implementation
-- [ ] Verification commands/checks are listed below
+- [ ] [V2.1] No unresolved question blocks implementation and every required check is listed below.
+  - Evidence: pending
 
 ### Phase 3: Implementation
-- [ ] Make the planned changes
-- [ ] Keep concise progress notes in `## Progress Notes`
-- [ ] Log errors in `## Errors Encountered`
+- [ ] [P3.1] The planned scoped changes are present without modifying unrelated worktree state.
+  - Evidence: pending
+- [ ] [P3.2] Current progress, errors, and touched files accurately reflect the implementation.
+  - Evidence: pending
 - **Status:** pending
 
 **Done when:**
-- [ ] Intended files are changed
-- [ ] No unrelated worktree changes are modified
-- [ ] Relevant verification has run or the reason it could not run is recorded
+- [ ] [V3.1] Relevant implementation checks pass or a genuine external blocker is recorded.
+  - Evidence: pending
 
 ### Phase 4: Verification & Delivery
-- [ ] Run the exact checks listed in `## Verification`
-- [ ] Fix failures and re-run failing checks
-- [ ] Summarize outcome for the user
+- [ ] [P4.1] Every exact check listed in `## Verification` has a current result and failures have been resolved or externally blocked.
+  - Evidence: pending
+- [ ] [P4.2] The final user-facing outcome is ready and contains no plan-only narration.
+  - Evidence: pending
 - **Status:** pending
 
 **Done when:**
-- [ ] All required checks pass, or blockers are explicit
-- [ ] Remaining work, if any, is listed
-- [ ] Final user-facing summary is ready
+- [ ] [V4.1] The plan is finalizable: every phase is settled, evidence is current, and the pointer can be deactivated.
+  - Evidence: pending
 
 ## Key Questions
 1. [Question to answer]

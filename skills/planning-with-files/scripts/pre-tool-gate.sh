@@ -11,6 +11,7 @@ INPUT=$(cat)
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 STATE_TOOL="$SCRIPT_DIR/session-state.sh"
+PLAN_STATE_TOOL="$SCRIPT_DIR/plan_state.py"
 LOG_DIR="tmp/hook-logs/plan-with-files"
 LOG_FILE="$LOG_DIR/pre-tool-use.log"
 mkdir -p "$LOG_DIR" 2>/dev/null || true
@@ -193,6 +194,28 @@ if [ -z "$PLAN_DIR" ]; then
     fi
     REASON_TEXT="[planning-with-files] OWNERSHIP ACTION REQUIRED (not a permission failure and not an external blocker). Candidate '$CANDIDATE' is pending for this prompt. Do not stop or report that the environment is blocked. Resolve ownership now by running exactly one action: SAME task -> $EXPECTED_BIND OR DIFFERENT task -> $EXPECTED_RELEASE. After bind/release succeeds, retry the original tool call."
     log "session=$SESSION_ID candidate=$CANDIDATE decision=block-ownership tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
+    block "$REASON_TEXT"
+fi
+
+# Contracted plans fail closed for operational mutations when item state is
+# invalid. Read-only diagnosis and plan-local repair/checkpoint calls remain
+# available so the agent can repair the state instead of claiming a blocker.
+ITEM_ISSUE=""
+if grep -qE '^## Active Item[[:space:]]*$' "$PLAN_DIR/tasks.md" 2>/dev/null; then
+    if command -v python3 >/dev/null 2>&1 && [ -f "$PLAN_STATE_TOOL" ]; then
+        ITEM_ISSUE=$(python3 "$PLAN_STATE_TOOL" validate "$PLAN_DIR/tasks.md" 2>/dev/null || true)
+    else
+        ITEM_ISSUE=ITEM_STATE_TOOL_UNAVAILABLE
+    fi
+fi
+if [ -n "$ITEM_ISSUE" ]; then
+    if [ -n "$MUTATION_PLAN" ] || maintenance_tool_allowed "$PLAN_DIR"; then
+        log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") item_issue=$ITEM_ISSUE decision=allow-item-repair tool=$TOOL_NAME"
+        printf '{}'
+        exit 0
+    fi
+    REASON_TEXT="[planning-with-files] ITEM STATE ACTION REQUIRED ($ITEM_ISSUE). Operational mutation is blocked until the owned plan has one valid unchecked Active Item in Current Phase with phase-matching unique P/V IDs and Evidence lines. Read-only diagnosis and plan-local repair/checkpoint tools remain allowed. Repair/start the item, then retry this tool; do not report an external blocker."
+    log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") item_issue=$ITEM_ISSUE decision=block-item-state tool=$TOOL_NAME"
     block "$REASON_TEXT"
 fi
 

@@ -16,6 +16,9 @@ Fix the failed login flow without changing unrelated authentication behavior.
 ## Current Phase
 Phase 2
 
+## Active Item
+P2.1
+
 ## Workflow Profile
 **Profile:** A
 
@@ -29,17 +32,24 @@ Phase 2
 ### Phase 1: Reproduce and Locate [complete]
 
 ### Phase 2: Implement Fix
-- [ ] Await the user lookup
-- [ ] Run `pytest tests/auth/test_login.py`
+- [ ] [P2.1] The user lookup is awaited before the login decision.
+  - Evidence: pending
+- [ ] [P2.2] The focused login regression passes.
+  - Evidence: pending
 - **Status:** in_progress
 
-**Done when:** `pytest tests/auth/test_login.py` passes.
+**Done when:**
+- [ ] [V2.1] `pytest tests/auth/test_login.py` passes.
+  - Evidence: pending
 
 ### Phase 3: Verify Regression
-- [ ] Run `pytest tests/auth`
+- [ ] [P3.1] The authentication regression suite passes.
+  - Evidence: pending
 - **Status:** pending
 
-**Done when:** `pytest tests/auth` passes.
+**Done when:**
+- [ ] [V3.1] `pytest tests/auth` passes.
+  - Evidence: pending
 ```
 
 Only current/incomplete work stays detailed. The old phase is one line because its evidence has moved to history.

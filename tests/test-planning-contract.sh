@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 STATE_TOOL="$REPO_ROOT/skills/planning-with-files/scripts/session-state.sh"
+CHECKPOINT_TOOL="$REPO_ROOT/skills/planning-with-files/scripts/plan-checkpoint.py"
 # shellcheck source=../.codex/hooks/planning-with-files/scripts/common.sh
 source "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/common.sh"
 
@@ -16,6 +17,26 @@ printf '%s\n' test-task > "$PROJECT/.plan-with-files"
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 assert_eq() { [ "$1" = "$2" ] || fail "$3 (expected '$2', got '$1')"; }
 assert_contains() { case "$1" in *"$2"*) ;; *) fail "$3 (missing '$2')" ;; esac; }
+
+post_hook() {
+    local provider=$1 session=$2 script
+    case "$provider" in
+        codex) script="$REPO_ROOT/.codex/hooks/planning-with-files/scripts/post-tool-use.sh" ;;
+        claude) script="$REPO_ROOT/.claude/hooks/planning-with-files/scripts/post-tool-use.sh" ;;
+        copilot) script="$REPO_ROOT/.github/hooks/scripts/post-tool-use.sh" ;;
+    esac
+    (cd "$PROJECT" && printf '{"session_id":"%s","hook_event_name":"PostToolUse"}\n' "$session" | "$script")
+}
+
+pre_hook() {
+    local provider=$1 session=$2 command=$3 script
+    case "$provider" in
+        codex) script="$REPO_ROOT/.codex/hooks/planning-with-files/scripts/pre-tool-use.sh" ;;
+        claude) script="$REPO_ROOT/.claude/hooks/planning-with-files/scripts/pre-tool-use.sh" ;;
+        copilot) script="$REPO_ROOT/.github/hooks/scripts/pre-tool-use.sh" ;;
+    esac
+    (cd "$PROJECT" && python3 -c 'import json,sys; print(json.dumps({"session_id":sys.argv[1],"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[2]}}))' "$session" "$command" | "$script")
+}
 
 write_valid_plan() {
     cat > "$PLAN_DIR/tasks.md" <<'EOF'
@@ -54,12 +75,81 @@ EOF
     printf '# Decisions\n\n## Active Decisions\n- fixture\n' > "$PLAN_DIR/decisions.md"
 }
 
+write_contracted_plan() {
+    cat > "$PLAN_DIR/tasks.md" <<'EOF'
+# Tasks: Contracted Fixture
+
+## Goal
+Verify outcome-item transitions.
+
+## Task Identity
+- Deliverable: Verify outcome-item transitions
+- Anchors: contracted-fixture
+- Non-goals: unrelated hook behavior
+
+## Current Phase
+Phase 1
+
+## Active Item
+P1.1
+
+## Workflow Profile
+**Profile:** C
+
+## Resume Checkpoint
+- **Next action:** Complete P1.1.
+- **Blocker:** none
+- **Details:** none
+
+## Phases
+
+### Phase 1: Implement
+- [ ] [P1.1] The change is present.
+  - Evidence: pending
+- [ ] [V1.1] The focused check passes.
+  - Evidence: pending
+- **Status:** in_progress
+
+### Phase 2: Verify
+- [ ] [P2.1] The regression check passes.
+  - Evidence: pending
+- [ ] [V2.1] The task is ready to finalize.
+  - Evidence: pending
+- **Status:** pending
+EOF
+}
+
 write_valid_plan
 count_phases "$PLAN_DIR/tasks.md"
 assert_eq "$(check_task_plan_format "$PLAN_DIR/tasks.md")" "" "valid plan"
 assert_eq "$(current_phase_pointer "$PLAN_DIR/tasks.md")" "Phase 1" "exact current pointer"
 assert_eq "$TOTAL/$IN_PROGRESS/$PENDING/$BLOCKED/$DEFERRED" "2/1/1/0/0" "phase counts"
 
+# Contracted item transitions are atomic and advance item, phase, and pointer state.
+write_contracted_plan
+count_phases "$PLAN_DIR/tasks.md"
+assert_eq "$(check_task_plan_format "$PLAN_DIR/tasks.md")" "" "contracted plan"
+if python3 "$CHECKPOINT_TOOL" --plan "$PLAN_DIR/tasks.md" complete P1.1 --evidence pending >/dev/null; then
+    fail "checkpoint rejects placeholder completion evidence"
+fi
+python3 "$CHECKPOINT_TOOL" --plan "$PLAN_DIR/tasks.md" progress P1.1 --evidence "implementation exists" >/dev/null
+python3 "$CHECKPOINT_TOOL" --plan "$PLAN_DIR/tasks.md" complete P1.1 --evidence "implementation exists" >/dev/null
+assert_contains "$(planning_item_context "$PLAN_DIR/tasks.md")" '"active_item":"V1.1"' "checkpoint selects phase acceptance"
+python3 "$CHECKPOINT_TOOL" --plan "$PLAN_DIR/tasks.md" complete V1.1 --evidence "focused check passed" >/dev/null
+assert_contains "$(planning_item_context "$PLAN_DIR/tasks.md")" '"active_item":"P2.1"' "checkpoint advances phase"
+assert_contains "$(current_phase_pointer "$PLAN_DIR/tasks.md")" "Phase 2" "checkpoint advances Current Phase"
+python3 "$CHECKPOINT_TOOL" --plan "$PLAN_DIR/tasks.md" complete P2.1 --evidence "regression check passed" >/dev/null
+python3 "$CHECKPOINT_TOOL" --plan "$PLAN_DIR/tasks.md" complete V2.1 --evidence "final review passed" --deactivate-pointer >/dev/null
+assert_eq "$(planning_assert_finalizable "$PLAN_DIR/tasks.md" "$PROJECT")" "FINALIZABLE" "final checkpoint settles and deactivates plan"
+assert_eq "$(cat "$PROJECT/.plan-with-files")" "" "final checkpoint clears owned pointer"
+printf '%s\n' test-task > "$PROJECT/.plan-with-files"
+
+write_contracted_plan
+sed -i 's/\[V1\.1\]/[P1.1]/' "$PLAN_DIR/tasks.md"
+count_phases "$PLAN_DIR/tasks.md"
+assert_eq "$(check_task_plan_format "$PLAN_DIR/tasks.md")" "ITEM_ID_DUPLICATE" "contract rejects duplicate item IDs"
+
+write_valid_plan
 sed '/^## Phases$/d' "$PLAN_DIR/tasks.md" > "$PLAN_DIR/bad-layout.md"
 count_phases "$PLAN_DIR/bad-layout.md"
 assert_eq "$(check_task_plan_format "$PLAN_DIR/bad-layout.md")" "SECTION_LAYOUT_INVALID" "missing Phases section"
@@ -142,6 +232,8 @@ COMPACTION_LOG=$(cat "$PROJECT/tmp/hook-logs/plan-with-files/pre-tool-use.log")
 assert_contains "$COMPACTION_LOG" "tool_call tool_name=Bash" "pre-tool log records full tool name"
 assert_contains "$COMPACTION_LOG" 'tool_input={"command":"npm test"}' "pre-tool log records full tool parameters"
 assert_contains "$COMPACTION_LOG" "decision=block-compaction tool=Bash" "pre-tool log correlates blocked decision"
+CHECKPOINT_PAYLOAD=$(printf '{"session_id":"codex-compaction","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"python3 %s --plan %s progress P1.1 --evidence checkpoint"}}\n' "$CHECKPOINT_TOOL" "$PLAN_DIR/tasks.md")
+assert_eq "$(cd "$PROJECT" && printf '%s\n' "$CHECKPOINT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/pre-tool-use.sh")" "{}" "pre-tool gate permits owned structured checkpoint"
 
 CODEX_PAYLOAD='{"session_id":"codex-contract","hook_event_name":"Stop","stop_hook_active":false}'
 CLAUDE_PAYLOAD='{"session_id":"claude-contract","hook_event_name":"Stop","stop_hook_active":false}'
@@ -160,6 +252,30 @@ PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=codex PWF_SESSION_ID=codex-contr
 PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=claude PWF_SESSION_ID=claude-contract "$STATE_TOOL" bind test-task >/dev/null
 PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=copilot PWF_SESSION_ID=copilot-contract "$STATE_TOOL" bind test-task >/dev/null
 
+write_contracted_plan
+sed -i '/^## Active Item$/{n;/^P1\.1$/d;}' "$PLAN_DIR/tasks.md"
+for SPEC in 'codex codex-contract' 'claude claude-contract' 'copilot copilot-contract'; do
+    set -- $SPEC
+    assert_contains "$(pre_hook "$1" "$2" "npm test")" "ITEM STATE ACTION REQUIRED" "$1 PreTool blocks operation with missing Active Item"
+    assert_eq "$(pre_hook "$1" "$2" "rg Phase .")" "{}" "$1 PreTool allows read-only item repair diagnosis"
+    assert_eq "$(pre_hook "$1" "$2" "python3 $CHECKPOINT_TOOL --plan $PLAN_DIR/tasks.md start P1.1")" "{}" "$1 PreTool allows structured item repair"
+done
+write_contracted_plan
+for SPEC in 'codex codex-contract' 'claude claude-contract' 'copilot copilot-contract'; do
+    set -- $SPEC
+    assert_contains "$(post_hook "$1" "$2")" "Active Item P1.1" "$1 PostTool initial item context"
+    assert_contains "$(post_hook "$1" "$2")" "structured checkpoint before any unrelated tool" "$1 PostTool checkpoint barrier"
+    POST_STATE=$(PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" cache "$1" "$2")
+    sed -i 's/^unchanged_tool_count=.*/unchanged_tool_count=2/; s/^last_item_nudge_ts=.*/last_item_nudge_ts=0/' "$POST_STATE"
+    assert_contains "$(post_hook "$1" "$2")" "STALE ITEM STATE: 3 tool result" "$1 PostTool stale item detection"
+done
+grep -q '^- \[ \] \[P1.1\]' "$PLAN_DIR/tasks.md" || fail "PostTool never auto-completes an item"
+POST_LOG=$(cat "$PROJECT/tmp/hook-logs/plan-with-files/post-tool-use.log")
+assert_contains "$POST_LOG" "item_state fingerprint=" "PostTool log exposes fingerprint"
+assert_contains "$POST_LOG" "active_item=P1.1" "PostTool log exposes Active Item"
+assert_contains "$POST_LOG" "checkpoint_lag=" "PostTool log exposes checkpoint lag"
+assert_contains "$POST_LOG" "stale=true" "PostTool log exposes stale state"
+
 CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")
 CLAUDE_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CLAUDE_PAYLOAD" | "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/agent-stop.sh")
 GITHUB_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$COPILOT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")
@@ -172,10 +288,23 @@ for OUTPUT in "$CODEX_OUTPUT" "$CLAUDE_OUTPUT" "$GITHUB_OUTPUT"; do
     assert_contains "$OUTPUT" "advance Current Phase" "phase persistence advances later phases"
     assert_contains "$OUTPUT" "blocked (reason)" "external blocker has a terminating state"
     assert_contains "$OUTPUT" "deferred (reason)" "user deferral has a terminating state"
+    assert_contains "$OUTPUT" "Active Item P1.1" "Stop targets contracted Active Item"
 done
-assert_contains "$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")" "Task incomplete" "Codex active Stop remains blocked"
-assert_contains "$(cd "$PROJECT" && printf '%s\n' "$CLAUDE_REPEAT_PAYLOAD" | "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/agent-stop.sh")" "Task incomplete" "Claude active Stop remains blocked"
-assert_contains "$(cd "$PROJECT" && printf '%s\n' "$COPILOT_REPEAT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")" "Task incomplete" "Copilot active Stop remains blocked"
+CODEX_REPEAT_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")
+CLAUDE_REPEAT_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CLAUDE_REPEAT_PAYLOAD" | "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/agent-stop.sh")
+COPILOT_REPEAT_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$COPILOT_REPEAT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")
+for OUTPUT in "$CODEX_REPEAT_OUTPUT" "$CLAUDE_REPEAT_OUTPUT" "$COPILOT_REPEAT_OUTPUT"; do
+    assert_contains "$OUTPUT" "Task incomplete" "active Stop remains blocked"
+    assert_contains "$OUTPUT" "No structured plan progress" "repeated Stop reports no progress"
+    assert_contains "$OUTPUT" "Do not answer this hook with another summary" "repeated Stop demands operational recovery"
+done
+STOP_LOG=$(cat "$PROJECT/tmp/hook-logs/plan-with-files/agent-stop.log")
+assert_contains "$STOP_LOG" "progress fingerprint=" "Stop log exposes fingerprint"
+assert_contains "$STOP_LOG" "no_progress_count=1" "Stop log exposes repeated no-progress count"
+assert_contains "$STOP_LOG" "active_item=P1.1" "Stop log exposes Active Item"
+python3 "$CHECKPOINT_TOOL" --plan "$PLAN_DIR/tasks.md" progress P1.1 --evidence "implementation now exists" >/dev/null
+CODEX_PROGRESS_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")
+assert_contains "$CODEX_PROGRESS_OUTPUT" "Structured plan progress occurred" "item progress resets Stop recovery state"
 
 write_valid_plan
 sed -i 's/in_progress/blocked (external dependency unavailable)/; s/pending/deferred (user postponed validation)/' "$PLAN_DIR/tasks.md"

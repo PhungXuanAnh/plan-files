@@ -130,7 +130,7 @@ fi
 # --- Format / Workflow-Profile checks (delegated to common.sh) -------------
 FORMAT_ISSUE=$(check_task_plan_format "$PLAN_FILE")
 case "${FORMAT_ISSUE:-}" in
-    SECTION_LAYOUT_INVALID|CURRENT_PHASE_INVALID|PHASE_HEADING_INVALID|PHASE_STATUS_INVALID)
+    SECTION_LAYOUT_INVALID|CURRENT_PHASE_INVALID|PHASE_HEADING_INVALID|PHASE_STATUS_INVALID|ACTIVE_ITEM_SECTION_INVALID|ACTIVE_ITEM_REQUIRED|ACTIVE_ITEM_INVALID|ITEM_ID_INVALID|ITEM_ID_DUPLICATE|ITEM_PHASE_MISMATCH|ITEM_EVIDENCE_MISSING|CHECKED_ITEM_EVIDENCE_PENDING|ITEM_STATE_TOOL_UNAVAILABLE)
         REASON="[planning-with-files] $(task_plan_format_message "$FORMAT_ISSUE" "$PLAN_FILE" "$TOTAL") Fix the plan structure, then continue."
         log "decision: BLOCK ($FORMAT_ISSUE)"
         ESCAPED_REASON=$(json_escape "$REASON")
@@ -290,12 +290,68 @@ if [ -z "${PHASE_NUM:-}" ] && [ "$COMPLETE" -eq 0 ] && [ "$BLOCKED" -eq 0 ] && [
     exit 0
 fi
 
+# --- Structured progress fingerprint + repeated-Stop recovery -------------
+FINGERPRINT=$(planning_progress_fingerprint "$PLAN_FILE" 2>/dev/null || true)
+ITEM_CONTEXT=$(planning_item_context "$PLAN_FILE" 2>/dev/null || true)
+ITEM_FIELDS=""
+if [ -n "$ITEM_CONTEXT" ] && command -v python3 >/dev/null 2>&1; then
+    ITEM_FIELDS=$(printf '%s' "$ITEM_CONTEXT" | python3 -c '
+import json, sys
+p=json.load(sys.stdin)
+def clean(value): return " ".join(str(value or "").split()).replace("\t", " ")
+print("\t".join(clean(p.get(key)) for key in ("active_item","active_text","first_unchecked_item","first_unchecked_text")))
+' 2>/dev/null || true)
+fi
+ACTIVE_ITEM="" ACTIVE_TEXT="" FIRST_ITEM="" FIRST_TEXT=""
+IFS=$'\t' read -r ACTIVE_ITEM ACTIVE_TEXT FIRST_ITEM FIRST_TEXT <<< "$ITEM_FIELDS"
+TARGET_ITEM=${ACTIVE_ITEM:-$FIRST_ITEM}
+TARGET_TEXT=${ACTIVE_TEXT:-$FIRST_TEXT}
+
+NO_PROGRESS_COUNT=0
+STOP_PROGRESS_STATE=initial
+HOOK_STATE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" cache "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+if [ -n "$HOOK_STATE" ] && [ -n "$FINGERPRINT" ]; then
+    STOP_STATE_FILE="$HOOK_STATE.stop"
+    STOP_STATE_LOCK="$STOP_STATE_FILE.lock"
+    {
+        flock -x 8 || true
+        PREVIOUS_FINGERPRINT=$(grep -E '^fingerprint=' "$STOP_STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
+        PREVIOUS_COUNT=$(grep -E '^no_progress_count=' "$STOP_STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
+        PREVIOUS_COUNT=${PREVIOUS_COUNT:-0}
+        if [ -n "$PREVIOUS_FINGERPRINT" ] && [ "$PREVIOUS_FINGERPRINT" = "$FINGERPRINT" ]; then
+            NO_PROGRESS_COUNT=$((PREVIOUS_COUNT + 1))
+            STOP_PROGRESS_STATE=no_progress
+        elif [ -n "$PREVIOUS_FINGERPRINT" ]; then
+            NO_PROGRESS_COUNT=0
+            STOP_PROGRESS_STATE=progress
+        fi
+        {
+            printf 'fingerprint=%s\n' "$FINGERPRINT"
+            printf 'no_progress_count=%s\n' "$NO_PROGRESS_COUNT"
+            printf 'last_stop_ts=%s\n' "$(date +%s)"
+        } > "$STOP_STATE_FILE.tmp" && mv "$STOP_STATE_FILE.tmp" "$STOP_STATE_FILE"
+    } 8>>"$STOP_STATE_LOCK" 2>/dev/null || true
+fi
+
+TARGET_LINE=""
+if [ -n "$TARGET_ITEM" ]; then
+    TARGET_LINE=" Active Item ${TARGET_ITEM}: ${TARGET_TEXT}"
+fi
+if [ "$STOP_PROGRESS_STATE" = "no_progress" ]; then
+    RECOVERY_LINE=" No structured plan progress was detected across ${NO_PROGRESS_COUNT} repeated Stop attempt(s). Do not answer this hook with another summary. Resume the named item now: call the next operational tool; if its evidence is already satisfied, run the structured checkpoint immediately. A failed execution path is not a blocker while a materially different path remains."
+elif [ "$STOP_PROGRESS_STATE" = "progress" ]; then
+    RECOVERY_LINE=" Structured plan progress occurred since the previous Stop; continue directly from the named item without a progress-only final."
+else
+    RECOVERY_LINE=" Continue directly from the named item without a progress-only final."
+fi
+log "progress fingerprint=${FINGERPRINT:-unavailable} state=$STOP_PROGRESS_STATE no_progress_count=$NO_PROGRESS_COUNT active_item=${ACTIVE_ITEM:-none} first_item=${FIRST_ITEM:-none}"
+
 # Task incomplete -> BLOCK the stop and tell the agent why to continue.
 # Per Claude Code docs: decision="block" + reason prevents the stop.
 # reason is injected into Claude's context as the explanation.
 SETTLED=$((COMPLETE + BLOCKED + DEFERRED))
-REASON="[planning-with-files] Task incomplete ($SETTLED/$TOTAL phases settled: $COMPLETE complete, $BLOCKED blocked, $DEFERRED deferred).${REMAINING_LINE} Completing one item or checkpoint is progress, not a stopping boundary. Do not emit a final answer while any phase remains actionable. Continue every unchecked item in every non-settled phase, starting with Current Phase; after each phase, advance Current Phase and keep working until every phase is settled. If a genuine external dependency leaves a phase with no actionable path, update its checkpoint and set '- **Status:** blocked (reason)'. Use '- **Status:** deferred (reason)' only when the user explicitly postpones that phase. Then continue any other non-settled phases; stop only when every phase is complete, blocked, or deferred."
-log "decision: BLOCK ($SETTLED/$TOTAL phases settled, blocked=$BLOCKED deferred=$DEFERRED)"
+REASON="[planning-with-files] Task incomplete ($SETTLED/$TOTAL phases settled: $COMPLETE complete, $BLOCKED blocked, $DEFERRED deferred).${REMAINING_LINE}${TARGET_LINE}${RECOVERY_LINE} Completing one item or checkpoint is progress, not a stopping boundary. Do not emit a final answer while any phase remains actionable. Continue every unchecked item in every non-settled phase, starting with Current Phase; after each phase, advance Current Phase and keep working until every phase is settled. If a genuine external dependency leaves a phase with no actionable path, update its checkpoint and set '- **Status:** blocked (reason)'. Use '- **Status:** deferred (reason)' only when the user explicitly postpones that phase. Then continue any other non-settled phases; stop only when every phase is complete, blocked, or deferred."
+log "decision: BLOCK ($SETTLED/$TOTAL phases settled, blocked=$BLOCKED deferred=$DEFERRED progress_state=$STOP_PROGRESS_STATE no_progress_count=$NO_PROGRESS_COUNT)"
 ESCAPED_REASON=$(json_escape "$REASON")
 OUTPUT="{\"decision\":\"block\",\"reason\":$ESCAPED_REASON}"
 log "stdout: ${#OUTPUT} chars"
