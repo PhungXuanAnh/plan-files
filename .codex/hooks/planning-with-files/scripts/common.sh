@@ -53,7 +53,7 @@ current_phase_pointer() {
 
 planning_state_tool() {
     local _dir _candidate
-    _dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd) || return 1
+    _dir=$(CDPATH= cd -P -- "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd) || return 1
     for _candidate in \
         "$_dir/../../../../skills/planning-with-files/scripts/plan_state.py" \
         "$_dir/../../../skills/planning-with-files/scripts/plan_state.py"; do

@@ -15,7 +15,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 INPUT=$(cat)
 PROVIDER=claude
-REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)
+REPO_ROOT=$(CDPATH= cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)
 STATE_TOOL="$REPO_ROOT/skills/planning-with-files/scripts/session-state.sh"
 
 if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e .plan-with-files-skip ]; then

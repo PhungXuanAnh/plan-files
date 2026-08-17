@@ -3,7 +3,7 @@
 
 set -u
 
-REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)
+REPO_ROOT=$(CDPATH= cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)
 STATE_TOOL="$REPO_ROOT/skills/planning-with-files/scripts/session-state.sh"
 SESSION_ID=${PWF_SESSION_ID:-}
 

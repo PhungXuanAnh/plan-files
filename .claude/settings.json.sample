@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ROOT=\"$(git rev-parse --show-toplevel)\" && cd \"$ROOT\" && bash \"$ROOT/.claude/hooks/planning-with-files/scripts/pre-tool-use.sh\"",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && cd \"$ROOT\" && bash \"$HOME/.claude/hooks/planning-with-files/scripts/pre-tool-use.sh\"",
             "timeout": 5
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ROOT=\"$(git rev-parse --show-toplevel)\" && cd \"$ROOT\" && bash \"$ROOT/.claude/hooks/planning-with-files/scripts/session-start.sh\"",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && cd \"$ROOT\" && bash \"$HOME/.claude/hooks/planning-with-files/scripts/session-start.sh\"",
             "timeout": 5
           }
         ]
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ROOT=\"$(git rev-parse --show-toplevel)\" && cd \"$ROOT\" && bash \"$ROOT/.claude/hooks/planning-with-files/scripts/user-prompt-submit.sh\"",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && cd \"$ROOT\" && bash \"$HOME/.claude/hooks/planning-with-files/scripts/user-prompt-submit.sh\"",
             "timeout": 5
           }
         ]
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ROOT=\"$(git rev-parse --show-toplevel)\" && cd \"$ROOT\" && bash \"$ROOT/.claude/hooks/planning-with-files/scripts/post-tool-use.sh\"",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && cd \"$ROOT\" && bash \"$HOME/.claude/hooks/planning-with-files/scripts/post-tool-use.sh\"",
             "timeout": 5
           }
         ]
@@ -49,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ROOT=\"$(git rev-parse --show-toplevel)\" && cd \"$ROOT\" && bash \"$ROOT/.claude/hooks/planning-with-files/scripts/agent-stop.sh\"",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && cd \"$ROOT\" && bash \"$HOME/.claude/hooks/planning-with-files/scripts/agent-stop.sh\"",
             "timeout": 10
           }
         ]

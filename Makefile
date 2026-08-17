@@ -11,6 +11,7 @@ test: ## Run planning contract tests
 	@bash tests/test-planning-contract.sh
 	@bash tests/test-session-ownership.sh
 	@bash tests/test-codex-global-hooks.sh
+	@bash tests/test-claude-global-hooks.sh
 
 # ---------------------------------------------------------------------------
 # Global installation. Hook configs are samples so this repository does not
@@ -25,12 +26,14 @@ CODEX_SKILL := $(HOME)/.codex/skills/planning-with-files
 CODEX_HOOKS := $(HOME)/.codex/hooks.json
 CLAUDE_CODE_SKILL := $(HOME)/.claude/skills/planning-with-files
 CLAUDE_CODE_SETTINGS := $(HOME)/.claude/settings.json
+CLAUDE_CODE_HOOKS := $(HOME)/.claude/hooks/planning-with-files
 COPILOT_SKILL := $(HOME)/Dropbox/Work/copilot/skills/planning-with-files
 COPILOT_HOOKS := $(HOME)/Dropbox/Work/copilot/hooks/planning-with-files.json
 KIRO_SKILL := $(HOME)/.kiro/skills/planning-with-files
 
 CODEX_HOOKS_SRC := $(REPO_ROOT)/.codex/hooks.json.sample
 CLAUDE_CODE_SETTINGS_SRC := $(REPO_ROOT)/.claude/settings.json.sample
+CLAUDE_CODE_HOOKS_SRC := $(REPO_ROOT)/.claude/hooks/planning-with-files
 COPILOT_HOOKS_SRC := $(REPO_ROOT)/.github/hooks/planning-with-files.json.sample
 
 define link_path
@@ -71,6 +74,7 @@ check-installs: ## Show global skill/hook install status
 	$(call check_path,$(CODEX_HOOKS))
 	$(call check_path,$(CLAUDE_CODE_SKILL))
 	$(call check_path,$(CLAUDE_CODE_SETTINGS))
+	$(call check_path,$(CLAUDE_CODE_HOOKS))
 	$(call check_path,$(COPILOT_SKILL))
 	$(call check_path,$(COPILOT_HOOKS))
 	$(call check_path,$(KIRO_SKILL))
@@ -86,7 +90,8 @@ install-codex: install-skill-codex install-hook-codex ## Link Codex skill and ho
 install-skill-claude-code: ## Link skill into global Claude Code skills
 	$(call link_path,$(SKILL_SRC),$(CLAUDE_CODE_SKILL))
 
-install-hook-claude-code: ## Link sample Claude Code settings globally
+install-hook-claude-code: ## Link Claude Code hooks and sample settings globally
+	$(call link_path,$(CLAUDE_CODE_HOOKS_SRC),$(CLAUDE_CODE_HOOKS))
 	$(call link_path,$(CLAUDE_CODE_SETTINGS_SRC),$(CLAUDE_CODE_SETTINGS))
 
 install-claude-code: install-skill-claude-code install-hook-claude-code ## Link Claude Code skill and settings globally

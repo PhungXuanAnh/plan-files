@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)
+REPO_ROOT=$(CDPATH= cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)
 BIND_TOOL="$REPO_ROOT/.claude/hooks/planning-with-files/scripts/bind-session.sh"
 INPUT=$(cat)
 LOG_DIR="tmp/hook-logs/plan-with-files"
