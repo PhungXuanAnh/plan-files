@@ -82,7 +82,7 @@ Install all supported skills and hooks globally from this checkout:
 make install-global
 ```
 
-`make install-hooks` installs only the hooks. Claude Code and Copilot global configs are symlinks to the corresponding `.sample` files in this repository. Codex merges its sample into `~/.codex/hooks.json` to preserve unrelated global hooks, while the generated commands point back to this repository's scripts. Hook script edits therefore apply globally without reinstalling; rerun `make install-hooks` only after changing hook config JSON or moving this checkout.
+`make install-hooks` installs only the hooks. Claude Code merges the planning groups in `.claude/settings.json.sample` into the regular global file `~/.claude/settings.json`; missing groups are added, stale or duplicate planning groups are replaced, and unrelated settings and hook groups are preserved even when they share the same event. Codex merges its sample into `~/.codex/hooks.json`. Copilot's global hook config remains a symlink to its `.sample` file. Hook scripts execute from this checkout, so script-only edits apply globally without reinstalling. Rerun `make install-hooks` after changing a Claude or Codex hook definition, or after moving this checkout. The command is safe to repeat and leaves an already matching Claude settings file unchanged.
 
 Do not rename the `.sample` files back to active project-local config names unless a second local hook layer is intentional. Codex runs every matching global and project hook, so enabling both layers executes both configurations.
 

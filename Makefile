@@ -15,9 +15,9 @@ test: ## Run planning contract tests
 
 # ---------------------------------------------------------------------------
 # Global installation. Hook configs are samples so this repository does not
-# register a second project-local hook layer. Claude Code and Copilot link the
-# samples globally. Codex merges its sample into ~/.codex/hooks.json so unrelated
-# global hooks survive; generated commands still dispatch to this repository.
+# register a second project-local hook layer. Copilot links its sample globally.
+# Claude Code and Codex merge their samples into regular global config files so
+# unrelated settings/hooks survive; hook commands dispatch to this repository.
 # ---------------------------------------------------------------------------
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
 SKILL_SRC := $(REPO_ROOT)/skills/planning-with-files
@@ -90,11 +90,11 @@ install-codex: install-skill-codex install-hook-codex ## Link Codex skill and ho
 install-skill-claude-code: ## Link skill into global Claude Code skills
 	$(call link_path,$(SKILL_SRC),$(CLAUDE_CODE_SKILL))
 
-install-hook-claude-code: ## Link Claude Code hooks and sample settings globally
+install-hook-claude-code: ## Merge Claude Code hooks into global settings
 	$(call link_path,$(CLAUDE_CODE_HOOKS_SRC),$(CLAUDE_CODE_HOOKS))
-	$(call link_path,$(CLAUDE_CODE_SETTINGS_SRC),$(CLAUDE_CODE_SETTINGS))
+	@python3 scripts/install-claude-hooks.py "$(CLAUDE_CODE_SETTINGS_SRC)" "$(CLAUDE_CODE_SETTINGS)"
 
-install-claude-code: install-skill-claude-code install-hook-claude-code ## Link Claude Code skill and settings globally
+install-claude-code: install-skill-claude-code install-hook-claude-code ## Install Claude Code skill and hooks globally
 
 install-skill-copilot: ## Link skill into global GitHub Copilot skills
 	$(call link_path,$(SKILL_SRC),$(COPILOT_SKILL))
@@ -109,9 +109,9 @@ install-skill-kiro: ## Link skill into global Kiro skills
 
 install-skills: install-skill-codex install-skill-claude-code install-skill-copilot install-skill-kiro ## Link skills globally
 
-install-hooks: install-hook-codex install-hook-claude-code install-hook-copilot ## Link hook JSON/settings globally
+install-hooks: install-hook-codex install-hook-claude-code install-hook-copilot ## Install hook JSON/settings globally
 
-install-global install: install-skills install-hooks ## Link skills and available hook JSON/settings globally
+install-global install: install-skills install-hooks ## Install skills and available hook JSON/settings globally
 
 # ---------------------------------------------------------------------------
 injected-content: ## Show what the post-tool-use hook would inject from the active tasks.md
