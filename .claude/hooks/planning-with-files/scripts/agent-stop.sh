@@ -308,6 +308,9 @@ if [ -n "$TARGET_ITEM" ]; then
 fi
 if [ "$STOP_PROGRESS_STATE" = "no_progress" ]; then
     RECOVERY_LINE=" No structured plan progress was detected across ${NO_PROGRESS_COUNT} repeated Stop attempt(s). Do not answer this hook with another summary. Resume the named item now: call the next operational tool; if its evidence is already satisfied, run the structured checkpoint immediately. A failed execution path is not a blocker while a materially different path remains."
+    if [ "$NO_PROGRESS_COUNT" -ge 2 ]; then
+        RECOVERY_LINE="${RECOVERY_LINE} If this is because a background/async process (a running command, external job, test run) simply has not finished yet, stop ending the turn just to re-check it -- that only re-triggers this same Stop block. Use a tool that streams its output back into the same turn without ending it instead (for example Claude Code's Monitor tool), or mark this phase 'blocked (reason)' if the wait will genuinely span many turns."
+    fi
 elif [ "$STOP_PROGRESS_STATE" = "progress" ]; then
     RECOVERY_LINE=" Structured plan progress occurred since the previous Stop; continue directly from the named item without a progress-only final."
 else

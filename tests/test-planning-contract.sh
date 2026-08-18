@@ -17,6 +17,7 @@ printf '%s\n' test-task > "$PROJECT/.plan-with-files"
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 assert_eq() { [ "$1" = "$2" ] || fail "$3 (expected '$2', got '$1')"; }
 assert_contains() { case "$1" in *"$2"*) ;; *) fail "$3 (missing '$2')" ;; esac; }
+assert_not_contains() { case "$1" in *"$2"*) fail "$3 (unexpected '$2')" ;; esac; }
 
 post_hook() {
     local provider=$1 session=$2 script
@@ -306,6 +307,17 @@ STOP_LOG=$(cat "$PROJECT/tmp/hook-logs/plan-with-files/agent-stop.log")
 assert_contains "$STOP_LOG" "progress fingerprint=" "Stop log exposes fingerprint"
 assert_contains "$STOP_LOG" "no_progress_count=1" "Stop log exposes repeated no-progress count"
 assert_contains "$STOP_LOG" "active_item=P1.1" "Stop log exposes Active Item"
+assert_not_contains "$CODEX_REPEAT_OUTPUT" "Monitor" "background/async nudge does not fire on only the first no-progress repeat"
+
+# A second consecutive no-progress Stop (still no plan change) nudges toward
+# a streaming/monitor tool instead of manually ending the turn to re-poll a
+# background process -- this is the pattern that caused a real repeated-Stop
+# loop while an agent tailed a still-running e2e test log.
+CODEX_REPEAT2_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")
+assert_contains "$CODEX_REPEAT2_OUTPUT" "background/async process" "second consecutive no-progress Stop names the likely cause"
+assert_contains "$CODEX_REPEAT2_OUTPUT" "Monitor" "second consecutive no-progress Stop points at a streaming/monitor tool"
+assert_contains "$CODEX_REPEAT2_OUTPUT" "blocked (reason)" "second consecutive no-progress Stop also offers blocked as a fallback"
+
 python3 "$CHECKPOINT_TOOL" --plan "$PLAN_DIR/tasks.md" progress P1.1 --evidence "implementation now exists" >/dev/null
 CODEX_PROGRESS_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")
 assert_contains "$CODEX_PROGRESS_OUTPUT" "Structured plan progress occurred" "item progress resets Stop recovery state"
