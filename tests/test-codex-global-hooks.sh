@@ -29,7 +29,7 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 for event in ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"):
     command = hooks[event][0]["hooks"][0]["command"]
     assert "/home/xuananh/repo/planning-with-files" in command, command
-    assert "git rev-parse --show-toplevel 2>/dev/null || pwd" in command, command
+    assert "skills/planning-with-files/scripts/resolve-project-root.sh" in command, command
 
 print(hooks["PreToolUse"][0]["hooks"][0]["command"])
 PY

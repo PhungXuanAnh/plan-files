@@ -171,7 +171,7 @@ for SPEC in 'codex codex-auto' 'claude claude-auto' 'copilot copilot-auto'; do
     assert_eq "$(PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" resolve "$1" "$2")" \
         "$PROJECT/tmp/plan-with-files/task-a" "$1 auto-claim ownership"
 done
-assert_eq "$(cat "$PROJECT/.plan-with-files")" "" "auto-claim leaves global pointer empty"
+assert_eq "$(cat "$PROJECT/.plan-with-files")" "task-a" "auto-claim now keeps the global pointer in sync as a convenience default"
 
 # Ownership never switches silently and a multi-plan mutation is ambiguous.
 CONFLICT_PATCH="*** Update File: $PROJECT/tmp/plan-with-files/task-b/tasks.md"

@@ -22,13 +22,21 @@ Treat the task folder as persistent memory. Keep current state small and load hi
         └── handoff.md               # optional: latest resume snapshot
 ```
 
+Hooks resolve `<project root>` from the tool call's cwd, in order:
+
+1. Walk upward collecting every ancestor that already has a `.plan-with-files` pointer file (present, even empty, is enough — no separate marker file needed). **Farthest** (outermost) ancestor wins: a `.plan-with-files` can legitimately exist at more than one nesting level (an outer workspace-level plan, plus a leftover one inside a child repo), and picking the nearest one would silently resolve to the wrong plan whenever cwd drifts into — or a session simply starts inside — that child repo mid-work. The outer, workspace-level plan stays authoritative by default.
+2. Otherwise, fall back to `git rev-parse --show-toplevel`, walking out through any enclosing git superproject.
+3. Otherwise, the cwd itself.
+
+In a workspace with nested git repos — registered submodules, or a plain non-git folder that merely contains several independent checkouts — step 1 already resolves correctly once `.plan-with-files` exists at the true root (it usually already does, from ordinary use, since binding a task now keeps it populated automatically). For a brand new workspace with no `.plan-with-files` anywhere yet, `touch .plan-with-files` at the intended root once, before creating the first task there.
+
 Use task ids containing only letters, digits, `-`, `_`, or `.`. Reject empty ids, `.`, `..`, spaces, and `/`.
 
 Create required files from [templates/tasks.md](templates/tasks.md), [templates/findings.md](templates/findings.md), and [templates/decisions.md](templates/decisions.md). Create [history.md](templates/history.md) or [handoff.md](templates/handoff.md) only when their contracts below require them. Keep `tmp/` and `.plan-with-files` out of version control.
 
 ## Start and resume
 
-The latest user request is authoritative. When a session-aware hook exposes a candidate, it suspends any prior lease and reveals only Task Identity and Goal; `.plan-with-files` is a default, never ownership.
+The latest user request is authoritative. When a session-aware hook exposes a candidate, it suspends any prior lease and reveals only Task Identity and Goal; `.plan-with-files` is a default, never ownership — hooks never gate or enforce against it, only the per-session lease does. A successful `claim`/`bind` now keeps `.plan-with-files` in sync with whichever task the session just became the confirmed owner of (assuming, as this skill does, at most one agent works a project at a time); it is a convenience read for humans and new sessions, never a decision input.
 
 1. Classify the request as `SAME`, `DIFFERENT`, or `AMBIGUOUS`. An explicit resume/task id is strong evidence; a different id or explicit new/separate request means `DIFFERENT`; shared repo, branch, file, or module is weak evidence only.
 2. For `SAME`, run the bind command supplied by the hook verbatim before reading any other planning content. Then read `tasks.md`, `decisions.md`, and findings current summaries. Without an ownership hook, inspect only Task Identity + Goal first, apply the same scope decision, and do not claim session isolation.
@@ -36,7 +44,7 @@ The latest user request is authoritative. When a session-aware hook exposes a ca
 4. For `AMBIGUOUS`, ask before mutating or switching a plan.
 5. Read `handoff.md` only when present and not older than `tasks.md`, `decisions.md`, or `findings.md`. Never auto-read `history.md`; follow a specific link or search it.
 
-For a new task, create the three required files, fill Task Identity/Goal/phases, and update `.plan-with-files`. If the hook supplied a bind-command template, use it after creating the task; otherwise continue without binding and never invent a script path or session identity. Preserve old task folders when switching. Ownership hooks fail closed when stable identity or binding is unavailable. `PLANNING_DISABLED=1` disables routing and enforcement for that invocation.
+For a new task, create the three required files and fill Task Identity/Goal/phases. If the hook supplied a bind-command template, use it after creating the task — binding updates `.plan-with-files` automatically. Without an ownership hook (no bind-command template available), update `.plan-with-files` by hand instead, since nothing else will. Preserve old task folders when switching. Ownership hooks fail closed when stable identity or binding is unavailable. `PLANNING_DISABLED=1` disables routing and enforcement for that invocation.
 
 ## `tasks.md` format contract
 

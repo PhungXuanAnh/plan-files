@@ -17,6 +17,7 @@ def normalize_global_commands(hooks: dict, source: Path) -> None:
     source = source.resolve()
     repo_root = source.parent.parent
     script_root = repo_root / ".codex/hooks/planning-with-files/scripts"
+    resolver = repo_root / "skills/planning-with-files/scripts/resolve-project-root.sh"
     scripts = {
         "UserPromptSubmit": "user-prompt-submit.sh",
         "PostToolUse": "post-tool-use.sh",
@@ -28,7 +29,7 @@ def normalize_global_commands(hooks: dict, source: Path) -> None:
         if not groups:
             continue
         command = (
-            f"ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" "
+            f"ROOT=\"$(bash \"{resolver}\")\" "
             f"&& cd \"$ROOT\" && bash "
             f"\"{script_root / script}\""
         )

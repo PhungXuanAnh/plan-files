@@ -160,7 +160,7 @@ for event, script in scripts.items():
     expected = f'$HOME/.claude/hooks/planning-with-files/scripts/{script}'
     assert expected in command, command
     assert '$ROOT/.claude/hooks/planning-with-files' not in command, command
-    assert 'git rev-parse --show-toplevel 2>/dev/null || pwd' in command, command
+    assert '$HOME/.claude/hooks/planning-with-files/scripts/resolve-project-root.sh' in command, command
 
 print(planning_command("PreToolUse"))
 PY

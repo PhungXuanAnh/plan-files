@@ -12,6 +12,14 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 STATE_TOOL="$SCRIPT_DIR/session-state.sh"
 PLAN_STATE_TOOL="$SCRIPT_DIR/plan_state.py"
+
+# The caller's cwd is not necessarily the workspace root (a submodule's own
+# toplevel isn't, and a plain non-git folder containing several checkouts has
+# no git-detectable root at all). cd out to the resolved root first so every
+# relative path below (log files, the .plan-with-files-skip marker, $PWD
+# passed on to session-state.sh) resolves against the true project root.
+cd "$(bash "$SCRIPT_DIR/resolve-project-root.sh")" 2>/dev/null || true
+
 LOG_DIR="tmp/hook-logs/plan-with-files"
 LOG_FILE="$LOG_DIR/pre-tool-use.log"
 mkdir -p "$LOG_DIR" 2>/dev/null || true

@@ -18,6 +18,13 @@ PROVIDER=copilot
 REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
 STATE_TOOL="$REPO_ROOT/skills/planning-with-files/scripts/session-state.sh"
 
+# Copilot invokes this script directly with whatever cwd the editor last set,
+# with no wrapper to correct it first. A submodule's own toplevel is not the
+# workspace root, so cd out to the outermost superproject before any relative
+# path below (the skip marker, log files, $PWD passed to session-state.sh) is
+# used — otherwise a cwd inside a submodule silently misses the session lease.
+cd "$(bash "$REPO_ROOT/skills/planning-with-files/scripts/resolve-project-root.sh")" 2>/dev/null || true
+
 if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e .plan-with-files-skip ]; then
     printf '{}'
     exit 0

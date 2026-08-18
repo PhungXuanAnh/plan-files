@@ -10,6 +10,7 @@ help: ## Show this help
 test: ## Run planning contract tests
 	@bash tests/test-planning-contract.sh
 	@bash tests/test-session-ownership.sh
+	@bash tests/test-project-root-resolution.sh
 	@bash tests/test-codex-global-hooks.sh
 	@bash tests/test-claude-global-hooks.sh
 

@@ -4,17 +4,14 @@
 set -u
 set -o pipefail 2>/dev/null || true
 
-if [ -n "${PWF_PROJECT_ROOT:-}" ]; then
-    if PROJECT_ROOT=$(git -C "$PWF_PROJECT_ROOT" rev-parse --show-toplevel 2>/dev/null); then
-        :
-    else
-        PROJECT_ROOT=$PWF_PROJECT_ROOT
-    fi
-elif PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null); then
-    :
-else
-    PROJECT_ROOT=$PWD
-fi
+# `git rev-parse --show-toplevel` alone is not enough to name a workspace
+# root: it returns a submodule's own working tree when cwd is inside one, and
+# has no notion of "root" at all for a plain (non-git) folder that merely
+# contains several independent git checkouts. Delegate to the shared resolver,
+# which prefers an existing `.plan-with-files` (outermost match wins) and only
+# falls back to git-toplevel/superproject detection when none exists anywhere.
+_SCRIPT_DIR=$(CDPATH= cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+PROJECT_ROOT=$(bash "$_SCRIPT_DIR/resolve-project-root.sh" "${PWF_PROJECT_ROOT:-$PWD}")
 
 PLAN_ROOT="$PROJECT_ROOT/tmp/plan-with-files"
 SESSION_ROOT="$PLAN_ROOT/.sessions"
@@ -87,6 +84,21 @@ write_route() {
     } > "$tmp" && mv "$tmp" "$file"
 }
 
+# ---------------------------------------------------------------------------
+# write_pointer TASK_ID
+# Updates the human-facing `.plan-with-files` default-candidate pointer to
+# TASK_ID whenever a session becomes the confirmed owner of it (claim_task,
+# bind_current). This assumes at most one agent works in a project at a
+# time — the pointer stays a convenience default, never the source of truth
+# hooks gate on (that remains the per-session lease file), but it now
+# reliably names "what's currently active" instead of depending on the agent
+# remembering to update it by hand. Best-effort: never fails the caller.
+# ---------------------------------------------------------------------------
+write_pointer() {
+    local task_id=$1
+    printf '%s\n' "$task_id" > "$PROJECT_ROOT/.plan-with-files" 2>/dev/null || true
+}
+
 mark_pending() {
     local adapter_id=$1 session_id=$2 preferred=${3:-} file status candidate=""
     file=$(route_file "$adapter_id" "$session_id") || return 1
@@ -148,6 +160,7 @@ claim_task() {
 
     if [ "$result" -eq 0 ]; then
         write_route "$file" owned "$task_id" "" || result=1
+        [ "$result" -eq 0 ] && write_pointer "$task_id"
     fi
     if command -v flock >/dev/null 2>&1; then
         flock -u 9 2>/dev/null || true
@@ -219,6 +232,7 @@ bind_current() {
         return 1
     }
     write_route "$file" owned "$task_id" "" || return 1
+    write_pointer "$task_id"
     printf 'planning task bound for this prompt: %s\n' "$task_id"
 }
 
