@@ -272,6 +272,61 @@ def context_payload(state: PlanState) -> dict[str, object]:
     }
 
 
+# One line of self-sufficient prose per code that can appear in state.issues /
+# finalizability_issues() — so an assert-finalizable/checkpoint caller never
+# has to read this file to learn what a bare code means. Codes computed only
+# on the bash side (SECTION_LAYOUT_INVALID, PHASE_HEADING_INVALID, NO_PHASES,
+# PHASE_STATUS_INVALID, BLOCKED_NO_REASON, DEFERRED_NO_REASON,
+# PROFILE_MISSING, PROFILE_UNFILLED) never reach this Python path and are not
+# listed here; see common.sh's task_plan_format_message for those.
+ISSUE_EXPLANATIONS: dict[str, str] = {
+    "ACTIVE_ITEM_SECTION_INVALID": (
+        '"## Active Item" must appear exactly once, after "## Current Phase" and before '
+        '"## Phases", with a body that is empty or exactly one existing "P<phase>.<n>" / '
+        '"V<phase>.<n>" ID'
+    ),
+    "ACTIVE_ITEM_REQUIRED": (
+        "Current Phase is in_progress with an unchecked item, but Active Item is empty — "
+        "set it to exactly one unchecked P/V ID from that phase"
+    ),
+    "ACTIVE_ITEM_INVALID": (
+        "Active Item names an ID that does not exist, is already checked, or belongs to a "
+        "different phase than Current Phase — or every phase is settled while Active Item "
+        "is still non-empty; clear it once settled, otherwise point it at a valid unchecked ID"
+    ),
+    "ITEM_ID_INVALID": (
+        "a checkbox in a contracted phase has no [P<phase>.<n>] / [V<phase>.<n>] ID right "
+        "after the checkbox mark"
+    ),
+    "ITEM_ID_DUPLICATE": "the same P/V ID is used on more than one checkbox — every ID must be unique",
+    "ITEM_PHASE_MISMATCH": (
+        "a checkbox ID's phase number does not match the ### Phase heading it is written under"
+    ),
+    "ITEM_EVIDENCE_MISSING": (
+        'a checkbox in a contracted phase has no indented "  - Evidence: ..." line beneath it'
+    ),
+    "CHECKED_ITEM_EVIDENCE_PENDING": (
+        'an item is checked "[x]" but its Evidence line is still a placeholder '
+        "(empty/pending/none/n-a/todo/tbd) — replace it with concrete evidence or uncheck the item"
+    ),
+    "PHASES_ACTIONABLE": "at least one phase is not yet complete, blocked, or deferred",
+    "STATUS_LIES": "a phase is marked complete but still has an unchecked item beneath it",
+    "POINTER_ACTIVE": (
+        ".plan-with-files still names this task — pass --deactivate-pointer on the final "
+        "`complete` call (or clear .plan-with-files directly) before this plan can finalize"
+    ),
+}
+
+
+def explain_issue(code: str) -> str:
+    explanation = ISSUE_EXPLANATIONS.get(code)
+    return f"{code} ({explanation})" if explanation else code
+
+
+def explain_issues(codes: Iterable[str]) -> str:
+    return "; ".join(explain_issue(code) for code in codes)
+
+
 def finalizability_issues(state: PlanState, project_root: Path | None = None) -> list[str]:
     issues = list(state.issues)
     if not state.phases or any(phase.status not in SETTLED for phase in state.phases):
@@ -302,6 +357,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     state = parse_plan(args.plan)
     if args.command == "validate":
+        # Deliberately single-code, unlike assert-finalizable below: common.sh's
+        # planning_item_contract_issue() passes this line straight into a bash
+        # `case` match against exact issue-code literals. Printing more than one
+        # code here would break that match silently (no case would fire), so
+        # keep validate() reporting only the first issue.
         if state.issues:
             print(state.issues[0])
             return 2
@@ -314,7 +374,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 0
     issues = finalizability_issues(state, args.project_root)
     if issues:
-        print(issues[0])
+        print(explain_issues(issues))
         return 2
     print("FINALIZABLE")
     return 0

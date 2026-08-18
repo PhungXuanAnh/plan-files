@@ -166,10 +166,15 @@ EOF
 # check_task_plan_format PLAN_FILE
 # Requires: count_phases already called (reads all phase-count globals).
 # Structural and profile checks always run.
-# Echoes one of these issue codes to stdout, or nothing if the plan is correct:
+# Echoes every applicable issue code below, one per line (empty output if the
+# plan is correct), so a single call surfaces every simultaneous violation
+# instead of only the first one found across repeated block/fix/retry cycles:
 #   SECTION_LAYOUT_INVALID — Current Phase / Phases section is missing, duplicated, ordered
 #                            incorrectly, or contains phase headings outside ## Phases
 #   CURRENT_PHASE_INVALID — pointer body is not empty or exactly one existing `Phase N`
+#                           (skipped when SECTION_LAYOUT_INVALID already fired: its
+#                           extraction assumes exactly one "## Current Phase"/"## Phases"
+#                           section, which is exactly what's already broken then)
 #   PHASE_HEADING_INVALID — a `### Phase` heading does not match `### Phase N: Title`
 #   NO_PHASES            — zero ### Phase N: headings detected
 #   PHASE_STATUS_INVALID — a phase has missing or duplicate recognized status markers
@@ -178,6 +183,9 @@ EOF
 #                          (always checked, even during/after work — bare `deferred` is never valid)
 #   PROFILE_MISSING      — ## Workflow Profile section absent
 #   PROFILE_UNFILLED     — ## Workflow Profile present but **Profile:** still placeholder
+# All other checks below are independent of section-layout validity (pure
+# regex/awk scans that cannot crash or misfire on malformed input), so they
+# always run regardless of what else was already found.
 # ---------------------------------------------------------------------------
 check_task_plan_format() {
     local _plan_file="${1:-}"
@@ -187,82 +195,97 @@ check_task_plan_format() {
     local _pending="${PENDING:-0}"
     local _blocked="${BLOCKED:-0}"
     local _deferred="${DEFERRED:-0}"
+    local _issues=""
+
+    _fmt_add_issue() {
+        if [ -n "$_issues" ]; then
+            _issues="$_issues
+$1"
+        else
+            _issues="$1"
+        fi
+    }
 
     local _current_count _phases_count _current_line _phases_line _inside_total
+    local _section_layout_bad=0
     _current_count=$(grep -Ec '^## Current Phase[[:space:]]*$' "$_plan_file" 2>/dev/null || true)
     _phases_count=$(grep -Ec '^## Phases[[:space:]]*$' "$_plan_file" 2>/dev/null || true)
     _current_count=${_current_count:-0}
     _phases_count=${_phases_count:-0}
     if [ "$_current_count" -ne 1 ] || [ "$_phases_count" -ne 1 ]; then
-        printf 'SECTION_LAYOUT_INVALID'
-        return
-    fi
-
-    _current_line=$(grep -nE '^## Current Phase[[:space:]]*$' "$_plan_file" 2>/dev/null | cut -d: -f1 | head -1)
-    _phases_line=$(grep -nE '^## Phases[[:space:]]*$' "$_plan_file" 2>/dev/null | cut -d: -f1 | head -1)
-    if [ "${_current_line:-0}" -ge "${_phases_line:-0}" ]; then
-        printf 'SECTION_LAYOUT_INVALID'
-        return
+        _section_layout_bad=1
+    else
+        _current_line=$(grep -nE '^## Current Phase[[:space:]]*$' "$_plan_file" 2>/dev/null | cut -d: -f1 | head -1)
+        _phases_line=$(grep -nE '^## Phases[[:space:]]*$' "$_plan_file" 2>/dev/null | cut -d: -f1 | head -1)
+        if [ "${_current_line:-0}" -ge "${_phases_line:-0}" ]; then
+            _section_layout_bad=1
+        fi
     fi
 
     if grep -E '^### Phase' "$_plan_file" 2>/dev/null \
         | grep -Ev '^### Phase[[:space:]]+[0-9]+:[[:space:]]+[^[:space:]]' \
         | grep -q .; then
-        printf 'PHASE_HEADING_INVALID'
-        return
+        _fmt_add_issue PHASE_HEADING_INVALID
     fi
 
-    _inside_total=$(awk '
-      /^## Phases[[:space:]]*$/ { in_phases=1; next }
-      in_phases && /^## / { in_phases=0 }
-      in_phases && /^### Phase/ { count++ }
-      END { print count+0 }
-    ' "$_plan_file" 2>/dev/null)
-    _inside_total=${_inside_total:-0}
-    if [ "$_inside_total" -ne "$_total" ]; then
-        printf 'SECTION_LAYOUT_INVALID'
-        return
-    fi
-
-    local _current_body _current_body_lines _current_num
-    _current_body=$(awk '
-      /^## Current Phase[[:space:]]*$/ { capture=1; next }
-      capture && /^## / { exit }
-      !capture { next }
-      /<!--/ { in_comment=1 }
-      !in_comment && /[^[:space:]]/ { print }
-      in_comment && /-->/ { in_comment=0 }
-    ' "$_plan_file" 2>/dev/null)
-    _current_body_lines=$(printf '%s\n' "$_current_body" | awk 'NF { count++ } END { print count+0 }')
-    if [ "$_current_body_lines" -gt 1 ]; then
-        printf 'CURRENT_PHASE_INVALID'
-        return
-    fi
-    if [ -n "$_current_body" ]; then
-        if ! printf '%s' "$_current_body" | grep -Eq '^Phase[[:space:]]+[0-9]+[[:space:]]*$'; then
-            printf 'CURRENT_PHASE_INVALID'
-            return
-        fi
-        _current_num=$(printf '%s' "$_current_body" | grep -oE '[0-9]+' | head -1)
-        if ! awk -v num="$_current_num" '
+    # inside_total's "## Phases" scoping is only meaningful once sections are
+    # already known singular; skip it (not a new code either way) when a
+    # duplicate/misordered section was already found above.
+    if [ "$_section_layout_bad" -eq 0 ]; then
+        _inside_total=$(awk '
           /^## Phases[[:space:]]*$/ { in_phases=1; next }
           in_phases && /^## / { in_phases=0 }
-          in_phases && $0 ~ ("^### Phase[[:space:]]+" num ":[[:space:]]+") { found=1 }
-          END { exit(found ? 0 : 1) }
-        ' "$_plan_file" 2>/dev/null; then
-            printf 'CURRENT_PHASE_INVALID'
-            return
+          in_phases && /^### Phase/ { count++ }
+          END { print count+0 }
+        ' "$_plan_file" 2>/dev/null)
+        _inside_total=${_inside_total:-0}
+        if [ "$_inside_total" -ne "$_total" ]; then
+            _section_layout_bad=1
         fi
-    elif [ "$_in_progress" -gt 0 ] || [ "$_complete" -gt 0 ] || [ "$_blocked" -gt 0 ] || [ "$_deferred" -gt 0 ]; then
-        printf 'CURRENT_PHASE_INVALID'
-        return
+    fi
+    [ "$_section_layout_bad" -eq 1 ] && _fmt_add_issue SECTION_LAYOUT_INVALID
+
+    # CURRENT_PHASE_INVALID's extraction assumes exactly one "## Current Phase"
+    # section — only reliable once section layout is confirmed valid.
+    if [ "$_section_layout_bad" -eq 0 ]; then
+        local _current_body _current_body_lines _current_num _current_bad=0
+        _current_body=$(awk '
+          /^## Current Phase[[:space:]]*$/ { capture=1; next }
+          capture && /^## / { exit }
+          !capture { next }
+          /<!--/ { in_comment=1 }
+          !in_comment && /[^[:space:]]/ { print }
+          in_comment && /-->/ { in_comment=0 }
+        ' "$_plan_file" 2>/dev/null)
+        _current_body_lines=$(printf '%s\n' "$_current_body" | awk 'NF { count++ } END { print count+0 }')
+        if [ "$_current_body_lines" -gt 1 ]; then
+            _current_bad=1
+        elif [ -n "$_current_body" ]; then
+            if ! printf '%s' "$_current_body" | grep -Eq '^Phase[[:space:]]+[0-9]+[[:space:]]*$'; then
+                _current_bad=1
+            else
+                _current_num=$(printf '%s' "$_current_body" | grep -oE '[0-9]+' | head -1)
+                if ! awk -v num="$_current_num" '
+                  /^## Phases[[:space:]]*$/ { in_phases=1; next }
+                  in_phases && /^## / { in_phases=0 }
+                  in_phases && $0 ~ ("^### Phase[[:space:]]+" num ":[[:space:]]+") { found=1 }
+                  END { exit(found ? 0 : 1) }
+                ' "$_plan_file" 2>/dev/null; then
+                    _current_bad=1
+                fi
+            fi
+        elif [ "$_in_progress" -gt 0 ] || [ "$_complete" -gt 0 ] || [ "$_blocked" -gt 0 ] || [ "$_deferred" -gt 0 ]; then
+            _current_bad=1
+        fi
+        [ "$_current_bad" -eq 1 ] && _fmt_add_issue CURRENT_PHASE_INVALID
     fi
 
+    local _no_reason_bad=0
     if grep -E '\*\*Status:\*\*[[:space:]]*blocked' "$_plan_file" 2>/dev/null \
         | grep -Ev '\*\*Status:\*\*[[:space:]]*blocked[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)' \
         | grep -q .; then
-        printf 'BLOCKED_NO_REASON'
-        return
+        _fmt_add_issue BLOCKED_NO_REASON
+        _no_reason_bad=1
     fi
 
     # Bare `**Status:** deferred` (no reason / empty parens) is ALWAYS invalid,
@@ -277,63 +300,64 @@ check_task_plan_format() {
             | grep -Ev '\*\*Status:\*\*[[:space:]]*deferred[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)' \
             | head -1)
         if [ -n "$_bad" ]; then
-            printf 'DEFERRED_NO_REASON'
-            return
+            _fmt_add_issue DEFERRED_NO_REASON
+            _no_reason_bad=1
         fi
     fi
 
     if [ "$_total" -eq 0 ]; then
-        printf 'NO_PHASES'
-        return
+        _fmt_add_issue NO_PHASES
     fi
 
-    local _bad_phase_status
-    _bad_phase_status=$(awk '
-      function flush() {
-        if (in_phase && markers != 1 && bad == "") bad=1
-      }
-      BEGIN { in_phase=0; markers=0; in_comment=0; bad="" }
-      /<!--/ { in_comment=1 }
-      in_comment { if (/-->/) in_comment=0; next }
-      /^### Phase[[:space:]]+[0-9]+:[[:space:]]+/ {
-        flush(); in_phase=1; markers=0
-        line=$0
-        markers += gsub(/\[(complete|in_progress|pending)\]/, "", line)
-        next
-      }
-      /^### / || /^## / { flush(); in_phase=0; markers=0; next }
-      !in_phase { next }
-      /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*(complete|in_progress|pending)[[:space:]]*$/ { markers++; next }
-      /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*blocked[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)[[:space:]]*$/ { markers++; next }
-      /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*deferred[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)[[:space:]]*$/ { markers++; next }
-      END { flush(); if (bad != "") print bad }
-    ' "$_plan_file" 2>/dev/null)
-    if [ -n "$_bad_phase_status" ]; then
-        printf 'PHASE_STATUS_INVALID'
-        return
+    # A bare blocked/deferred marker (no reason) is ALSO, mechanically, an
+    # unrecognized status marker (0 of the required 1) — but BLOCKED_NO_REASON/
+    # DEFERRED_NO_REASON above is the more specific, more actionable diagnosis
+    # of that exact same root cause. Skip the generic PHASE_STATUS_INVALID
+    # check when either already fired, so both codes don't report the same
+    # underlying problem twice.
+    local _bad_phase_status=""
+    if [ "$_no_reason_bad" -eq 0 ]; then
+        _bad_phase_status=$(awk '
+          function flush() {
+            if (in_phase && markers != 1 && bad == "") bad=1
+          }
+          BEGIN { in_phase=0; markers=0; in_comment=0; bad="" }
+          /<!--/ { in_comment=1 }
+          in_comment { if (/-->/) in_comment=0; next }
+          /^### Phase[[:space:]]+[0-9]+:[[:space:]]+/ {
+            flush(); in_phase=1; markers=0
+            line=$0
+            markers += gsub(/\[(complete|in_progress|pending)\]/, "", line)
+            next
+          }
+          /^### / || /^## / { flush(); in_phase=0; markers=0; next }
+          !in_phase { next }
+          /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*(complete|in_progress|pending)[[:space:]]*$/ { markers++; next }
+          /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*blocked[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)[[:space:]]*$/ { markers++; next }
+          /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*deferred[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)[[:space:]]*$/ { markers++; next }
+          END { flush(); if (bad != "") print bad }
+        ' "$_plan_file" 2>/dev/null)
     fi
+    [ -n "$_bad_phase_status" ] && _fmt_add_issue PHASE_STATUS_INVALID
 
     local _profile_count
     _profile_count=$(grep -Ec '^## Workflow Profile[[:space:]]*$' "$_plan_file" 2>/dev/null || true)
     _profile_count=${_profile_count:-0}
     if [ "$_profile_count" -ne 1 ]; then
-        printf 'PROFILE_MISSING'
-        return
-    fi
-
-    local _profile_line
-    _profile_line=$(awk '/^## Workflow Profile[[:space:]]*$/{f=1;next} f && /^## /{f=0} f && /\*\*Profile:\*\*/{print;exit}' "$_plan_file" 2>/dev/null | head -1)
-    if ! printf '%s' "${_profile_line:-}" | grep -Eq '\*\*Profile:\*\*[[:space:]]*(A|B|C)[[:space:]]*$'; then
-        printf 'PROFILE_UNFILLED'
-        return
+        _fmt_add_issue PROFILE_MISSING
+    else
+        local _profile_line
+        _profile_line=$(awk '/^## Workflow Profile[[:space:]]*$/{f=1;next} f && /^## /{f=0} f && /\*\*Profile:\*\*/{print;exit}' "$_plan_file" 2>/dev/null | head -1)
+        if ! printf '%s' "${_profile_line:-}" | grep -Eq '\*\*Profile:\*\*[[:space:]]*(A|B|C)[[:space:]]*$'; then
+            _fmt_add_issue PROFILE_UNFILLED
+        fi
     fi
 
     local _item_issue
     _item_issue=$(planning_item_contract_issue "$_plan_file")
-    if [ -n "$_item_issue" ]; then
-        printf '%s' "$_item_issue"
-        return
-    fi
+    [ -n "$_item_issue" ] && _fmt_add_issue "$_item_issue"
+
+    printf '%s' "$_issues"
 }
 
 # ---------------------------------------------------------------------------
@@ -347,33 +371,83 @@ task_plan_format_message() {
             printf 'FORMAT CONTRACT VIOLATION in %s: include exactly one "## Current Phase" followed later by exactly one "## Phases", and keep every "### Phase N: Title" heading inside the Phases section.' "$_plan_file"
             ;;
         CURRENT_PHASE_INVALID)
-            printf 'FORMAT CONTRACT VIOLATION in %s: the non-comment body of "## Current Phase" must be empty or exactly "Phase N", and that phase must exist under "## Phases".' "$_plan_file"
+            printf 'FORMAT CONTRACT VIOLATION in %s: the non-comment body of "## Current Phase" must be empty or exactly "Phase N" naming a phase that exists under "## Phases". Empty is valid ONLY while no phase has ever been complete, in_progress, blocked, or deferred (true discussion/never-started mode) — once any phase has been resolved, Current Phase must name the last resolved phase (e.g. "Phase 10"), even if that phase is complete. Set it to the correct "Phase N" instead of leaving it empty.' "$_plan_file"
             ;;
         PHASE_HEADING_INVALID)
             printf 'FORMAT CONTRACT VIOLATION in %s: every phase heading must be exactly "### Phase N: Title" with an integer, colon, and non-empty title.' "$_plan_file"
             ;;
         NO_PHASES)
-            printf 'FORMAT CONTRACT VIOLATION in %s: no valid "### Phase N: Title" headings were found under "## Phases".' "$_plan_file"
+            printf 'FORMAT CONTRACT VIOLATION in %s: 0 phases detected. Required heading format is exactly "### Phase N: Title" (level-3, colon, no decorations, no backticks), and each phase MUST have one recognized status. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Fix the plan file headings/status markers, then continue.' "$_plan_file"
             ;;
         PHASE_STATUS_INVALID)
             printf 'FORMAT CONTRACT VIOLATION in %s: every phase must have exactly one recognized inline or body status.' "$_plan_file"
             ;;
         BLOCKED_NO_REASON)
-            printf 'FORMAT CONTRACT VIOLATION in %s: blocked requires a non-empty parenthesized reason naming a genuine external dependency.' "$_plan_file"
+            printf 'FORMAT CONTRACT VIOLATION in %s: "**Status:** blocked" requires a non-empty parenthesised reason. Use "- **Status:** blocked (external dependency)" only when a genuine external dependency prevents progress. Do not use it to silence the hook after a transient error.' "$_plan_file"
             ;;
         DEFERRED_NO_REASON)
-            printf 'FORMAT CONTRACT VIOLATION in %s: deferred requires a non-empty parenthesized reason and is allowed only when the user explicitly postpones the phase.' "$_plan_file"
+            printf 'FORMAT CONTRACT VIOLATION in %s: "**Status:** deferred" requires a non-empty parenthesised reason. Use "- **Status:** deferred (user-directed reason)" only when the user explicitly postpones the phase. Do not use it to silence the hook after a transient error.' "$_plan_file"
             ;;
         PROFILE_MISSING)
-            printf 'FORMAT CONTRACT VIOLATION in %s: add "## Workflow Profile" before "## Phases" and set "**Profile:** A", B, or C before implementation.' "$_plan_file"
+            printf 'MISSING SECTION in %s: "## Workflow Profile" not found. This section is REQUIRED before implementation begins. It declares the agent handoff point: Profile A = PR-Handoff (stop after CI green), B = Staging-Verified (stop after staging E2E), C = Research/Document (no code/PR). Add it between "## Current Phase" and "## Phases", with "**Profile:** A" (or B or C) filled in. See skills/planning-with-files/SKILL.md > Workflow Profile.' "$_plan_file"
             ;;
         PROFILE_UNFILLED)
-            printf 'FORMAT CONTRACT VIOLATION in %s: replace the Workflow Profile placeholder with exactly A, B, or C before implementation.' "$_plan_file"
+            printf 'UNFILLED SECTION in %s: "## Workflow Profile" found but **Profile:** is not set to A, B, or C (placeholder still present or missing). Replace the "[A | B | C]" placeholder with exactly one letter: A (PR-Handoff — stop after CI green + reviewers), B (Staging-Verified — stop after staging E2E passes), or C (Research/Document — deliverable file complete). See skills/planning-with-files/SKILL.md > Workflow Profile.' "$_plan_file"
             ;;
-        ACTIVE_ITEM_SECTION_INVALID|ACTIVE_ITEM_REQUIRED|ACTIVE_ITEM_INVALID|ITEM_ID_INVALID|ITEM_ID_DUPLICATE|ITEM_PHASE_MISMATCH|ITEM_EVIDENCE_MISSING|CHECKED_ITEM_EVIDENCE_PENDING|ITEM_STATE_TOOL_UNAVAILABLE)
-            printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s (%s): keep one valid Active Item in Current Phase, use unique phase-matching P/V IDs for every actionable checkbox, and give every checked item non-placeholder Evidence.' "$_plan_file" "$_issue"
+        ACTIVE_ITEM_SECTION_INVALID)
+            printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: "## Active Item" must appear exactly once, positioned after "## Current Phase" and before "## Phases", and its non-comment body must be empty or exactly one existing ID of the form "P<phase>.<n>" or "V<phase>.<n>" (for example "P2.1"). Fix the section count/position, or replace the body with a single valid ID or leave it empty.' "$_plan_file"
+            ;;
+        ACTIVE_ITEM_REQUIRED)
+            printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: Current Phase is in_progress and still has at least one unchecked item, but "## Active Item" is empty. Set its body to exactly one unchecked P/V ID from that phase before continuing work.' "$_plan_file"
+            ;;
+        ACTIVE_ITEM_INVALID)
+            printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: "## Active Item" names an ID that either does not exist, is already checked, or belongs to a phase other than Current Phase — or every phase is already settled while Active Item is still non-empty. If every phase is settled, clear Active Item; otherwise set it to exactly one unchecked ID that belongs to Current Phase.' "$_plan_file"
+            ;;
+        ITEM_ID_INVALID)
+            printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: a checkbox inside a contracted phase (one that already has "## Active Item" populated) has no "[P<phase>.<n>]" or "[V<phase>.<n>]" ID right after the checkbox mark. Add one, for example "- [ ] [P2.1] observable outcome".' "$_plan_file"
+            ;;
+        ITEM_ID_DUPLICATE)
+            printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: the same P/V ID is used on more than one checkbox. Every ID must be unique across the entire plan file — renumber whichever checkbox duplicates an existing ID.' "$_plan_file"
+            ;;
+        ITEM_PHASE_MISMATCH)
+            printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: a checkbox ID phase number does not match the "### Phase N" heading it is written under (for example "[P2.1]" appearing inside "### Phase 3"). Either correct the ID phase number to match its heading, or move the checkbox into the phase its ID names.' "$_plan_file"
+            ;;
+        ITEM_EVIDENCE_MISSING)
+            printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: a checkbox inside a contracted phase has no indented "  - Evidence: ..." line directly beneath it. Add one immediately after the checkbox line, for example "  - Evidence: pending" while the item is unchecked.' "$_plan_file"
+            ;;
+        CHECKED_ITEM_EVIDENCE_PENDING)
+            printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: an item is checked "[x]" but its Evidence line is still a placeholder (empty, "pending", "none", "n/a", "todo", or "tbd"). Replace it with concrete non-placeholder evidence — a command result, UI/API state, test result, or artifact reference — before the item may stay checked, or uncheck it if the work is not actually done.' "$_plan_file"
+            ;;
+        ITEM_STATE_TOOL_UNAVAILABLE)
+            printf 'ENVIRONMENT ISSUE while validating outcome items in %s: python3 or scripts/plan_state.py could not be run (missing python3 on PATH, or the skill scripts directory is not intact). This is not a plan-content problem — fix the environment and retry; do not edit tasks.md to work around it.' "$_plan_file"
             ;;
     esac
+}
+
+# ---------------------------------------------------------------------------
+# task_plan_format_messages ISSUES PLAN_FILE TOTAL
+# ISSUES is check_task_plan_format's newline-separated output (one or more
+# codes, or empty). Renders every code's full message so a single Stop/PostTool
+# firing reports every simultaneous format violation, not only the first.
+# Single-issue input renders identically to task_plan_format_message alone
+# (no numbering added) so existing single-issue behavior is unchanged.
+# ---------------------------------------------------------------------------
+task_plan_format_messages() {
+    local _issues="${1:-}" _plan_file="${2:-tasks.md}" _total="${3:-0}"
+    local _count _index=0 _code _rendered=""
+    [ -n "$_issues" ] || return 0
+    _count=$(printf '%s\n' "$_issues" | grep -c .)
+    while IFS= read -r _code; do
+        [ -n "$_code" ] || continue
+        _index=$((_index + 1))
+        if [ "$_count" -gt 1 ]; then
+            _rendered="${_rendered}(${_index}/${_count}) $(task_plan_format_message "$_code" "$_plan_file" "$_total")
+"
+        else
+            _rendered="$(task_plan_format_message "$_code" "$_plan_file" "$_total")"
+        fi
+    done <<< "$_issues"
+    printf '%s' "$_rendered"
 }
 
 # ---------------------------------------------------------------------------

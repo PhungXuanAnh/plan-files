@@ -145,6 +145,9 @@ def text_plan_paths(value: object) -> list[str]:
     return list(dict.fromkeys(paths))
 
 
+REQUIRED_PLAN_FILES = {"tasks.md", "findings.md", "decisions.md"}
+
+
 def plan_id_for_path(path: str, project_root: Path) -> str | None:
     """Resolve a path under this project's plan root and return its task id."""
     cleaned = path.strip().lstrip("([{=:").rstrip(")]},;:")
@@ -160,13 +163,22 @@ def plan_id_for_path(path: str, project_root: Path) -> str | None:
     if len(relative.parts) < 2 or candidate.suffix.lower() != ".md":
         return None
     task_id = relative.parts[0]
-    if (
-        not TASK_ID_RE.fullmatch(task_id)
-        or task_id in {".", "..", ".sessions"}
-        or not (plan_root / task_id / "tasks.md").is_file()
-    ):
+    if not TASK_ID_RE.fullmatch(task_id) or task_id in {".", "..", ".sessions"}:
         return None
-    return task_id
+    # A task is a recognized mutation target once its tasks.md already
+    # exists on disk, OR when this write is itself creating one of the three
+    # required plan files for a brand-new task — tasks.md necessarily doesn't
+    # exist yet precisely because this very call is the one creating it.
+    # Without this second branch, a new plan's very first Write is never
+    # auto-claimed (tasks.md can't already exist before it's written), so the
+    # session stays unowned until some later edit happens to touch an
+    # already-existing file — silently defeating auto-claim for exactly the
+    # moment it matters most: task creation.
+    if (plan_root / task_id / "tasks.md").is_file():
+        return task_id
+    if candidate.name.lower() in REQUIRED_PLAN_FILES:
+        return task_id
+    return None
 
 
 def plan_ids(paths: list[str], project_root: Path) -> set[str]:

@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 RESOLVER="$REPO_ROOT/skills/planning-with-files/scripts/resolve-project-root.sh"
+CHECKPOINT_TOOL="$REPO_ROOT/skills/planning-with-files/scripts/plan-checkpoint.py"
 TEST_DIR=$(mktemp -d)
 trap 'rm -rf "$TEST_DIR"' EXIT
 
@@ -76,5 +77,37 @@ WS7="$TEST_DIR/ws7/deep/nested"
 mkdir -p "$WS7"
 assert_eq "$(bash "$RESOLVER" "$WS7")" "$WS7" \
     "with no .plan-with-files and no git repo, the resolver must fall back to the starting directory"
+
+# --- plan-checkpoint.py's --deactivate-pointer must clear .plan-with-files at
+#     the true (resolved) project root, not a hardcoded parent-count guess —
+#     even when invoked with cwd inside a nested submodule. ------------------
+WS8="$TEST_DIR/ws8"
+SUB8="$TEST_DIR/sub8"
+mkdir -p "$SUB8"
+(cd "$SUB8" && git init -q && git commit -q --allow-empty -m init)
+git init -q "$WS8"
+(cd "$WS8" && git -c protocol.file.allow=always submodule add -q "$SUB8" viralize && git commit -q -m add)
+mkdir -p "$WS8/tmp/plan-with-files/DEMO"
+cat > "$WS8/tmp/plan-with-files/DEMO/tasks.md" <<'EOF'
+## Task Identity
+demo
+## Goal
+verify deactivate-pointer resolves the true root
+## Workflow Profile
+**Profile:** A
+## Current Phase
+Phase 1
+## Active Item
+V1.1
+## Phases
+### Phase 1: Do the thing [in_progress]
+- [ ] [V1.1] the thing works
+  - Evidence: pending
+EOF
+printf 'DEMO\n' > "$WS8/.plan-with-files"
+(cd "$WS8/viralize" && python3 "$CHECKPOINT_TOOL" --plan "$WS8/tmp/plan-with-files/DEMO/tasks.md" \
+    complete V1.1 --evidence "verified" --deactivate-pointer >/dev/null)
+assert_eq "$(cat "$WS8/.plan-with-files")" "" \
+    "deactivate-pointer must clear .plan-with-files at the superproject root even when run from inside a submodule"
 
 echo "project root resolution tests: PASS"

@@ -223,12 +223,12 @@ bind_current() {
     session_id=${identity#*$'\t'}
     file=$(route_file "$adapter_id" "$session_id") || return 1
     [ -f "$file" ] || {
-        printf 'no pending planning lease; submit a new prompt before binding\n' >&2
+        printf 'no pending planning lease; submit a new prompt before binding. If you just created this task'"'"'s tasks.md, ownership is auto-claimed once the write completes -- run "resolve" to check, do not hand-edit .plan-with-files.\n' >&2
         return 1
     }
     status=$(read_value "$file" status)
     [ "$status" = "pending" ] || {
-        printf 'planning lease is not awaiting a scope decision\n' >&2
+        printf 'planning lease is not awaiting a scope decision -- it is likely already owned (auto-claimed when this task'"'"'s plan file was created/edited) or settled; this bind call is unnecessary. Run "resolve" to confirm ownership instead of hand-editing .plan-with-files.\n' >&2
         return 1
     }
     write_route "$file" owned "$task_id" "" || return 1

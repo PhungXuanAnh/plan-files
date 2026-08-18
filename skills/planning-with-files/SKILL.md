@@ -44,7 +44,7 @@ The latest user request is authoritative. When a session-aware hook exposes a ca
 4. For `AMBIGUOUS`, ask before mutating or switching a plan.
 5. Read `handoff.md` only when present and not older than `tasks.md`, `decisions.md`, or `findings.md`. Never auto-read `history.md`; follow a specific link or search it.
 
-For a new task, create the three required files and fill Task Identity/Goal/phases. If the hook supplied a bind-command template, use it after creating the task — binding updates `.plan-with-files` automatically. Without an ownership hook (no bind-command template available), update `.plan-with-files` by hand instead, since nothing else will. Preserve old task folders when switching. Ownership hooks fail closed when stable identity or binding is unavailable. `PLANNING_DISABLED=1` disables routing and enforcement for that invocation.
+For a new task, create the three required files and fill Task Identity/Goal/phases. With an ownership hook, creating `tasks.md` already auto-claims the session and updates `.plan-with-files` — do not hand-edit `.plan-with-files` afterward, and do not re-run `bind` just to be sure (an already-owned/settled lease makes `bind` fail harmlessly; that failure does not mean ownership is missing — check with `resolve` instead of hand-editing). Still use a bind-command template when the hook supplies one, for the SAME/DIFFERENT scope handshake itself, not to populate the pointer. Without an ownership hook (no bind-command template available), update `.plan-with-files` by hand instead, since nothing else will. Preserve old task folders when switching. Ownership hooks fail closed when stable identity or binding is unavailable. `PLANNING_DISABLED=1` disables routing and enforcement for that invocation.
 
 ## `tasks.md` format contract
 
@@ -110,6 +110,14 @@ python3 <skill-dir>/scripts/plan-checkpoint.py --plan <tasks.md> complete P2.1 -
 python3 <skill-dir>/scripts/plan-checkpoint.py --plan <tasks.md> assert-finalizable --project-root <project-root>
 ```
 
+On the `complete` call that finishes the **last** actionable item in the whole plan (its JSON output shows `"next_item":null`), add `--deactivate-pointer`:
+
+```bash
+python3 <skill-dir>/scripts/plan-checkpoint.py --plan <tasks.md> complete V4.1 --evidence "completion evidence" --deactivate-pointer
+```
+
+This clears `.plan-with-files` atomically when it still names this task (a no-op, and an error, while another item remains actionable). Skipping it leaves `.plan-with-files` pointing at this task, and the following `assert-finalizable` then fails with `POINTER_ACTIVE`.
+
 ## Work loop
 
 1. Create the plan before starting complex work.
@@ -122,7 +130,7 @@ python3 <skill-dir>/scripts/plan-checkpoint.py --plan <tasks.md> assert-finaliza
 8. Progress reporting belongs in commentary; final output is reserved for terminal plan state. Keep working through every actionable unchecked item in every non-settled phase without emitting a final answer or handoff between items or phases. Completing one item, one phase, or updating the Resume Checkpoint is progress, not a stopping boundary.
 9. Start with `## Current Phase`; whenever it settles, advance it to the next non-settled phase and continue in the same turn. Stop only after every phase in the plan is `complete`, validly `blocked (reason)`, or validly `deferred (reason)`.
 
-After the in-scope task is fully settled, finish its final planning update and deactivate the pointer by leaving `.plan-with-files` empty. Preserve the task folder for history. Only deactivate a pointer after confirming that the current request owns that plan.
+After the in-scope task is fully settled, finish its final planning update and deactivate the pointer: pass `--deactivate-pointer` on the plan's last `plan-checkpoint.py complete` call (see above) for a contracted plan, or otherwise leave `.plan-with-files` empty directly. Preserve the task folder for history. Only deactivate a pointer after confirming that the current request owns that plan.
 
 Before final output, re-read `tasks.md` from disk and run the structured `assert-finalizable` check. If it fails, do not summarize and stop: continue the named Active Item or exact first unchecked item. Stop-hook feedback is a recovery instruction, never a request for another progress summary.
 

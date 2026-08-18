@@ -146,59 +146,12 @@ if [ -n "${PHASE_NUM:-}" ]; then
     log "remaining: count=${REMAINING_COUNT:-?}"
 fi
 
-# --- Format / Workflow-Profile checks (delegated to common.sh) -------------
-FORMAT_ISSUE=$(check_task_plan_format "$PLAN_FILE")
-case "${FORMAT_ISSUE:-}" in
-    SECTION_LAYOUT_INVALID|CURRENT_PHASE_INVALID|PHASE_HEADING_INVALID|PHASE_STATUS_INVALID|ACTIVE_ITEM_SECTION_INVALID|ACTIVE_ITEM_REQUIRED|ACTIVE_ITEM_INVALID|ITEM_ID_INVALID|ITEM_ID_DUPLICATE|ITEM_PHASE_MISMATCH|ITEM_EVIDENCE_MISSING|CHECKED_ITEM_EVIDENCE_PENDING|ITEM_STATE_TOOL_UNAVAILABLE)
-        REASON="[planning-with-files] $(task_plan_format_message "$FORMAT_ISSUE" "$PLAN_FILE" "$TOTAL") Fix the plan structure, then continue."
-        log "decision: BLOCK ($FORMAT_ISSUE)"
-        ESCAPED_REASON=$(json_escape "$REASON")
-        OUTPUT="{\"decision\":\"block\",\"reason\":$ESCAPED_REASON}"
-        echo "$OUTPUT"
-        exit 0
-        ;;
-    NO_PHASES)
-        REASON="[planning-with-files] FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: 0 phases detected. Required heading format is exactly '### Phase N: Title' (level-3, colon, no decorations, no backticks), and each phase MUST have one recognized status. See skills/planning-with-files/SKILL.md > FORMAT CONTRACT. Fix the plan file headings/status markers, then continue."
-        log "decision: BLOCK (FORMAT CONTRACT — TOTAL=0)"
-        ESCAPED_REASON=$(json_escape "$REASON")
-        OUTPUT="{\"decision\":\"block\",\"reason\":$ESCAPED_REASON}"
-        log "stdout: ${#OUTPUT} chars"
-        echo "$OUTPUT"
-        exit 0
-        ;;
-    BLOCKED_NO_REASON|DEFERRED_NO_REASON)
-        _STATUS_NAME=deferred
-        [ "$FORMAT_ISSUE" = "BLOCKED_NO_REASON" ] && _STATUS_NAME=blocked
-        REASON="[planning-with-files] FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: '**Status:** ${_STATUS_NAME}' requires a non-empty parenthesised reason. Use '- **Status:** blocked (external dependency)' only when a genuine external dependency prevents progress, or '- **Status:** deferred (user-directed reason)' only when the user explicitly postpones the phase. Do not use either status to silence the hook after a transient error."
-        log "decision: BLOCK ($FORMAT_ISSUE)"
-        ESCAPED_REASON=$(json_escape "$REASON")
-        OUTPUT="{\"decision\":\"block\",\"reason\":$ESCAPED_REASON}"
-        log "stdout: ${#OUTPUT} chars"
-        echo "$OUTPUT"
-        exit 0
-        ;;
-    PROFILE_MISSING)
-        REASON="[planning-with-files] MISSING SECTION in ${PLAN_FILE}: '## Workflow Profile' not found. This section is REQUIRED before implementation begins. It declares the agent handoff point: Profile A = PR-Handoff (stop after CI green), B = Staging-Verified (stop after staging E2E), C = Research/Document (no code/PR). Add it between '## Current Phase' and '## Phases', with '**Profile:** A' (or B or C) filled in. See skills/planning-with-files/SKILL.md > Workflow Profile."
-        log "decision: BLOCK (Workflow Profile section absent, COMPLETE=0)"
-        ESCAPED_REASON=$(json_escape "$REASON")
-        OUTPUT="{\"decision\":\"block\",\"reason\":$ESCAPED_REASON}"
-        log "stdout: ${#OUTPUT} chars"
-        echo "$OUTPUT"
-        exit 0
-        ;;
-    PROFILE_UNFILLED)
-        REASON="[planning-with-files] UNFILLED SECTION in ${PLAN_FILE}: '## Workflow Profile' found but **Profile:** is not set to A, B, or C (placeholder still present or missing). Replace the '[A | B | C]' placeholder with exactly one letter: A (PR-Handoff — stop after CI green + reviewers), B (Staging-Verified — stop after staging E2E passes), or C (Research/Document — deliverable file complete). See skills/planning-with-files/SKILL.md > Workflow Profile."
-        log "decision: BLOCK (Workflow Profile unfilled, COMPLETE=0)"
-        ESCAPED_REASON=$(json_escape "$REASON")
-        OUTPUT="{\"decision\":\"block\",\"reason\":$ESCAPED_REASON}"
-        log "stdout: ${#OUTPUT} chars"
-        echo "$OUTPUT"
-        exit 0
-        ;;
-esac
-
-# --- Status-integrity checks (run regardless of COMPLETE count) ------------
-# Catches two classes of "the agent stopped too early" bug:
+# --- Format / Workflow-Profile checks (delegated to common.sh), plus
+# status-integrity checks (STATUS LIES / STALE Current Phase / NON-PHASE
+# WORK) below — every applicable violation across ALL of these categories is
+# accumulated into REASON_PARTS and reported in ONE block, instead of only
+# the first one found across repeated block/fix/retry cycles. Catches two
+# classes of "the agent stopped too early" bug in the status-integrity part:
 #   (A) A phase marked **Status:** complete still has "- [ ]" items inside it.
 #       The phase counter trusts the status marker, so unchecked sub-tasks are
 #       invisible to the gate. Block until either the boxes are checked or the
@@ -209,6 +162,16 @@ esac
 #       (or blocked/deferred) while other phases are still pending/in_progress. The
 #       hook keeps injecting the wrong phase context and the agent loses
 #       track. Block until ## Current Phase is advanced to a non-settled phase.
+REASON_PARTS=()
+
+FORMAT_ISSUES=$(check_task_plan_format "$PLAN_FILE")
+if [ -n "$FORMAT_ISSUES" ]; then
+    while IFS= read -r _fmt_code; do
+        [ -n "$_fmt_code" ] || continue
+        REASON_PARTS+=("$(task_plan_format_message "$_fmt_code" "$PLAN_FILE" "$TOTAL") Fix the plan structure, then continue.")
+    done <<< "$FORMAT_ISSUES"
+fi
+
 SUMMARY=$(phase_summary "$PLAN_FILE")
 LIE_PHASE=""
 LIE_COUNT=0
@@ -224,13 +187,8 @@ while IFS=$'\t' read -r _num _status _unchecked _first; do
 done <<< "$SUMMARY"
 
 if [ -n "$LIE_PHASE" ]; then
-    REASON="[planning-with-files] STATUS LIES in ${PLAN_FILE}: ${LIE_PHASE} is marked '**Status:** complete' but still has ${LIE_COUNT} unchecked '- [ ]' item(s). First: ${LIE_FIRST} | Either (a) finish the items and check the boxes, or (b) demote the phase to '**Status:** in_progress' and update '## Current Phase' to ${LIE_PHASE}, or (c) split the remaining items into a new '### Phase N+1: ...' with '**Status:** pending'. Do not stop with unchecked items inside a 'complete' phase."
-    log "decision: BLOCK (STATUS LIES — ${LIE_PHASE} complete with ${LIE_COUNT} unchecked)"
-    ESCAPED_REASON=$(json_escape "$REASON")
-    OUTPUT="{\"decision\":\"block\",\"reason\":$ESCAPED_REASON}"
-    log "stdout: ${#OUTPUT} chars"
-    echo "$OUTPUT"
-    exit 0
+    REASON_PARTS+=("STATUS LIES in ${PLAN_FILE}: ${LIE_PHASE} is marked '**Status:** complete' but still has ${LIE_COUNT} unchecked '- [ ]' item(s). First: ${LIE_FIRST} | Either (a) finish the items and check the boxes, or (b) demote the phase to '**Status:** in_progress' and update '## Current Phase' to ${LIE_PHASE}, or (c) split the remaining items into a new '### Phase N+1: ...' with '**Status:** pending'. Do not stop with unchecked items inside a 'complete' phase.")
+    log "found: STATUS LIES — ${LIE_PHASE} complete with ${LIE_COUNT} unchecked"
 fi
 
 # Stale Current Phase: pointer references a phase whose status is settled
@@ -251,13 +209,8 @@ if [ -n "${PHASE_NUM:-}" ] && [ $((COMPLETE + BLOCKED + DEFERRED)) -lt "$TOTAL" 
     done <<< "$SUMMARY"
 
     if { [ "$CURRENT_STATUS" = "complete" ] || [ "$CURRENT_STATUS" = "blocked" ] || [ "$CURRENT_STATUS" = "deferred" ]; } && [ -n "$NEXT_INCOMPLETE" ]; then
-        REASON="[planning-with-files] STALE '## Current Phase' in ${PLAN_FILE}: it points at ${PHASE_NUM} which is already '**Status:** ${CURRENT_STATUS}', but ${NEXT_INCOMPLETE} (and possibly later phases) are not settled. Update the '## Current Phase' section to '${NEXT_INCOMPLETE}' and set its status to 'in_progress' before continuing. The hook injects context based on Current Phase — leaving it on a settled phase makes the agent work on the wrong target."
-        log "decision: BLOCK (STALE Current Phase — points at ${CURRENT_STATUS} ${PHASE_NUM}, next incomplete is ${NEXT_INCOMPLETE})"
-        ESCAPED_REASON=$(json_escape "$REASON")
-        OUTPUT="{\"decision\":\"block\",\"reason\":$ESCAPED_REASON}"
-        log "stdout: ${#OUTPUT} chars"
-        echo "$OUTPUT"
-        exit 0
+        REASON_PARTS+=("STALE '## Current Phase' in ${PLAN_FILE}: it points at ${PHASE_NUM} which is already '**Status:** ${CURRENT_STATUS}', but ${NEXT_INCOMPLETE} (and possibly later phases) are not settled. Update the '## Current Phase' section to '${NEXT_INCOMPLETE}' and set its status to 'in_progress' before continuing. The hook injects context based on Current Phase — leaving it on a settled phase makes the agent work on the wrong target.")
+        log "found: STALE Current Phase — points at ${CURRENT_STATUS} ${PHASE_NUM}, next incomplete is ${NEXT_INCOMPLETE}"
     fi
 fi
 
@@ -270,8 +223,24 @@ fi
 # question, etc.) are not flagged — only ones containing `- [ ]` items.
 NON_PHASE_HEADING=$(check_non_phase_work "$PLAN_FILE")
 if [ -n "$NON_PHASE_HEADING" ]; then
-    REASON="[planning-with-files] FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: heading '### ${NON_PHASE_HEADING}' contains unchecked '- [ ]' work items but is NOT a recognized phase heading. The ONLY heading form recognized as work is '### Phase N: Title' (level-3, the literal word 'Phase', a number, a colon). Rename it to a valid phase and add one recognized status. Do NOT stop until every block of unchecked work lives under a '### Phase N:' heading."
-    log "decision: BLOCK (NON-PHASE WORK — '${NON_PHASE_HEADING}' has unchecked items)"
+    REASON_PARTS+=("FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: heading '### ${NON_PHASE_HEADING}' contains unchecked '- [ ]' work items but is NOT a recognized phase heading. The ONLY heading form recognized as work is '### Phase N: Title' (level-3, the literal word 'Phase', a number, a colon). Rename it to a valid phase and add one recognized status. Do NOT stop until every block of unchecked work lives under a '### Phase N:' heading.")
+    log "found: NON-PHASE WORK — '${NON_PHASE_HEADING}' has unchecked items"
+fi
+
+if [ "${#REASON_PARTS[@]}" -gt 0 ]; then
+    COMBINED=""
+    if [ "${#REASON_PARTS[@]}" -gt 1 ]; then
+        _idx=0
+        for _part in "${REASON_PARTS[@]}"; do
+            _idx=$((_idx + 1))
+            COMBINED="${COMBINED}(${_idx}/${#REASON_PARTS[@]}) ${_part}
+"
+        done
+    else
+        COMBINED="${REASON_PARTS[0]}"
+    fi
+    REASON="[planning-with-files] ${COMBINED}"
+    log "decision: BLOCK (${#REASON_PARTS[@]} issue(s) found in one pass)"
     ESCAPED_REASON=$(json_escape "$REASON")
     OUTPUT="{\"decision\":\"block\",\"reason\":$ESCAPED_REASON}"
     log "stdout: ${#OUTPUT} chars"

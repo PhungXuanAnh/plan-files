@@ -67,6 +67,32 @@ Phase 1
 EOF
 }
 
+write_multi_issue_settled() {
+    # Two distinct violation categories at once (missing Workflow Profile is a
+    # format-contract issue; the unfinished item inside a "complete" phase is
+    # a settled-integrity issue) so a single Stop firing must report both.
+    cat > "$PROJECT/tmp/plan-with-files/task-a/tasks.md" <<'EOF'
+# Tasks: multi-issue settled
+
+## Goal
+Finish safely.
+
+## Task Identity
+- Deliverable: Finish safely
+- Anchors: task-a
+- Non-goals: none
+
+## Current Phase
+Phase 1
+
+## Phases
+
+### Phase 1: Work
+- [ ] Still unfinished
+- **Status:** complete
+EOF
+}
+
 write_valid_settled() {
     sed 's/- \[ \] Still unfinished/- [x] Finished/; s/# Tasks: malformed settled/# Tasks: valid settled/' \
         "$PROJECT/tmp/plan-with-files/task-a/tasks.md" > "$PROJECT/tmp/plan-with-files/task-a/tasks.md.next"
@@ -138,6 +164,17 @@ post_hook() {
         copilot) script="$REPO_ROOT/.github/hooks/scripts/post-tool-use.sh" ;;
     esac
     (cd "$PROJECT" && printf '{"session_id":"%s","hook_event_name":"PostToolUse"}\n' "$session" | "$script")
+}
+
+post_tool_patch() {
+    local provider=$1 session=$2 patch=$3 script
+    case "$provider" in
+        codex) script="$REPO_ROOT/.codex/hooks/planning-with-files/scripts/post-tool-use.sh" ;;
+        claude) script="$REPO_ROOT/.claude/hooks/planning-with-files/scripts/post-tool-use.sh" ;;
+        copilot) script="$REPO_ROOT/.github/hooks/scripts/post-tool-use.sh" ;;
+    esac
+    (cd "$PROJECT" && python3 -c 'import json,sys
+print(json.dumps({"session_id": sys.argv[1], "hook_event_name": "PostToolUse", "tool_name": "apply_patch", "tool_input": {"patch": sys.argv[2]}}))' "$session" "$patch" | "$script")
 }
 
 error_hook() {
@@ -270,6 +307,54 @@ for SPEC in 'codex codex-a' 'claude claude-a' 'copilot copilot-a'; do
     set -- $SPEC
     assert_eq "$(stop_hook "$1" "$2")" "{}" "$1 valid settled Stop"
     assert_eq "$(post_hook "$1" "$2")" "{}" "$1 valid settled PostTool"
+done
+
+# Two simultaneous, unrelated violation categories (missing Workflow Profile +
+# a STATUS-LIES phase) must both surface from ONE Stop firing, not just the
+# first one found across repeated block/fix/retry cycles.
+write_multi_issue_settled
+for SPEC in 'codex codex-a' 'claude claude-a' 'copilot copilot-a'; do
+    set -- $SPEC
+    MULTI_STOP=$(stop_hook "$1" "$2")
+    assert_contains "$MULTI_STOP" "Workflow Profile" "$1 multi-issue Stop reports missing Workflow Profile"
+    assert_contains "$MULTI_STOP" "STATUS LIES" "$1 multi-issue Stop also reports STATUS LIES in the same block"
+done
+write_valid_settled
+
+# A brand-new task's very first Write (creating tasks.md itself) cannot be
+# auto-claimed by PreToolUse — the file necessarily doesn't exist on disk yet
+# at that point, so claim_task's task_exists guard would always fail. It must
+# be allowed through, then auto-claimed by PostToolUse once the write has
+# actually happened and the file exists, so the session ends up owned and
+# .plan-with-files reflects it — without the agent ever needing an explicit
+# bind/manual pointer write.
+NEW_TASK_ID=first-write-auto-claim
+NEW_TASK_PATCH="*** Add File: $PROJECT/tmp/plan-with-files/$NEW_TASK_ID/tasks.md
++placeholder"
+for SPEC in 'codex codex-newtask' 'claude claude-newtask' 'copilot copilot-newtask'; do
+    set -- $SPEC
+    assert_eq "$(pre_tool_patch "$1" "$2" "$NEW_TASK_PATCH")" "{}" \
+        "$1 PreToolUse allows creating a brand-new task's first file"
+    mkdir -p "$PROJECT/tmp/plan-with-files/$NEW_TASK_ID"
+    cat > "$PROJECT/tmp/plan-with-files/$NEW_TASK_ID/tasks.md" <<EOF
+## Task Identity
+$NEW_TASK_ID
+## Goal
+verify first-write auto-claim
+## Workflow Profile
+**Profile:** A
+## Current Phase
+
+## Phases
+### Phase 1: x [pending]
+EOF
+    assert_contains "$(post_tool_patch "$1" "$2" "$NEW_TASK_PATCH")" "verify first-write auto-claim" \
+        "$1 PostToolUse auto-claims once the new task's file actually exists"
+    assert_eq "$(PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" resolve "$1" "$2")" \
+        "$PROJECT/tmp/plan-with-files/$NEW_TASK_ID" "$1 session is owned after post-write auto-claim"
+    assert_eq "$(cat "$PROJECT/.plan-with-files")" "$NEW_TASK_ID" \
+        "$1 .plan-with-files reflects the auto-claimed new task without any manual write"
+    rm -rf "$PROJECT/tmp/plan-with-files/$NEW_TASK_ID"
 done
 
 # Claude provisions the same verified identity for later Bash bind commands.

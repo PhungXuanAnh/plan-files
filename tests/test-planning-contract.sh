@@ -160,7 +160,11 @@ assert_eq "$(check_task_plan_format "$PLAN_DIR/bad-current.md")" "CURRENT_PHASE_
 
 sed 's/^### Phase 1:/### Phase one:/' "$PLAN_DIR/tasks.md" > "$PLAN_DIR/bad-heading.md"
 count_phases "$PLAN_DIR/bad-heading.md"
-assert_eq "$(check_task_plan_format "$PLAN_DIR/bad-heading.md")" "PHASE_HEADING_INVALID" "malformed phase heading"
+# Renaming the heading away from "Phase 1" also makes Current Phase (which
+# still says "Phase 1") point at a phase that no longer exists — both issues
+# are genuinely true at once, and check_task_plan_format now reports both
+# instead of only the first (this is the accumulation behavior, not a bug).
+assert_eq "$(check_task_plan_format "$PLAN_DIR/bad-heading.md")" "$(printf 'PHASE_HEADING_INVALID\nCURRENT_PHASE_INVALID')" "malformed phase heading also invalidates the now-missing Current Phase target"
 
 sed '/\*\*Status:\*\* pending/d' "$PLAN_DIR/tasks.md" > "$PLAN_DIR/missing-status.md"
 count_phases "$PLAN_DIR/missing-status.md"

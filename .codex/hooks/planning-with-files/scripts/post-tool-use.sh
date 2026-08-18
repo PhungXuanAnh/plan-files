@@ -25,6 +25,18 @@ if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e .plan-with-files-skip ]; then
 fi
 SESSION_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" session-id 2>/dev/null || true)
 PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" resolve "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+if [ -z "$PLAN_DIR" ] && [ -n "$SESSION_ID" ] && command -v python3 >/dev/null 2>&1; then
+    # PreToolUse cannot claim a brand-new task's first Write (tasks.md/
+    # findings.md/decisions.md didn't exist on disk yet when it ran, so
+    # claim_task's task_exists guard would always fail there). Claim it now
+    # that the write has succeeded and the file actually exists, so this
+    # session doesn't stay silently unowned right after creating its own plan.
+    MUTATION_PLAN=$(printf '%s' "$INPUT" \
+        | python3 "$REPO_ROOT/skills/planning-with-files/scripts/maintenance-tool-allowed.py" mutation-plan-id "$PWD" 2>/dev/null || true)
+    if [ -n "$MUTATION_PLAN" ]; then
+        PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" claim "$PROVIDER" "$SESSION_ID" "$MUTATION_PLAN" 2>/dev/null || true)
+    fi
+fi
 if [ -z "$PLAN_DIR" ]; then
     printf '{}'
     exit 0
@@ -375,7 +387,7 @@ fi
 # Re-check when the plan changes; structural validation remains active throughout.
 if [ "$INJECT_FULL" = "true" ]; then
     FORMAT_ISSUE=$(check_task_plan_format "$PLAN_FILE")
-    FORMAT_WARN=$(task_plan_format_message "$FORMAT_ISSUE" "$PLAN_FILE" "$TOTAL")
+    FORMAT_WARN=$(task_plan_format_messages "$FORMAT_ISSUE" "$PLAN_FILE" "$TOTAL")
     if [ -n "$FORMAT_WARN" ]; then
         NUDGE="${NUDGE}
 [planning-with-files] ${FORMAT_WARN}"

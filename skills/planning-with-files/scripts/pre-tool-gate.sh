@@ -164,10 +164,18 @@ if [ -n "$MUTATION_PLAN" ]; then
     if [ -n "$PLAN_DIR" ]; then
         OWNED_PLAN=$(basename "$PLAN_DIR")
         if [ "$OWNED_PLAN" != "$MUTATION_PLAN" ]; then
-            REASON_TEXT="[planning-with-files] PLAN MUTATION BLOCKED. This session owns '$OWNED_PLAN', but the tool call targets plan '$MUTATION_PLAN'. Finish/release the current scope or use the correct session; ownership will not switch silently."
+            REASON_TEXT="[planning-with-files] PLAN MUTATION BLOCKED. This session owns '$OWNED_PLAN', but the tool call targets plan '$MUTATION_PLAN'. There is no command that can switch ownership within this turn: release only works once a new user prompt flips this session's lease to pending, which has not happened yet, and re-claiming '$MUTATION_PLAN' will fail the same way. Do not retry release/claim/bind, and do not inspect internal tmp/plan-with-files/.sessions state files to work around this. Instead: keep this tool call scoped to '$OWNED_PLAN' for the rest of this turn, or stop and ask the user whether '$MUTATION_PLAN' is genuinely a separate task before touching it — do not decide unilaterally."
             log "session=$SESSION_ID owned=$OWNED_PLAN target=$MUTATION_PLAN decision=block-plan-conflict tool=$TOOL_NAME"
             block "$REASON_TEXT"
         fi
+    elif [ ! -f "$PWD/tmp/plan-with-files/$MUTATION_PLAN/tasks.md" ]; then
+        # This call is CREATING tasks.md/findings.md/decisions.md for a
+        # brand-new task — PreToolUse fires before the write executes, so
+        # the file necessarily doesn't exist on disk yet and claim_task's
+        # task_exists guard would always fail here. Nothing to claim or
+        # conflict with yet: allow it through. post-tool-use.sh claims
+        # ownership once the write succeeds and the file actually exists.
+        log "session=$SESSION_ID plan=$MUTATION_PLAN decision=allow-new-plan-creation tool=$TOOL_NAME"
     else
         CLAIM_STATUS=0
         PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" claim \

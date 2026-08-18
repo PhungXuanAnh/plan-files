@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Iterable
@@ -17,6 +18,7 @@ from plan_state import (
     PLACEHOLDER_EVIDENCE,
     STATUS_RE,
     SETTLED,
+    explain_issues,
     finalizability_issues,
     parse_plan,
     progress_fingerprint,
@@ -25,6 +27,25 @@ from plan_state import (
 
 class CheckpointError(RuntimeError):
     pass
+
+
+def _resolve_project_root(start: Path) -> Path:
+    """Resolve the true project root from a directory, via the shared resolver.
+
+    A fixed parent-count (e.g. `plan.parents[3]`) breaks the moment a plan
+    lives somewhere the storage model's usual depth doesn't hold — a
+    submodule, a non-git multi-repo workspace, or any other layout the
+    shared resolver already handles. Delegate to it instead of assuming.
+    """
+    resolver = Path(__file__).resolve().parent / "resolve-project-root.sh"
+    result = subprocess.run(
+        ["bash", str(resolver), str(start)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = result.stdout.strip()
+    return Path(output) if output else start
 
 
 def _clean_evidence(value: str) -> str:
@@ -84,7 +105,7 @@ def _validate_for_transition(plan: Path, allowed_issues: set[str] | None = None)
     state = parse_plan(plan)
     unexpected = [issue for issue in state.issues if issue not in (allowed_issues or set())]
     if unexpected:
-        raise CheckpointError(f"plan contract invalid: {unexpected[0]}")
+        raise CheckpointError(f"plan contract invalid: {explain_issues(unexpected)}")
     if not state.contracted:
         raise CheckpointError("plan has no outcome-item contract; add ## Active Item first")
     return state
@@ -186,7 +207,7 @@ def complete(plan: Path, item_id: str, evidence_value: str, requested_next: str 
     new_state = _validate_for_transition(plan)
     all_settled = all(phase.status in SETTLED for phase in new_state.phases)
     if deactivate:
-        project_root = plan.parents[3]
+        project_root = _resolve_project_root(plan.parent.resolve())
         pointer = project_root / ".plan-with-files"
         if pointer.is_file() and pointer.read_text(encoding="utf-8").strip() == plan.parent.name:
             pointer.write_text("", encoding="utf-8")
@@ -204,7 +225,7 @@ def assert_finalizable(plan: Path, project_root: Path | None) -> dict[str, objec
     state = parse_plan(plan)
     issues = finalizability_issues(state, project_root)
     if issues:
-        raise CheckpointError(f"plan is not finalizable: {issues[0]}")
+        raise CheckpointError(f"plan is not finalizable: {explain_issues(issues)}")
     return {"operation": "assert-finalizable", "finalizable": True, "fingerprint": progress_fingerprint(state)}
 
 
