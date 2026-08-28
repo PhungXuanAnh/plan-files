@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared PreToolUse ownership + planning-maintenance gate.
+# Shared PreToolUse ownership, restore-readiness, and maintenance gate.
 
 set -u
 set -o pipefail 2>/dev/null || true
@@ -91,33 +91,29 @@ if isinstance(v,str): sys.stdout.write(v)' 2>/dev/null || true)
 }
 
 budget_warning() {
-    local plan_dir=$1 items="" name path lines bytes line_limit byte_limit phase_count item
-    for name in tasks.md findings.md decisions.md handoff.md; do
-        path="$plan_dir/$name"
-        [ -f "$path" ] || continue
-        case "$name" in
-            tasks.md) line_limit=150; byte_limit=12288 ;;
-            findings.md) line_limit=250; byte_limit=32768 ;;
-            decisions.md) line_limit=150; byte_limit=12288 ;;
-            handoff.md) line_limit=50; byte_limit=6144 ;;
-        esac
-        lines=$(wc -l < "$path" 2>/dev/null | tr -d ' ' || echo 0)
-        bytes=$(wc -c < "$path" 2>/dev/null | tr -d ' ' || echo 0)
-        lines=${lines:-0}; bytes=${bytes:-0}
-        if [ "$lines" -gt "$line_limit" ] || [ "$bytes" -gt "$byte_limit" ]; then
-            item="${name}=${lines}/${line_limit} lines;${bytes}/${byte_limit} bytes"
-            [ -n "$items" ] && items="${items}, ${item}" || items="$item"
-        fi
-    done
-    if [ -f "$plan_dir/tasks.md" ]; then
-        phase_count=$(grep -Ec '^### Phase[[:space:]]+[0-9]+:' "$plan_dir/tasks.md" 2>/dev/null || true)
-        phase_count=${phase_count:-0}
-        if [ "$phase_count" -gt 12 ]; then
-            item="tasks.md=${phase_count}/12 phase entries"
-            [ -n "$items" ] && items="${items}, ${item}" || items="$item"
-        fi
-    fi
-    [ -z "$items" ] || printf '[planning-with-files] COMPACTION NEEDED (actual/target): %s. Keep hot current state; move older completed phases, completed verification, and resolved-error summaries to history.md; consolidate findings/decisions by lifecycle; overwrite handoff.md instead of appending. Split independent follow-up work into another task. Never raw-truncate.' "$items"
+    local plan_dir=$1
+    [ -f "$plan_dir/tasks.md" ] || return 0
+    command -v python3 >/dev/null 2>&1 || return 0
+    python3 "$PLAN_STATE_TOOL" budget-warning "$plan_dir/tasks.md" 2>/dev/null || true
+}
+
+restore_warning() {
+    local plan_dir=$1 payload
+    [ -f "$plan_dir/tasks.md" ] || return 0
+    command -v python3 >/dev/null 2>&1 || return 0
+    payload=$(python3 "$PLAN_STATE_TOOL" restore-check "$plan_dir/tasks.md" 2>/dev/null) || true
+    [ -n "$payload" ] || return 0
+    printf '%s' "$payload" | python3 -c 'import json,sys
+try: p=json.load(sys.stdin)
+except Exception: raise SystemExit(0)
+if p.get("ok", True): raise SystemExit(0)
+issues=p.get("issues", [])
+parts=[]
+for issue in issues[:3]:
+    parts.append("{code} in {source} ## {heading}: {repair}".format(**issue))
+more=len(issues)-len(parts)
+if more > 0: parts.append(f"{more} more issue(s)")
+print("[planning-with-files] RESTORE STATE ACTION REQUIRED: " + "; ".join(parts) + ". Run plan_state.py restore-check on the owned tasks.md for the bounded complete diagnosis.", end="")' 2>/dev/null || true
 }
 
 maintenance_tool_allowed() {
@@ -236,18 +232,28 @@ if [ -n "$ITEM_ISSUE" ]; then
 fi
 
 COMPACTION_WARN=$(budget_warning "$PLAN_DIR")
-if [ -z "$COMPACTION_WARN" ]; then
-    log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") maintenance=ok decision=allow tool=$TOOL_NAME"
-    printf '{}'
-    exit 0
+if [ -n "$COMPACTION_WARN" ]; then
+    if maintenance_tool_allowed "$PLAN_DIR"; then
+        log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") maintenance=required decision=allow-maintenance tool=$TOOL_NAME"
+        printf '{}'
+        exit 0
+    fi
+    REASON_TEXT="$COMPACTION_WARN Planning maintenance is mandatory before unrelated work. Allowed while compacting: (1) use any tool that is demonstrably read-only to inspect/search/read anywhere in the current project (for example Read, rg/grep/cat/head/tail, git status/diff/show/log, and Serena find/get/list/search tools); (2) use any mutation tool when its tool_input targets or explicitly references the owned plan directory $PLAN_DIR, including tasks.md, findings.md, decisions.md, handoff.md, and history.md. The gate does not require a specific mutation tool name; when explicit writable targets can be recognized, every target must stay inside that plan directory. Blocked until budgets clear: recognized mutations outside that plan folder and unknown calls that neither prove read-only behavior nor reference the owned plan directory. The gate re-checks budgets on every tool call."
+    log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") maintenance=required decision=block-compaction tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
+    block "$REASON_TEXT"
 fi
 
-if maintenance_tool_allowed "$PLAN_DIR"; then
-    log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") maintenance=required decision=allow-maintenance tool=$TOOL_NAME"
-    printf '{}'
-    exit 0
+RESTORE_WARN=$(restore_warning "$PLAN_DIR")
+if [ -n "$RESTORE_WARN" ]; then
+    if [ -n "$MUTATION_PLAN" ] || maintenance_tool_allowed "$PLAN_DIR"; then
+        log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") restore=required decision=allow-restore-repair tool=$TOOL_NAME"
+        printf '{}'
+        exit 0
+    fi
+    REASON_TEXT="$RESTORE_WARN Read-only diagnosis and plan-local repair/checkpoint tools remain allowed; operational mutation waits until restore-check passes."
+    log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") restore=required decision=block-restore-state tool=$TOOL_NAME"
+    block "$REASON_TEXT"
 fi
 
-REASON_TEXT="$COMPACTION_WARN Planning maintenance is mandatory before unrelated work. Allowed while compacting: (1) use any tool that is demonstrably read-only to inspect/search/read anywhere in the current project (for example Read, rg/grep/cat/head/tail, git status/diff/show/log, and Serena find/get/list/search tools); (2) use any mutation tool when its tool_input targets or explicitly references the owned plan directory $PLAN_DIR, including tasks.md, findings.md, decisions.md, handoff.md, and history.md. The gate does not require a specific mutation tool name; when explicit writable targets can be recognized, every target must stay inside that plan directory. Blocked until budgets clear: recognized mutations outside that plan folder and unknown calls that neither prove read-only behavior nor reference the owned plan directory. The gate re-checks budgets on every tool call."
-log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") maintenance=required decision=block-compaction tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
-block "$REASON_TEXT"
+log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") maintenance=ok restore=ok decision=allow tool=$TOOL_NAME"
+printf '{}'

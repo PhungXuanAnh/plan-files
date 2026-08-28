@@ -1,7 +1,8 @@
 # Handoff
 <!-- Optional latest snapshot. Overwrite; do not append. Keep under 50 lines AND 6 KiB. -->
 
-Updated: YYYY-MM-DD HH:mm TZ
+Updated: YYYY-MM-DDTHH:MM:SS+00:00
+Reverify after: YYYY-MM-DDTHH:MM:SS+00:00
 
 ## Resume Checkpoint
 - **Current phase:** Phase N
@@ -14,7 +15,7 @@ Updated: YYYY-MM-DD HH:mm TZ
 - **Branch / revision:**
 - **Modified or untracked files:**
 - **Running processes or volatile state:**
-- **State captured at:** [timestamp; reverify before acting]
+- **State captured at:** [same ISO-8601 Updated timestamp; reverify before acting]
 
 ## Relevant Context
 - **Read first:** [specific sections/paths]

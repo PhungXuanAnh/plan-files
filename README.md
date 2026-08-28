@@ -21,11 +21,13 @@ For each complex task, the agent uses a default pointer, prompt-scoped routing, 
         └── handoff.md       # optional latest resume snapshot
 ```
 
-- `tasks.md` tracks task identity, goal, current phase, phases, concise progress, errors, and verification.
+- `tasks.md` is the single authoritative plan: task identity, goal, current phase, phases/items/evidence, concise progress, errors, and verification. Its maintenance ceiling is 300 lines/24 KiB, 12 phases, about 100 visible items, and 15 items/4 KiB in Current Phase.
 - `findings.md` stores research, discoveries, and untrusted external content.
 - `decisions.md` stores user decisions, changed direction, superseded choices, and open decision questions.
 - `history.md` stores trusted completed-work summaries and is read only when needed.
 - `handoff.md` is overwritten only for an intentional pause whose volatile state does not fit in `tasks.md`.
+
+Bounded `overview`/`resume-pack` output is capped at 4 KiB and supplies targeted follow-up reads for truncated sections. `restore-check` validates semantic resume fields plus handoff/external-evidence freshness before operational work. PostTool reminders use semantic risk classes, so read-only exploration and plan maintenance do not create false stale pressure while likely evidence and mutations still require timely checkpoints.
 
 There is no `progress.md`. Keep current progress and verification in `tasks.md`; archive completed detail in `history.md` when needed.
 
@@ -68,6 +70,7 @@ planning-with-files/
 │       ├── SKILL.md
 │       ├── examples.md
 │       ├── reference.md
+│       ├── references/              # Focused routing, format, operations, evaluation details
 │       ├── scripts/                 # Canonical prompt/session routing helper
 │       └── templates/
 │           ├── tasks.md
@@ -92,7 +95,9 @@ Ask the agent to use the `planning-with-files` skill for any multi-step task. Th
 2. Compare only candidate Task Identity + Goal with the latest request and classify it as `SAME`, `DIFFERENT`, or `AMBIGUOUS`.
 3. When an ownership hook supplies a bind command, bind `SAME` before loading full hot state; ignore `DIFFERENT` without mutating it; ask only for `AMBIGUOUS`.
 4. Create a new task folder when a separate complex request needs one, and bind it when the adapter supports ownership.
-5. Re-read `tasks.md` and `decisions.md` before major decisions, and compact cold completed detail instead of raw-truncating it.
+5. Use `plan_state.py overview/restore-check/phase/item/section` to load only needed state, then use fingerprinted `plan_edit.py` operations for routine structural/section changes. Full Markdown reads and edits remain available for unusual repairs.
+6. Checkpoint the Active Item immediately after its evidence becomes true; the checkpoint synchronizes the exact Resume next action.
+7. Keep a rolling window of at most 12 hot phase headings: `phase-add` archives the oldest eligible complete phase before adding a thirteenth, and `compact-oldest` performs the same history-first eviction explicitly. Archive writes are locked and journaled for automatic crash recovery. Split only an independent goal; never raw-truncate or raise the ceiling.
 
 Codex, Claude Code, and GitHub Copilot hooks implement this prompt-scoped ownership handshake. An unbound or unidentified session receives no full plan injection and no hard Stop/PostTool enforcement. Future adapters can implement the same generic ownership interface without changing the shared skill contract.
 
@@ -101,6 +106,8 @@ When `.plan-with-files` is empty, an exact `tmp/plan-with-files/<task-id>/*.md` 
 A successful `claim`/`bind` keeps `.plan-with-files` in sync with whichever task the session just became the confirmed owner of — this assumes, as this skill does, that at most one agent works a given project at a time. `.plan-with-files` remains a convenience default for humans and new sessions, never a decision input: hooks always gate and enforce against the per-session lease under `tmp/plan-with-files/.sessions/`, never against `.plan-with-files` directly.
 
 Stop completion is re-evaluated on every invocation, including recursive invocations marked `stop_hook_active=true`. Incomplete or structurally invalid actionable work remains blocked indefinitely; an item, checkpoint, or phase is progress rather than a final-answer boundary, so the agent must continue through every non-settled phase in the plan. A phase with a genuine external dependency must use `blocked (reason)`, while a phase explicitly postponed by the user must use `deferred (reason)`; both are settled and prevent non-actionable recursive Stop loops. Planning/discussion mode, disabled sessions, unowned sessions, and fully settled plans still allow Stop.
+
+Run `make behavioral-eval` for an isolated 12→13 rollover/new-session comparison. It verifies the 4 KiB packet, semantic restore diagnosis, risk-aware reminder behavior, finalization enforcement, session routing, and history-first recovery without mutating the working project.
 
 The canonical skill remains host-neutral. Each ownership-aware hook adapter resolves its own session identity and injects a directly executable bind command, so the skill never hardcodes `/home/...` or requires the agent to discover hook scripts. An absolute command produced by a hook may point through a symlink or to the source tree; both are valid.
 

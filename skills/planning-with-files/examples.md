@@ -23,7 +23,7 @@ P2.1
 **Profile:** A
 
 ## Resume Checkpoint
-- **Next action:** Patch the missing `await` in `src/auth/login.ts`.
+- **Next action:** Complete P2.1: patch the missing `await` in `src/auth/login.ts`.
 - **Blocker:** none
 - **Details:** none
 
@@ -36,11 +36,11 @@ P2.1
   - Evidence: pending
 - [ ] [P2.2] The focused login regression passes.
   - Evidence: pending
-- **Status:** in_progress
 
 **Done when:**
 - [ ] [V2.1] `pytest tests/auth/test_login.py` passes.
   - Evidence: pending
+- **Status:** in_progress
 
 ### Phase 3: Verify Regression
 - [ ] [P3.1] The authentication regression suite passes.
@@ -88,6 +88,35 @@ After `history.md`:
 
 Recurring failures belong in `findings.md` as symptom/root cause/workaround; resolved audit detail belongs in `history.md`.
 
+For a larger plan, resume without loading every file:
+
+```bash
+python3 <skill-dir>/scripts/plan_state.py overview <task-dir>/tasks.md
+python3 <skill-dir>/scripts/plan_state.py restore-check <task-dir>/tasks.md
+python3 <skill-dir>/scripts/plan_state.py phase <task-dir>/tasks.md 2
+python3 <skill-dir>/scripts/plan_state.py section <task-dir>/findings.md "Current Summary"
+```
+
+Use the returned file fingerprint for a routine edit:
+
+```bash
+python3 <skill-dir>/scripts/plan_edit.py --plan <task-dir>/tasks.md \
+  --expected-fingerprint <sha256> entry-append --file tasks.md \
+  --heading "Files Touched" --entry '- src/auth/login.ts: await fix'
+```
+
+Read `references/plan-operations.md` for structural, archival, decision, and handoff commands. Directly read or patch the Markdown when the intended repair is too unusual for those safe primitives.
+
+When the hot window already has 12 phase headings, add the next phase with both current fingerprints. The editor archives and evicts the oldest eligible complete phase before writing the new monotonic ID:
+
+```bash
+python3 <skill-dir>/scripts/plan_edit.py --plan <task-dir>/tasks.md \
+  --expected-fingerprint <tasks-sha> phase-add --title "Follow-up verification" \
+  --expected-history-fingerprint <history-sha-or-missing>
+```
+
+For explicit phase compaction, run `compact-oldest` with the same two fingerprints and repeat only while the budget warning remains. Rollover and archive operations create a bounded transaction journal, commit history before hot state under a lock, and automatically recover that journal on the next `plan_edit.py` call.
+
 ## Optional handoff
 
 Create this only when a short Resume Checkpoint cannot capture volatile state:
@@ -95,7 +124,8 @@ Create this only when a short Resume Checkpoint cannot capture volatile state:
 ```markdown
 # Handoff
 
-Updated: 2026-08-09 18:30 Asia/Ho_Chi_Minh
+Updated: 2026-08-09T18:30:00+07:00
+Reverify after: 2026-08-09T19:00:00+07:00
 
 ## Resume Checkpoint
 - **Current phase:** Phase 2
@@ -108,10 +138,10 @@ Updated: 2026-08-09 18:30 Asia/Ho_Chi_Minh
 - **Branch / revision:** `fix-login` / `abc1234`
 - **Modified or untracked files:** `src/auth/login.ts`
 - **Running processes or volatile state:** none
-- **State captured at:** 2026-08-09 18:30; reverify before acting
+- **State captured at:** 2026-08-09T18:30:00+07:00; reverify before acting
 ```
 
-Overwrite the file at the next pause. Ignore it when a required planning file is newer.
+Overwrite the file at the next pause. Ignore and re-verify it after `Reverify after` or when a required planning file is newer. For a volatile result kept in `tasks.md`, use `- [external-state observed=2026-08-09T18:30:00+07:00 reverify-after=2026-08-09T19:00:00+07:00] staging smoke: PASS`.
 
 ## Changed user decision
 

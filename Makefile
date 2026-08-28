@@ -1,4 +1,4 @@
-.PHONY: help test check-installs injected-content \
+.PHONY: help test behavioral-eval check-installs injected-content plan-overview \
         install-skill-copilot install-skill-claude-code install-skill-codex install-skill-kiro install-skills \
         install-hook-copilot install-hook-claude-code install-hook-codex install-hooks \
         install-copilot install-claude-code install-codex install-global install \
@@ -13,6 +13,9 @@ test: ## Run planning contract tests
 	@bash tests/test-project-root-resolution.sh
 	@bash tests/test-codex-global-hooks.sh
 	@bash tests/test-claude-global-hooks.sh
+
+behavioral-eval: ## Run isolated long-run planning-memory evaluation
+	@python3 "$(SKILL_SRC)/scripts/behavioral_eval.py"
 
 # ---------------------------------------------------------------------------
 # Global installation. Hook configs are samples so this repository does not
@@ -121,6 +124,13 @@ injected-content: ## Show what the post-tool-use hook would inject from the acti
 	file="tmp/plan-with-files/$$id/tasks.md"; \
 	if [ ! -f "$$file" ]; then echo "active tasks.md not found: $$file"; exit 0; fi; \
 	awk '/^## (Goal|Current Phase)[[:space:]]*$$/{c=1;print;next} /^## /{c=0} c' "$$file" | awk 'BEGIN{c=0} /<!--/{c=1} c==0{print} /-->/{c=0}'
+
+plan-overview: ## Show bounded state, fingerprints, and budgets for the active plan
+	@id=$$(cat .plan-with-files 2>/dev/null || true); \
+	case "$$id" in ""|.|*/*|*..*|*" "*) echo "no valid active plan"; exit 0;; esac; \
+	file="tmp/plan-with-files/$$id/tasks.md"; \
+	if [ ! -f "$$file" ]; then echo "active tasks.md not found: $$file"; exit 0; fi; \
+	python3 "$(SKILL_SRC)/scripts/plan_state.py" overview "$$file"
 
 # ----------------------------------------------------------------------------
 # Upstream sync (origin = PhungXuanAnh fork, upstream = OthmanAdi original)

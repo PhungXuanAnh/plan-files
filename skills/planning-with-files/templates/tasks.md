@@ -1,5 +1,5 @@
 # Tasks: [Brief Description]
-<!-- Trusted hot state. Keep under 150 lines AND 12 KiB; move cold history out instead of truncating. -->
+<!-- Trusted hot state. Keep at most 300 lines, 24 KiB, 12 hot phase headings, ~100 visible items, and 15 items/4 KiB in Current Phase. -->
 
 ## Goal
 <!-- One or two short sentences. Hooks may inject this, so keep it concise. -->
@@ -40,6 +40,7 @@ Required phase format:
 
 Use `blocked (reason)` only for a genuine external dependency and `deferred (reason)` only when the user explicitly postpones the phase.
 Use P IDs for work and V IDs for phase acceptance. IDs are unique and match the containing phase number.
+Use targeted plan operations for routine reads/edits. Phase add/compaction archives and evicts the oldest eligible complete phase when the 12-heading hot window needs room; never remove unfinished work to make space.
 -->
 
 ### Phase 1: Requirements & Discovery
@@ -92,6 +93,7 @@ Use P IDs for work and V IDs for phase acceptance. IDs are unique and match the 
 
 ## Verification
 <!-- Keep exact checks still required plus the latest relevant baseline. Move completed detail to history.md. -->
+<!-- For volatile external results use: [external-state observed=<ISO-8601> reverify-after=<ISO-8601>]. -->
 - `<exact command or check>`:
 
 ## Progress Notes

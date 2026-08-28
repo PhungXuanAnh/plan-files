@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 RESOLVER="$REPO_ROOT/skills/planning-with-files/scripts/resolve-project-root.sh"
-CHECKPOINT_TOOL="$REPO_ROOT/skills/planning-with-files/scripts/plan-checkpoint.py"
+CHECKPOINT_TOOL="$REPO_ROOT/skills/planning-with-files/scripts/plan_checkpoint.py"
 TEST_DIR=$(mktemp -d)
 trap 'rm -rf "$TEST_DIR"' EXIT
 
@@ -78,7 +78,7 @@ mkdir -p "$WS7"
 assert_eq "$(bash "$RESOLVER" "$WS7")" "$WS7" \
     "with no .plan-with-files and no git repo, the resolver must fall back to the starting directory"
 
-# --- plan-checkpoint.py's --deactivate-pointer must clear .plan-with-files at
+# --- plan_checkpoint.py's --deactivate-pointer must clear .plan-with-files at
 #     the true (resolved) project root, not a hardcoded parent-count guess —
 #     even when invoked with cwd inside a nested submodule. ------------------
 WS8="$TEST_DIR/ws8"

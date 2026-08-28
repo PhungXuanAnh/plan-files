@@ -65,6 +65,27 @@ def _replace_section_body(lines: list[str], heading: str, value: str | None) -> 
     lines[start + 1 : end] = replacement + ([""] if end < len(lines) else [])
 
 
+def _set_resume_field(lines: list[str], label: str, value: str) -> None:
+    indices = [index for index, line in enumerate(lines) if line.strip() == "## Resume Checkpoint"]
+    if not indices:
+        return
+    if len(indices) != 1:
+        raise CheckpointError('expected exactly one "## Resume Checkpoint" section')
+    start = indices[0]
+    end = next((index for index in range(start + 1, len(lines)) if lines[index].startswith("## ")), len(lines))
+    prefix = f"- **{label}:**"
+    matches = [index for index in range(start + 1, end) if lines[index].startswith(prefix)]
+    if not matches:
+        return
+    if len(matches) != 1:
+        raise CheckpointError(f"Resume Checkpoint must contain exactly one {prefix} field")
+    lines[matches[0]] = f"{prefix} {value}"
+
+
+def _next_action(item) -> str:
+    return f"Complete {item.item_id}: {item.text}"
+
+
 def _set_phase_status(lines: list[str], phase_num: int, status: str) -> None:
     headings = [(index, PHASE_RE.match(line)) for index, line in enumerate(lines)]
     headings = [(index, match) for index, match in headings if match]
@@ -152,6 +173,8 @@ def start(plan: Path, item_id: str) -> dict[str, object]:
     lines = list(state.lines)
     _replace_section_body(lines, "## Current Phase", f"Phase {item.phase_num}")
     _replace_section_body(lines, "## Active Item", item_id)
+    _set_resume_field(lines, "Next action", _next_action(item))
+    _set_resume_field(lines, "Blocker", "none")
     phase = state.phase(item.phase_num)
     if phase and phase.status == "pending":
         _set_phase_status(lines, item.phase_num, "in_progress")
@@ -169,6 +192,7 @@ def progress(plan: Path, item_id: str, evidence_value: str) -> dict[str, object]
         raise CheckpointError(f"{item_id} is not an unchecked contracted item")
     lines = list(state.lines)
     _set_item_evidence(lines, item, _clean_evidence(evidence_value))
+    _set_resume_field(lines, "Next action", _next_action(item))
     _atomic_write(plan, lines)
     new_state = _validate_for_transition(plan)
     return {"operation": "progress", "item": item_id, "phase": item.phase_num, "fingerprint": progress_fingerprint(new_state)}
@@ -202,6 +226,12 @@ def complete(plan: Path, item_id: str, evidence_value: str, requested_next: str 
                 _set_phase_status(lines, next_phase.num, "in_progress")
         else:
             _replace_section_body(lines, "## Active Item", None)
+    if next_item:
+        _set_resume_field(lines, "Next action", _next_action(next_item))
+        _set_resume_field(lines, "Blocker", "none")
+    else:
+        _set_resume_field(lines, "Next action", "Run finalization checks and close the completed task")
+        _set_resume_field(lines, "Blocker", "none")
 
     _atomic_write(plan, lines)
     new_state = _validate_for_transition(plan)

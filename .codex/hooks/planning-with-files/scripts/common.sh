@@ -12,6 +12,7 @@
 #   task_plan_format_message CODE FILE TOTAL — render concise model-facing guidance
 #   planning_file_budget_warning DIR — echo line/byte/scope warning when needed
 #   planning_handoff_warning DIR     — echo warning when optional handoff.md is stale
+#   planning_restore_warning DIR     — echo bounded targeted repair guidance for incomplete restore state
 
 # ---------------------------------------------------------------------------
 # resolve_plan_dir ROOT
@@ -64,6 +65,19 @@ planning_state_tool() {
     done
     return 1
 }
+
+planning_privacy_key() {
+    local _value="${1:-}" _digest=""
+    if command -v sha256sum >/dev/null 2>&1; then
+        _digest=$(printf '%s' "$_value" | sha256sum | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        _digest=$(printf '%s' "$_value" | shasum -a 256 | awk '{print $1}')
+    elif command -v openssl >/dev/null 2>&1; then
+        _digest=$(printf '%s' "$_value" | openssl dgst -sha256 | sed 's/^.*= //')
+    fi
+    [ -n "$_digest" ] && printf '%s' "$_digest" | cut -c 1-16
+}
+
 
 planning_item_contract_issue() {
     local _plan_file="${1:-}" _tool _output _status=0
@@ -590,47 +604,11 @@ planning_settled_integrity_issue() {
 # Warns on line, byte, or hot-plan phase-count budgets. Advisory only.
 # ---------------------------------------------------------------------------
 planning_file_budget_warning() {
-    local _plan_dir="${1:-}"
-    local _items=""
-    local _name _path _lines _bytes _line_limit _byte_limit _phase_count _item
-
-    [ -z "$_plan_dir" ] && return 0
-
-    for _name in tasks.md findings.md decisions.md handoff.md; do
-        _path="$_plan_dir/$_name"
-        [ -f "$_path" ] || continue
-        case "$_name" in
-            tasks.md)    _line_limit=150; _byte_limit=12288 ;;
-            findings.md) _line_limit=250; _byte_limit=32768 ;;
-            decisions.md) _line_limit=150; _byte_limit=12288 ;;
-            handoff.md)  _line_limit=50;  _byte_limit=6144 ;;
-        esac
-        _lines=$(wc -l < "$_path" 2>/dev/null | tr -d ' ' || echo 0)
-        _bytes=$(wc -c < "$_path" 2>/dev/null | tr -d ' ' || echo 0)
-        _lines=${_lines:-0}
-        _bytes=${_bytes:-0}
-        if [ "$_lines" -gt "$_line_limit" ] || [ "$_bytes" -gt "$_byte_limit" ]; then
-            _item="${_name}=${_lines}/${_line_limit} lines;${_bytes}/${_byte_limit} bytes"
-            if [ -n "$_items" ]; then
-                _items="${_items}, ${_item}"
-            else
-                _items="${_item}"
-            fi
-        fi
-    done
-
-    if [ -f "$_plan_dir/tasks.md" ]; then
-        _phase_count=$(grep -Ec '^### Phase[[:space:]]+[0-9]+:' "$_plan_dir/tasks.md" 2>/dev/null || true)
-        _phase_count=${_phase_count:-0}
-        if [ "$_phase_count" -gt 12 ]; then
-            _item="tasks.md=${_phase_count}/12 phase entries"
-            [ -n "$_items" ] && _items="${_items}, ${_item}" || _items="${_item}"
-        fi
-    fi
-
-    if [ -n "$_items" ]; then
-        printf '[planning-with-files] COMPACTION NEEDED (actual/target): %s. Keep hot current state; move older completed phases, completed verification, and resolved-error summaries to history.md; consolidate findings/decisions by lifecycle; overwrite handoff.md instead of appending. Split independent follow-up work into another task. Never raw-truncate.' "$_items"
-    fi
+    local _plan_dir="${1:-}" _tool
+    [ -n "$_plan_dir" ] && [ -f "$_plan_dir/tasks.md" ] || return 0
+    _tool=$(planning_state_tool 2>/dev/null) || return 0
+    command -v python3 >/dev/null 2>&1 || return 0
+    python3 "$_tool" budget-warning "$_plan_dir/tasks.md" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -654,4 +632,28 @@ planning_handoff_warning() {
     if [ -n "$_newer" ]; then
         printf '[planning-with-files] STALE HANDOFF: %s is newer than handoff.md. Ignore handoff.md on resume; refresh it only after final planning updates when intentionally pausing.' "$_newer"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# planning_restore_warning PLAN_DIR
+# Emits only issue metadata and repairs; planning file bodies stay unloaded.
+# ---------------------------------------------------------------------------
+planning_restore_warning() {
+    local _plan_dir="${1:-}" _tool _payload
+    [ -n "$_plan_dir" ] && [ -f "$_plan_dir/tasks.md" ] || return 0
+    _tool=$(planning_state_tool 2>/dev/null) || return 0
+    command -v python3 >/dev/null 2>&1 || return 0
+    _payload=$(python3 "$_tool" restore-check "$_plan_dir/tasks.md" 2>/dev/null) || true
+    [ -n "$_payload" ] || return 0
+    printf '%s' "$_payload" | python3 -c 'import json,sys
+try: p=json.load(sys.stdin)
+except Exception: raise SystemExit(0)
+if p.get("ok", True): raise SystemExit(0)
+issues=p.get("issues", [])
+parts=[]
+for issue in issues[:3]:
+    parts.append("{code} in {source} ## {heading}: {repair}".format(**issue))
+more=len(issues)-len(parts)
+if more > 0: parts.append(f"{more} more issue(s)")
+print("[planning-with-files] RESTORE STATE ACTION REQUIRED: " + "; ".join(parts) + ". Run plan_state.py restore-check on the owned tasks.md for the bounded complete diagnosis.", end="")' 2>/dev/null || true
 }

@@ -62,6 +62,22 @@ MUTATION_TOOL_TOKENS = {
     "write",
 }
 SHELL_TOOL_NAMES = {"bash", "shell", "terminal", "exec", "exec_command", "run_command"}
+EVIDENCE_TOOL_TOKENS = {
+    "check",
+    "click",
+    "monitor",
+    "poll",
+    "screenshot",
+    "test",
+    "verify",
+    "wait",
+}
+EVIDENCE_COMMAND_RE = re.compile(
+    r"(^|\s)(pytest|unittest|make\s+(?:test|check)|npm\s+(?:test|run\s+test)|"
+    r"pnpm\s+(?:test|run\s+test)|yarn\s+test|cargo\s+test|go\s+test|"
+    r"mvn\s+test|gradle\s+test)(\s|$)",
+    re.IGNORECASE,
+)
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 TEXT_PLAN_PATH_RE = re.compile(
     r"(?P<path>(?:[A-Za-z]:)?[^\s\"'`<>|]*?tmp[\\/]+plan-with-files[\\/]"
@@ -250,6 +266,48 @@ def extract_mutation_plan_id(payload: dict, project_root: Path) -> int:
     return print_single_plan_id(plan_ids(targets, project_root))
 
 
+def tool_class(payload: dict, plan_dir: Path) -> dict[str, object]:
+    tool_name = str(payload.get("tool_name") or payload.get("toolName") or "")
+    simple_name = tool_name.lower().rsplit("__", 1)[-1]
+    tool_input = payload_tool_input(payload)
+    mutation = is_mutation_tool(tool_name, tool_input)
+    targets = mutation_targets(tool_input)
+    plan_maintenance = mutation and (
+        (bool(targets) and all(inside(path, plan_dir) for path in targets))
+        or references_owned_plan(tool_input, plan_dir)
+    )
+    if plan_maintenance:
+        category = "plan_maintenance"
+        semantic_weight = 0
+    elif any(simple_name.startswith(prefix) for prefix in READ_TOOL_PREFIXES) or (
+        simple_name in SHELL_TOOL_NAMES and bash_is_read_only(tool_input)
+    ):
+        category = "read_only_exploration"
+        semantic_weight = 0
+    else:
+        command = ""
+        if isinstance(tool_input, dict):
+            command = tool_input.get("command") or tool_input.get("cmd") or ""
+        elif isinstance(tool_input, str):
+            command = tool_input
+        tokens = set(re.split(r"[^a-z0-9]+", simple_name))
+        if (isinstance(command, str) and EVIDENCE_COMMAND_RE.search(command)) or tokens & EVIDENCE_TOOL_TOKENS:
+            category = "evidence_likely"
+            semantic_weight = 2
+        elif mutation:
+            category = "operational_mutation"
+            semantic_weight = 1
+        else:
+            category = "unknown"
+            semantic_weight = 1
+    return {
+        "class": category,
+        "semantic_weight": semantic_weight,
+        "mutation": mutation,
+        "plan_maintenance": plan_maintenance,
+    }
+
+
 def references_owned_plan(tool_input: object, plan_dir: Path) -> bool:
     """Fallback for unknown schemas: require the exact owned plan directory."""
     roots = {str(plan_dir).replace("\\", "/")}
@@ -301,6 +359,13 @@ def load_payload() -> dict | None:
 
 
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] == "tool-class":
+        payload = load_payload()
+        if payload is None:
+            return 1
+        plan_dir = Path(os.path.realpath(sys.argv[2]))
+        print(json.dumps(tool_class(payload, plan_dir), separators=(",", ":")))
+        return 0
     if len(sys.argv) == 3 and sys.argv[1] in {"prompt-plan-id", "mutation-plan-id"}:
         payload = load_payload()
         if payload is None:

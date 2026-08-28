@@ -6,7 +6,7 @@ The workflow treats the context window as limited working memory and the filesys
 
 | Tier | Files | Read policy |
 |------|-------|-------------|
-| Hot state | `tasks.md`, `decisions.md`, current summary in `findings.md` | Read on resume and before major decisions |
+| Hot state | `tasks.md`, `decisions.md`, current summary in `findings.md` | Load bounded overview, then only relevant sections/phase/item |
 | Resume snapshot | `handoff.md` | Read only when present and fresh |
 | Cold history | `history.md`, linked evidence/detail | Search or read only for a specific need |
 
@@ -45,6 +45,10 @@ Log errors immediately, then retain them by value rather than age. An unresolved
 Preserve links, paths, exact current checks, root causes, active decisions, and blockers. Summarize narration and repeated output. A concise reference to durable evidence is more useful than a copied transcript.
 
 Use both line and byte budgets: Markdown paragraphs can keep a file below its line budget while consuming substantial context.
+
+The `tasks.md` maintenance envelope is 300 lines, 24 KiB, a rolling window of 12 hot phase headings, about 100 visible items, and 15 items/4 KiB in Current Phase. `phase-add` history-first evicts the oldest eligible complete phase before it would create a thirteenth heading; `compact-oldest` exposes the same operation explicitly. These are repair/split triggers rather than format-invalid state: hooks continue to allow reads and plan-local maintenance. A transaction journal and plan-directory lock make multi-file archival recoverable without stale overwrites. The measured ceiling keeps full parsing cheap while targeted reads prevent repeated context cost.
+
+Use `plan_state.py` for a total-capped resume packet, semantic `restore-check`, and bounded section/phase/item/budget reads; use `plan_checkpoint.py` for execution transitions and `plan_edit.py` for fingerprinted structural or lifecycle mutation. The separation prevents a prose edit from silently completing work and prevents a task checkpoint from rewriting unrelated planning sections. See [targeted plan operations](references/plan-operations.md).
 
 ## Trust boundary
 

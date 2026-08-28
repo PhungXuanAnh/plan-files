@@ -1,7 +1,7 @@
 #!/bin/bash
 # planning-with-files: Post-tool-use hook for Claude Code
-# Runs AFTER every tool call. Anchors goals (re-injecting Goal + Current Phase
-# from tasks.md, size-bounded per section) and nudges progress logging.
+# Runs AFTER every tool call. Injects bounded current context plus semantic-risk
+# checkpoint, restore-readiness, and maintenance guidance.
 # No-op when tasks.md does not exist - zero pollution on non-planning sessions.
 # Always exits 0 - outputs JSON to stdout. Debug log written to
 #   tmp/hook-logs/plan-with-files/post-tool-use.log
@@ -55,6 +55,14 @@ json_escape() {
 
 PLAN_SOURCE="$PROVIDER session lease -> $PLAN_DIR"
 PLAN_FILE="$PLAN_DIR/tasks.md"
+TOOL_CLASS=unknown
+TOOL_WEIGHT=1
+TOOL_CLASS_FIELDS=$(printf '%s' "$INPUT" \
+    | python3 "$REPO_ROOT/skills/planning-with-files/scripts/maintenance-tool-allowed.py" tool-class "$PLAN_DIR" 2>/dev/null \
+    | python3 -c 'import json,sys; p=json.load(sys.stdin); print("{}\t{}".format(p["class"], p["semantic_weight"]))' 2>/dev/null || true)
+IFS=$'\t' read -r TOOL_CLASS TOOL_WEIGHT <<< "$TOOL_CLASS_FIELDS"
+TOOL_CLASS=${TOOL_CLASS:-unknown}
+TOOL_WEIGHT=${TOOL_WEIGHT:-1}
 
 # --- Logging setup (flock-protected against parallel hook processes) --------
 LOG_DIR="tmp/hook-logs/plan-with-files"
@@ -85,10 +93,11 @@ log() {
 }
 
 log "=== post-tool-use ==="
+log "scope provider=$PROVIDER task=$(basename "$PLAN_DIR") session=$(planning_privacy_key "$PROVIDER:$SESSION_ID")"
+log "tool class=$TOOL_CLASS semantic_weight=$TOOL_WEIGHT"
 log "cwd: $(pwd)"
 log "plan source: $PLAN_SOURCE -> $PLAN_FILE"
-INPUT_PREVIEW=$(printf '%s' "$INPUT" | tr '\n' ' ' | cut -c 1-300)
-log "stdin (first 300 chars, ${#INPUT} total): $INPUT_PREVIEW"
+log "stdin bytes=${#INPUT}"
 
 if [ ! -f "$PLAN_FILE" ]; then
     log "${PLAN_FILE:-tasks.md}: ABSENT -> emitting {} (no-op, zero pollution)"
@@ -209,9 +218,10 @@ IFS=$'\t' read -r CONTRACTED ACTIVE_ITEM ACTIVE_TEXT ACTIVE_EVIDENCE <<< "$ITEM_
 # Contracted plans receive one immediate reminder after the first unchanged
 # tool result and then at most one per interval. Parallel bursts share the same
 # flock-protected counter/timestamp and collapse into the same window.
-NUDGE_DEBOUNCE_SECS=60
-ITEM_NUDGE_DEBOUNCE_SECS=30
-STALE_TOOL_THRESHOLD=3
+NUDGE_DEBOUNCE_SECS=${PWF_NUDGE_DEBOUNCE_SECS:-60}
+ITEM_NUDGE_DEBOUNCE_SECS=${PWF_ITEM_NUDGE_DEBOUNCE_SECS:-30}
+STALE_RISK_THRESHOLD=${PWF_STALE_RISK_THRESHOLD:-3}
+STALE_MAX_AGE_SECS=${PWF_STALE_MAX_AGE_SECS:-180}
 STATE_FILE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" cache "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
 [ -n "$STATE_FILE" ] || { echo '{}'; exit 0; }
 STATE_LOCK="$STATE_FILE.lock"
@@ -222,6 +232,7 @@ LAST_PHASE_LEN=""
 LAST_NUDGE_TS=0
 LAST_PLAN_FINGERPRINT=""
 UNCHANGED_TOOL_COUNT=0
+UNCHANGED_RISK_SCORE=0
 LAST_CHECKPOINT_TS=0
 LAST_ITEM_NUDGE_TS=0
 if [ -f "$STATE_FILE" ]; then
@@ -232,18 +243,20 @@ if [ -f "$STATE_FILE" ]; then
     LAST_NUDGE_TS=$(grep -E '^last_nudge_ts='         "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
     LAST_PLAN_FINGERPRINT=$(grep -E '^last_plan_fingerprint=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
     UNCHANGED_TOOL_COUNT=$(grep -E '^unchanged_tool_count=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
+    UNCHANGED_RISK_SCORE=$(grep -E '^unchanged_risk_score=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
     LAST_CHECKPOINT_TS=$(grep -E '^last_checkpoint_ts=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
     LAST_ITEM_NUDGE_TS=$(grep -E '^last_item_nudge_ts=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
 fi
 LAST_NUDGE_TS=${LAST_NUDGE_TS:-0}
 UNCHANGED_TOOL_COUNT=${UNCHANGED_TOOL_COUNT:-0}
+UNCHANGED_RISK_SCORE=${UNCHANGED_RISK_SCORE:-0}
 LAST_CHECKPOINT_TS=${LAST_CHECKPOINT_TS:-0}
 LAST_ITEM_NUDGE_TS=${LAST_ITEM_NUDGE_TS:-0}
 
 CUR_GOAL_LEN=${#GOAL_BODY}
 CUR_PHASE_LEN=${#PHASE_BODY}
 NOW_TS=$(date +%s)
-log "delta (pre-lock): fingerprint='${PLAN_FINGERPRINT:-}' (was '${LAST_PLAN_FINGERPRINT:-}') active_item='${ACTIVE_ITEM:-}' unchanged_tools=$UNCHANGED_TOOL_COUNT checkpoint_age=$((LAST_CHECKPOINT_TS > 0 ? NOW_TS - LAST_CHECKPOINT_TS : 0))s"
+log "delta (pre-lock): fingerprint='${PLAN_FINGERPRINT:-}' (was '${LAST_PLAN_FINGERPRINT:-}') active_item='${ACTIVE_ITEM:-}' unchanged_tools=$UNCHANGED_TOOL_COUNT risk=$UNCHANGED_RISK_SCORE checkpoint_age=$((LAST_CHECKPOINT_TS > 0 ? NOW_TS - LAST_CHECKPOINT_TS : 0))s"
 
 # Flock-protected decision + state update.
 # Re-read state under lock to avoid TOCTOU with parallel hook processes.
@@ -261,10 +274,12 @@ CHECKPOINT_LAG_SECS=0
     _st_nudge_ts=$(grep -E '^last_nudge_ts='     "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
     _st_fingerprint=$(grep -E '^last_plan_fingerprint=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
     _st_unchanged=$(grep -E '^unchanged_tool_count=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
+    _st_risk=$(grep -E '^unchanged_risk_score=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
     _st_checkpoint_ts=$(grep -E '^last_checkpoint_ts=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
     _st_item_nudge_ts=$(grep -E '^last_item_nudge_ts=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
     _st_nudge_ts=${_st_nudge_ts:-0}
     _st_unchanged=${_st_unchanged:-0}
+    _st_risk=${_st_risk:-0}
     _st_checkpoint_ts=${_st_checkpoint_ts:-0}
     _st_item_nudge_ts=${_st_item_nudge_ts:-0}
     _time_since=$(( NOW_TS - _st_nudge_ts ))
@@ -284,14 +299,20 @@ CHECKPOINT_LAG_SECS=0
         EMIT_NUDGE=true
         INJECT_FULL=true
         _st_unchanged=0
+        _st_risk=0
         _st_checkpoint_ts=$NOW_TS
         _st_item_nudge_ts=0
     else
         _st_unchanged=$((_st_unchanged + 1))
+        _st_risk=$((_st_risk + TOOL_WEIGHT))
         if [ "$CONTRACTED" = "true" ] && [ -n "$ACTIVE_ITEM" ]; then
             CHECKPOINT_LAG_SECS=$(( _st_checkpoint_ts > 0 ? NOW_TS - _st_checkpoint_ts : 0 ))
-            [ "$_st_unchanged" -ge "$STALE_TOOL_THRESHOLD" ] && STALE_CHECKPOINT=true
-            if [ "$_st_item_nudge_ts" -eq 0 ] || [ $((NOW_TS - _st_item_nudge_ts)) -ge "$ITEM_NUDGE_DEBOUNCE_SECS" ]; then
+            if [ "$_st_risk" -ge "$STALE_RISK_THRESHOLD" ] \
+                || { [ "$_st_risk" -gt 0 ] && [ "$CHECKPOINT_LAG_SECS" -ge "$STALE_MAX_AGE_SECS" ]; }; then
+                STALE_CHECKPOINT=true
+            fi
+            if [ "$TOOL_WEIGHT" -gt 0 ] && { [ "$_st_item_nudge_ts" -eq 0 ] \
+                || [ $((NOW_TS - _st_item_nudge_ts)) -ge "$ITEM_NUDGE_DEBOUNCE_SECS" ]; }; then
                 EMIT_NUDGE=true
                 _st_item_nudge_ts=$NOW_TS
             fi
@@ -301,6 +322,7 @@ CHECKPOINT_LAG_SECS=0
     fi
 
     UNCHANGED_TOOL_COUNT=$_st_unchanged
+    UNCHANGED_RISK_SCORE=$_st_risk
     LAST_CHECKPOINT_TS=$_st_checkpoint_ts
     LAST_ITEM_NUDGE_TS=$_st_item_nudge_ts
     [ "$EMIT_NUDGE" = "true" ] && LAST_NUDGE_TS=$NOW_TS
@@ -312,13 +334,14 @@ CHECKPOINT_LAG_SECS=0
         printf 'last_nudge_ts=%s\n'        "$LAST_NUDGE_TS"
         printf 'last_plan_fingerprint=%s\n' "$PLAN_FINGERPRINT"
         printf 'unchanged_tool_count=%s\n' "$UNCHANGED_TOOL_COUNT"
+        printf 'unchanged_risk_score=%s\n' "$UNCHANGED_RISK_SCORE"
         printf 'last_checkpoint_ts=%s\n'   "$LAST_CHECKPOINT_TS"
         printf 'last_item_nudge_ts=%s\n'   "$LAST_ITEM_NUDGE_TS"
     } > "$STATE_FILE.tmp" 2>/dev/null \
         && mv "$STATE_FILE.tmp" "$STATE_FILE" 2>/dev/null || true
 } 8>>"$STATE_LOCK" 2>/dev/null || true
 
-log "item_state fingerprint=${PLAN_FINGERPRINT:-unavailable} active_item=${ACTIVE_ITEM:-none} plan_changed=$PLAN_CHANGED unchanged_tools=$UNCHANGED_TOOL_COUNT checkpoint_lag=${CHECKPOINT_LAG_SECS}s stale=$STALE_CHECKPOINT emit_nudge=$EMIT_NUDGE inject_full=$INJECT_FULL"
+log "item_state fingerprint=${PLAN_FINGERPRINT:-unavailable} active_item=${ACTIVE_ITEM:-none} plan_changed=$PLAN_CHANGED unchanged_tools=$UNCHANGED_TOOL_COUNT risk=$UNCHANGED_RISK_SCORE tool_class=$TOOL_CLASS checkpoint_lag=${CHECKPOINT_LAG_SECS}s stale=$STALE_CHECKPOINT emit_nudge=$EMIT_NUDGE inject_full=$INJECT_FULL"
 
 if [ -n "$SETTLED_ISSUE" ]; then
     EMIT_NUDGE=true
@@ -326,6 +349,7 @@ if [ -n "$SETTLED_ISSUE" ]; then
 fi
 
 if [ "$EMIT_NUDGE" = "false" ]; then
+    log "injection emitted=false chars=0 bytes=0 full=false stale=$STALE_CHECKPOINT reason=debounce tool_class=$TOOL_CLASS risk=$UNCHANGED_RISK_SCORE"
     log "debounce active -> {} (silent)"
     echo '{}'
     exit 0
@@ -355,7 +379,7 @@ if [ "$CONTRACTED" = "true" ] && [ -n "$ACTIVE_ITEM" ]; then
 [planning-with-files] If this tool result satisfies the outcome, your next workflow operation must be the structured checkpoint before any unrelated tool. Otherwise continue the same item and record material partial/error evidence; arbitrary tool success is not semantic completion."
     if [ "$STALE_CHECKPOINT" = "true" ]; then
         NUDGE="${NUDGE}
-[planning-with-files] STALE ITEM STATE: ${UNCHANGED_TOOL_COUNT} tool result(s) without a semantic plan checkpoint (${CHECKPOINT_LAG_SECS}s since the last detected plan change). Checkpoint now if the evidence predicate is true; otherwise keep working ${ACTIVE_ITEM}, not a different item."
+[planning-with-files] STALE ITEM STATE: semantic risk ${UNCHANGED_RISK_SCORE}/${STALE_RISK_THRESHOLD} after ${UNCHANGED_TOOL_COUNT} unchanged tool result(s) (${CHECKPOINT_LAG_SECS}s since the last plan change; latest class ${TOOL_CLASS}). Checkpoint now if the evidence predicate is true; otherwise keep working ${ACTIVE_ITEM}, not a different item."
     fi
 else
     NUDGE="[planning-with-files] Update tasks.md with what you just did. If a phase is now complete, update ${PLAN_FILE} status. If you no longer see the planning-with-files SKILL.md rules in your context (post-/compact, or you have forgotten them), reload the planning-with-files skill by yourself before continuing."
@@ -370,11 +394,11 @@ if [ -n "$COMPACTION_WARN" ]; then
 ${COMPACTION_WARN}"
     log "compaction warn injected (${#COMPACTION_WARN} chars)"
 fi
-HANDOFF_WARN=$(planning_handoff_warning "$PLAN_DIR")
-if [ -n "$HANDOFF_WARN" ]; then
+RESTORE_WARN=$(planning_restore_warning "$PLAN_DIR")
+if [ -n "$RESTORE_WARN" ]; then
     NUDGE="${NUDGE}
-${HANDOFF_WARN}"
-    log "stale handoff warn injected (${#HANDOFF_WARN} chars)"
+${RESTORE_WARN}"
+    log "restore warn injected (${#RESTORE_WARN} chars)"
 fi
 # Only attach REMAINING_LINE on the call where the count actually changed,
 # OR on the first injection in a session (LAST_REMAINING_COUNT empty).
@@ -404,6 +428,8 @@ else
     CONTEXT="$NUDGE"
 fi
 
+CONTEXT_BYTES=$(printf '%s' "$CONTEXT" | wc -c | tr -d ' ')
+log "injection emitted=true chars=${#CONTEXT} bytes=$CONTEXT_BYTES full=$INJECT_FULL stale=$STALE_CHECKPOINT reason=nudge tool_class=$TOOL_CLASS risk=$UNCHANGED_RISK_SCORE"
 log "additionalContext: ${#CONTEXT} chars"
 log "--- additionalContext begin ---"
 {

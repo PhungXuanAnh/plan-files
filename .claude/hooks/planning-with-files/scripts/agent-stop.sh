@@ -81,10 +81,10 @@ log() {
 }
 
 log "=== agent-stop ==="
+log "scope provider=$PROVIDER task=$(basename "$PLAN_DIR") session=$(planning_privacy_key "$PROVIDER:$SESSION_ID")"
 log "cwd: $(pwd)"
 log "plan source: $PLAN_SOURCE -> $PLAN_FILE"
-INPUT_PREVIEW=$(printf '%s' "$INPUT" | tr '\n' ' ' | cut -c 1-300)
-log "stdin (first 300 chars, ${#INPUT} total): $INPUT_PREVIEW"
+log "stdin bytes=${#INPUT}"
 
 if [ ! -f "$PLAN_FILE" ]; then
     log "${PLAN_FILE:-tasks.md}: ABSENT -> emitting {} (no-op)"
@@ -224,6 +224,7 @@ if [ "${#REASON_PARTS[@]}" -gt 0 ]; then
     log "decision: BLOCK (${#REASON_PARTS[@]} issue(s) found in one pass)"
     ESCAPED_REASON=$(json_escape "$REASON")
     OUTPUT="{\"decision\":\"block\",\"reason\":$ESCAPED_REASON}"
+    log "stop continuation=true output_chars=${#OUTPUT}"
     log "stdout: ${#OUTPUT} chars"
     echo "$OUTPUT"
     exit 0
@@ -232,6 +233,7 @@ fi
 if [ $((COMPLETE + BLOCKED + DEFERRED)) -ge "$TOTAL" ]; then
     # All phases settled (complete, blocked-with-reason, or deferred-with-reason).
     log "decision: ALL SETTLED (complete=$COMPLETE blocked=$BLOCKED deferred=$DEFERRED total=$TOTAL) -> emitting {} (allow stop)"
+    log "stop continuation=false output_chars=2"
     echo '{}'
     exit 0
 fi
@@ -241,6 +243,7 @@ fi
 # Allow stop — do not demand continuation.
 if [ "$COMPLETE" -eq 0 ] && [ "$IN_PROGRESS" -eq 0 ] && [ "$BLOCKED" -eq 0 ] && [ "$DEFERRED" -eq 0 ]; then
     log "decision: PLANNING MODE (all phases pending) -> emitting {} (allow stop)"
+    log "stop continuation=false output_chars=2"
     echo '{}'
     exit 0
 fi
@@ -255,6 +258,7 @@ fi
 # we treat the session as still in discussion mode and allow stop.
 if [ -z "${PHASE_NUM:-}" ] && [ "$COMPLETE" -eq 0 ] && [ "$BLOCKED" -eq 0 ] && [ "$DEFERRED" -eq 0 ]; then
     log "decision: DISCUSSION MODE (Current Phase empty, no settled phase) -> emitting {} (allow stop)"
+    log "stop continuation=false output_chars=2"
     echo '{}'
     exit 0
 fi
@@ -326,6 +330,7 @@ REASON="[planning-with-files] Task incomplete ($SETTLED/$TOTAL phases settled: $
 log "decision: BLOCK ($SETTLED/$TOTAL phases settled, blocked=$BLOCKED deferred=$DEFERRED progress_state=$STOP_PROGRESS_STATE no_progress_count=$NO_PROGRESS_COUNT)"
 ESCAPED_REASON=$(json_escape "$REASON")
 OUTPUT="{\"decision\":\"block\",\"reason\":$ESCAPED_REASON}"
+log "stop continuation=true output_chars=${#OUTPUT} progress_state=$STOP_PROGRESS_STATE no_progress_count=$NO_PROGRESS_COUNT"
 log "stdout: ${#OUTPUT} chars"
 echo "$OUTPUT"
 exit 0

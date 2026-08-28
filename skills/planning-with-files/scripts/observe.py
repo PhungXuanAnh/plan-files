@@ -13,12 +13,27 @@ from typing import Iterable
 from plan_state import context_payload, parse_plan
 
 
+SCHEMA_VERSION = 1
 STOP_RE = re.compile(
     r"progress fingerprint=(\S+) state=(\S+) no_progress_count=(\d+) active_item=(\S+) first_item=(\S+)"
 )
 POST_RE = re.compile(
-    r"item_state fingerprint=(\S+) active_item=(\S+) plan_changed=(\S+) unchanged_tools=(\d+) checkpoint_lag=(\d+)s stale=(\S+)"
+    r"item_state fingerprint=(\S+) active_item=(\S+) plan_changed=(\S+) unchanged_tools=(\d+)"
+    r"(?: risk=(\d+) tool_class=(\S+))? checkpoint_lag=(\d+)s stale=(\S+)"
 )
+SCOPE_RE = re.compile(r"scope provider=(\S+) task=(\S+) session=(\S+)")
+INJECTION_RE = re.compile(
+    r"injection emitted=(\S+) chars=(\d+) bytes=(\d+) full=(\S+) stale=(\S+) reason=(\S+)"
+)
+STOP_TELEMETRY_RE = re.compile(r"stop continuation=(\S+) output_chars=(\d+)")
+
+
+def _scope(block: str) -> dict[str, str]:
+    match = SCOPE_RE.search(block)
+    if not match:
+        return {"provider": "unknown", "task": "unknown", "session": "unknown"}
+    provider, task, session = match.groups()
+    return {"provider": provider, "task": task, "session": session}
 
 
 def _blocks(path: Path, marker: str) -> list[str]:
@@ -37,41 +52,77 @@ def _hook_metrics(project_root: Path, plan: Path | None) -> dict[str, object]:
         if plan_text and plan_text not in block:
             continue
         match = STOP_RE.search(block)
-        if match:
-            fingerprint, state, count, active, first = match.groups()
-            stop_records.append(
-                {
+        telemetry = STOP_TELEMETRY_RE.search(block)
+        if match or telemetry:
+            record: dict[str, object] = {
+                **_scope(block),
+                "continuation": telemetry.group(1) == "true" if telemetry else False,
+                "output_chars": int(telemetry.group(2)) if telemetry else 0,
+            }
+            if match:
+                fingerprint, state, count, active, first = match.groups()
+                record.update(
+                    {
                     "fingerprint": fingerprint,
                     "state": state,
                     "no_progress_count": int(count),
                     "active_item": active,
                     "first_item": first,
-                }
-            )
+                    }
+                )
+            else:
+                record.update({"state": "settled", "no_progress_count": 0})
+            stop_records.append(record)
 
     post_records: list[dict[str, object]] = []
     for block in _blocks(log_root / "post-tool-use.log", "=== post-tool-use ==="):
         if plan_text and plan_text not in block:
             continue
         match = POST_RE.search(block)
-        if match:
-            fingerprint, active, changed, unchanged, lag, stale = match.groups()
-            post_records.append(
-                {
+        injection = INJECTION_RE.search(block)
+        if match or injection:
+            record: dict[str, object] = {
+                **_scope(block),
+                "injection_emitted": injection.group(1) == "true" if injection else False,
+                "injected_chars": int(injection.group(2)) if injection else 0,
+                "injected_bytes": int(injection.group(3)) if injection else 0,
+                "full_injection": injection.group(4) == "true" if injection else False,
+                "injection_reason": injection.group(6) if injection else "unknown",
+            }
+            if match:
+                fingerprint, active, changed, unchanged, risk, tool_class, lag, stale = match.groups()
+                record.update(
+                    {
                     "fingerprint": fingerprint,
                     "active_item": active,
                     "plan_changed": changed == "true",
                     "unchanged_tools": int(unchanged),
+                    "risk_score": int(risk or 0),
+                    "tool_class": tool_class or "legacy",
                     "checkpoint_lag_seconds": int(lag),
                     "stale": stale == "true",
-                }
-            )
+                    }
+                )
+            else:
+                record.update(
+                    {
+                        "plan_changed": False,
+                        "unchanged_tools": 0,
+                        "risk_score": 0,
+                        "tool_class": "unknown",
+                        "checkpoint_lag_seconds": 0,
+                        "stale": injection.group(5) == "true" if injection else False,
+                    }
+                )
+            post_records.append(record)
 
     return {
         "stop": {
             "events": len(stop_records),
             "progress_events": sum(record["state"] == "progress" for record in stop_records),
             "no_progress_events": sum(record["state"] == "no_progress" for record in stop_records),
+            "continuations": sum(bool(record["continuation"]) for record in stop_records),
+            "output_chars": sum(int(record["output_chars"]) for record in stop_records),
             "max_no_progress_streak": max((int(record["no_progress_count"]) for record in stop_records), default=0),
             "last": stop_records[-1] if stop_records else None,
         },
@@ -79,6 +130,15 @@ def _hook_metrics(project_root: Path, plan: Path | None) -> dict[str, object]:
             "events": len(post_records),
             "plan_changes": sum(bool(record["plan_changed"]) for record in post_records),
             "stale_events": sum(bool(record["stale"]) for record in post_records),
+            "injections": sum(bool(record["injection_emitted"]) for record in post_records),
+            "injected_chars": sum(int(record["injected_chars"]) for record in post_records),
+            "injected_bytes": sum(int(record["injected_bytes"]) for record in post_records),
+            "debounced_events": sum(record["injection_reason"] == "debounce" for record in post_records),
+            "tool_classes": {
+                category: sum(record["tool_class"] == category for record in post_records)
+                for category in sorted({str(record["tool_class"]) for record in post_records})
+            },
+            "max_risk_score": max((int(record["risk_score"]) for record in post_records), default=0),
             "max_unchanged_tools": max((int(record["unchanged_tools"]) for record in post_records), default=0),
             "max_checkpoint_lag_seconds": max(
                 (int(record["checkpoint_lag_seconds"]) for record in post_records), default=0
@@ -217,6 +277,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     plan = _resolve_plan(project_root, args.plan)
     hooks = _hook_metrics(project_root, plan)
     payload: dict[str, object] = {
+        "schema_version": SCHEMA_VERSION,
         "project_root": str(project_root),
         "plan": context_payload(parse_plan(plan)) if plan and plan.is_file() else None,
         "hooks": hooks,
@@ -237,11 +298,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     stop = hooks["stop"]
     post = hooks["post_tool"]
     print(
-        "Stop: {events} event(s), {progress_events} progress, {no_progress_events} no-progress, "
-        "max streak {max_no_progress_streak}".format(**stop)
+        "Stop: {events} event(s), {continuations} continuation(s), {progress_events} progress, "
+        "{no_progress_events} no-progress, max streak {max_no_progress_streak}".format(**stop)
     )
     print(
         "PostTool: {events} event(s), {plan_changes} plan change(s), {stale_events} stale, "
+        "{injections} injection(s)/{injected_chars} chars, {debounced_events} debounced, "
         "max unchanged {max_unchanged_tools}, max checkpoint lag {max_checkpoint_lag_seconds}s".format(**post)
     )
     for line in payload["assessment"]:
