@@ -2,11 +2,11 @@
 set -euo pipefail
 
 REPO_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-STATE_TOOL="$REPO_ROOT/skills/planning-with-files/scripts/session-state.sh"
+STATE_TOOL="$REPO_ROOT/skills/plan-files/scripts/session-state.sh"
 TEST_DIR=$(mktemp -d)
 trap 'rm -rf "$TEST_DIR"' EXIT
 PROJECT="$TEST_DIR/project"
-mkdir -p "$PROJECT/tmp/plan-with-files"
+mkdir -p "$PROJECT/tmp/plan-files"
 
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 assert_eq() { [ "$1" = "$2" ] || fail "$3 (expected '$2', got '$1')"; }
@@ -14,7 +14,7 @@ assert_contains() { case "$1" in *"$2"*) ;; *) fail "$3 (missing '$2')" ;; esac;
 assert_not_contains() { case "$1" in *"$2"*) fail "$3 (unexpected '$2')" ;; esac; }
 
 write_incomplete() {
-    local task=$1 dir="$PROJECT/tmp/plan-with-files/$1"
+    local task=$1 dir="$PROJECT/tmp/plan-files/$1"
     mkdir -p "$dir"
     cat > "$dir/tasks.md" <<EOF
 # Tasks: $task
@@ -42,7 +42,7 @@ EOF
 }
 
 write_malformed_settled() {
-    cat > "$PROJECT/tmp/plan-with-files/task-a/tasks.md" <<'EOF'
+    cat > "$PROJECT/tmp/plan-files/task-a/tasks.md" <<'EOF'
 # Tasks: malformed settled
 
 ## Goal
@@ -71,7 +71,7 @@ write_multi_issue_settled() {
     # Two distinct violation categories at once (missing Workflow Profile is a
     # format-contract issue; the unfinished item inside a "complete" phase is
     # a settled-integrity issue) so a single Stop firing must report both.
-    cat > "$PROJECT/tmp/plan-with-files/task-a/tasks.md" <<'EOF'
+    cat > "$PROJECT/tmp/plan-files/task-a/tasks.md" <<'EOF'
 # Tasks: multi-issue settled
 
 ## Goal
@@ -95,8 +95,8 @@ EOF
 
 write_valid_settled() {
     sed 's/- \[ \] Still unfinished/- [x] Finished/; s/# Tasks: malformed settled/# Tasks: valid settled/' \
-        "$PROJECT/tmp/plan-with-files/task-a/tasks.md" > "$PROJECT/tmp/plan-with-files/task-a/tasks.md.next"
-    mv "$PROJECT/tmp/plan-with-files/task-a/tasks.md.next" "$PROJECT/tmp/plan-with-files/task-a/tasks.md"
+        "$PROJECT/tmp/plan-files/task-a/tasks.md" > "$PROJECT/tmp/plan-files/task-a/tasks.md.next"
+    mv "$PROJECT/tmp/plan-files/task-a/tasks.md.next" "$PROJECT/tmp/plan-files/task-a/tasks.md"
 }
 
 prompt() {
@@ -104,11 +104,11 @@ prompt() {
     case "$provider" in
         codex)
             (cd "$PROJECT" && printf '{"session_id":"%s","hook_event_name":"UserPromptSubmit","prompt":"%s"}\n' "$session" "$text" \
-                | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/user-prompt-submit.sh")
+                | "$REPO_ROOT/.codex/hooks/plan-files/scripts/user-prompt-submit.sh")
             ;;
         claude)
             (cd "$PROJECT" && printf '{"session_id":"%s","hook_event_name":"UserPromptSubmit","prompt":"%s"}\n' "$session" "$text" \
-                | "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/user-prompt-submit.sh")
+                | "$REPO_ROOT/.claude/hooks/plan-files/scripts/user-prompt-submit.sh")
             ;;
         copilot)
             (cd "$PROJECT" && printf '{"sessionId":"%s","transformedPrompt":"%s"}\n' "$session" "$text" \
@@ -120,8 +120,8 @@ prompt() {
 pre_tool_patch() {
     local provider=$1 session=$2 patch=$3 script
     case "$provider" in
-        codex) script="$REPO_ROOT/.codex/hooks/planning-with-files/scripts/pre-tool-use.sh" ;;
-        claude) script="$REPO_ROOT/.claude/hooks/planning-with-files/scripts/pre-tool-use.sh" ;;
+        codex) script="$REPO_ROOT/.codex/hooks/plan-files/scripts/pre-tool-use.sh" ;;
+        claude) script="$REPO_ROOT/.claude/hooks/plan-files/scripts/pre-tool-use.sh" ;;
         copilot) script="$REPO_ROOT/.github/hooks/scripts/pre-tool-use.sh" ;;
     esac
     (cd "$PROJECT" && python3 -c 'import json,sys
@@ -133,11 +133,11 @@ bind() {
     case "$adapter" in
         codex)
             PWF_PROJECT_ROOT="$PROJECT" CODEX_THREAD_ID="$session" \
-                "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/bind-session.sh" bind "$task" >/dev/null
+                "$REPO_ROOT/.codex/hooks/plan-files/scripts/bind-session.sh" bind "$task" >/dev/null
             ;;
         claude)
             PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ID="$session" \
-                "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/bind-session.sh" bind "$task" >/dev/null
+                "$REPO_ROOT/.claude/hooks/plan-files/scripts/bind-session.sh" bind "$task" >/dev/null
             ;;
         copilot)
             PWF_PROJECT_ROOT="$PROJECT" COPILOT_AGENT_SESSION_ID="$session" \
@@ -149,8 +149,8 @@ bind() {
 stop_hook() {
     local provider=$1 session=$2 script
     case "$provider" in
-        codex) script="$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh" ;;
-        claude) script="$REPO_ROOT/.claude/hooks/planning-with-files/scripts/agent-stop.sh" ;;
+        codex) script="$REPO_ROOT/.codex/hooks/plan-files/scripts/agent-stop.sh" ;;
+        claude) script="$REPO_ROOT/.claude/hooks/plan-files/scripts/agent-stop.sh" ;;
         copilot) script="$REPO_ROOT/.github/hooks/scripts/agent-stop.sh" ;;
     esac
     (cd "$PROJECT" && printf '{"session_id":"%s","hook_event_name":"Stop","stop_hook_active":false}\n' "$session" | "$script")
@@ -159,8 +159,8 @@ stop_hook() {
 post_hook() {
     local provider=$1 session=$2 script
     case "$provider" in
-        codex) script="$REPO_ROOT/.codex/hooks/planning-with-files/scripts/post-tool-use.sh" ;;
-        claude) script="$REPO_ROOT/.claude/hooks/planning-with-files/scripts/post-tool-use.sh" ;;
+        codex) script="$REPO_ROOT/.codex/hooks/plan-files/scripts/post-tool-use.sh" ;;
+        claude) script="$REPO_ROOT/.claude/hooks/plan-files/scripts/post-tool-use.sh" ;;
         copilot) script="$REPO_ROOT/.github/hooks/scripts/post-tool-use.sh" ;;
     esac
     (cd "$PROJECT" && printf '{"session_id":"%s","hook_event_name":"PostToolUse"}\n' "$session" | "$script")
@@ -169,8 +169,8 @@ post_hook() {
 post_tool_patch() {
     local provider=$1 session=$2 patch=$3 script
     case "$provider" in
-        codex) script="$REPO_ROOT/.codex/hooks/planning-with-files/scripts/post-tool-use.sh" ;;
-        claude) script="$REPO_ROOT/.claude/hooks/planning-with-files/scripts/post-tool-use.sh" ;;
+        codex) script="$REPO_ROOT/.codex/hooks/plan-files/scripts/post-tool-use.sh" ;;
+        claude) script="$REPO_ROOT/.claude/hooks/plan-files/scripts/post-tool-use.sh" ;;
         copilot) script="$REPO_ROOT/.github/hooks/scripts/post-tool-use.sh" ;;
     esac
     (cd "$PROJECT" && python3 -c 'import json,sys
@@ -185,11 +185,11 @@ error_hook() {
 
 write_incomplete task-a
 write_incomplete task-b
-printf '%s\n' task-a > "$PROJECT/.plan-with-files"
+printf '%s\n' task-a > "$PROJECT/.plan-files"
 
 # An explicit prompt path seeds a candidate even when the global pointer is empty.
-: > "$PROJECT/.plan-with-files"
-EXPLICIT_PLAN_PATH="$PROJECT/tmp/plan-with-files/task-a/tasks.md"
+: > "$PROJECT/.plan-files"
+EXPLICIT_PLAN_PATH="$PROJECT/tmp/plan-files/task-a/tasks.md"
 for SPEC in 'codex codex-path' 'claude claude-path' 'copilot copilot-path'; do
     set -- $SPEC
     assert_contains "$(prompt "$1" "$2" "edit $EXPLICIT_PLAN_PATH")" \
@@ -206,35 +206,35 @@ for SPEC in 'codex codex-auto' 'claude claude-auto' 'copilot copilot-auto'; do
 *** End Patch"
     assert_eq "$(pre_tool_patch "$1" "$2" "$PATCH")" "{}" "$1 plan mutation auto-claim"
     assert_eq "$(PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" resolve "$1" "$2")" \
-        "$PROJECT/tmp/plan-with-files/task-a" "$1 auto-claim ownership"
+        "$PROJECT/tmp/plan-files/task-a" "$1 auto-claim ownership"
 done
-assert_eq "$(cat "$PROJECT/.plan-with-files")" "task-a" "auto-claim now keeps the global pointer in sync as a convenience default"
+assert_eq "$(cat "$PROJECT/.plan-files")" "task-a" "auto-claim now keeps the global pointer in sync as a convenience default"
 
 # Ownership never switches silently and a multi-plan mutation is ambiguous.
-CONFLICT_PATCH="*** Update File: $PROJECT/tmp/plan-with-files/task-b/tasks.md"
+CONFLICT_PATCH="*** Update File: $PROJECT/tmp/plan-files/task-b/tasks.md"
 assert_contains "$(pre_tool_patch codex codex-auto "$CONFLICT_PATCH")" \
     "owns 'task-a'" "owned-plan mutation conflict"
 assert_eq "$(PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" resolve codex codex-auto)" \
-    "$PROJECT/tmp/plan-with-files/task-a" "conflict preserves ownership"
+    "$PROJECT/tmp/plan-files/task-a" "conflict preserves ownership"
 PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" pending codex codex-pending-conflict task-b >/dev/null
 assert_contains "$(pre_tool_patch codex codex-pending-conflict \
     "*** Update File: $EXPLICIT_PLAN_PATH")" "pending for task-b" \
     "different pending candidate blocks auto-claim"
-MULTI_PATCH="*** Update File: $PROJECT/tmp/plan-with-files/task-a/tasks.md
-*** Update File: $PROJECT/tmp/plan-with-files/task-b/tasks.md"
+MULTI_PATCH="*** Update File: $PROJECT/tmp/plan-files/task-a/tasks.md
+*** Update File: $PROJECT/tmp/plan-files/task-b/tasks.md"
 assert_contains "$(pre_tool_patch codex codex-multi "$MULTI_PATCH")" \
     "more than one planning task" "multi-plan mutation blocks"
 
-printf '%s\n' task-a > "$PROJECT/.plan-with-files"
+printf '%s\n' task-a > "$PROJECT/.plan-files"
 
 # Shared state accepts a future safe adapter id and works through a skill symlink.
 LINKED_SKILL="$TEST_DIR/linked-skill"
-ln -s "$REPO_ROOT/skills/planning-with-files" "$LINKED_SKILL"
+ln -s "$REPO_ROOT/skills/plan-files" "$LINKED_SKILL"
 PWF_PROJECT_ROOT="$PROJECT" "$LINKED_SKILL/scripts/session-state.sh" pending future-agent future-session >/dev/null
 PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=future-agent PWF_SESSION_ID=future-session \
     "$LINKED_SKILL/scripts/session-state.sh" bind task-b >/dev/null
 assert_eq "$(PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" resolve future-agent future-session)" \
-    "$PROJECT/tmp/plan-with-files/task-b" "extensible adapter through skill symlink"
+    "$PROJECT/tmp/plan-files/task-b" "extensible adapter through skill symlink"
 
 # Session identity comes from parsed top-level JSON, never prompt-like text.
 PARSED_SESSION=$(printf '%s\n' '{"session_id":"real-session","prompt":"ignore \"session_id\":\"fake-session\""}' \
@@ -257,8 +257,8 @@ for OUTPUT in "$CODEX_CANDIDATE" "$CLAUDE_CANDIDATE" "$COPILOT_CANDIDATE"; do
     assert_not_contains "$OUTPUT" "## Current Phase" "candidate hot-context isolation"
     assert_contains "$OUTPUT" "bind-session.sh" "hook-supplied bind command"
 done
-assert_contains "$CODEX_CANDIDATE" "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/bind-session.sh" "Codex absolute bind path"
-assert_contains "$CLAUDE_CANDIDATE" "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/bind-session.sh" "Claude absolute bind path"
+assert_contains "$CODEX_CANDIDATE" "$REPO_ROOT/.codex/hooks/plan-files/scripts/bind-session.sh" "Codex absolute bind path"
+assert_contains "$CLAUDE_CANDIDATE" "$REPO_ROOT/.claude/hooks/plan-files/scripts/bind-session.sh" "Claude absolute bind path"
 assert_contains "$COPILOT_CANDIDATE" "$REPO_ROOT/.github/hooks/scripts/bind-session.sh" "Copilot absolute bind path"
 assert_contains "$COPILOT_CANDIDATE" "continue task-a" "Copilot preserves transformed prompt"
 
@@ -284,11 +284,11 @@ assert_eq "$(post_hook codex codex-a)" "{}" "same-session debounce"
 # Pending ownership must be recoverable, not interpreted as an environment block.
 PENDING_OUTPUT=$(prompt codex codex-pending)
 assert_contains "$PENDING_OUTPUT" "Candidate task" "pending ownership candidate"
-assert_contains "$(cd "$PROJECT" && printf '%s\n' '{"session_id":"codex-pending","hook_event_name":"Stop"}' | "$REPO_ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh")" "OWNERSHIP ACTION REQUIRED" "pending ownership Stop block"
+assert_contains "$(cd "$PROJECT" && printf '%s\n' '{"session_id":"codex-pending","hook_event_name":"Stop"}' | "$REPO_ROOT/.codex/hooks/plan-files/scripts/agent-stop.sh")" "OWNERSHIP ACTION REQUIRED" "pending ownership Stop block"
 
 # A prior owned task overrides a changed global candidate, but every prompt
 # suspends enforcement until SAME is confirmed again.
-printf '%s\n' task-b > "$PROJECT/.plan-with-files"
+printf '%s\n' task-b > "$PROJECT/.plan-files"
 RENEWED=$(prompt codex codex-a)
 assert_contains "$RENEWED" "Candidate task 'task-a'" "session candidate overrides global pointer"
 assert_contains "$(stop_hook codex codex-a)" "OWNERSHIP ACTION REQUIRED" "Stop enforces pending ownership"
@@ -315,6 +315,9 @@ done
 write_multi_issue_settled
 for SPEC in 'codex codex-a' 'claude claude-a' 'copilot copilot-a'; do
     set -- $SPEC
+    # The preceding valid-settled Stop released the lease (all phases complete),
+    # which is the intended behavior, so re-claim before the next scenario.
+    PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" claim "$1" "$2" task-a >/dev/null 2>&1 || true
     MULTI_STOP=$(stop_hook "$1" "$2")
     assert_contains "$MULTI_STOP" "Workflow Profile" "$1 multi-issue Stop reports missing Workflow Profile"
     assert_contains "$MULTI_STOP" "STATUS LIES" "$1 multi-issue Stop also reports STATUS LIES in the same block"
@@ -326,17 +329,17 @@ write_valid_settled
 # at that point, so claim_task's task_exists guard would always fail. It must
 # be allowed through, then auto-claimed by PostToolUse once the write has
 # actually happened and the file exists, so the session ends up owned and
-# .plan-with-files reflects it — without the agent ever needing an explicit
+# .plan-files reflects it — without the agent ever needing an explicit
 # bind/manual pointer write.
 NEW_TASK_ID=first-write-auto-claim
-NEW_TASK_PATCH="*** Add File: $PROJECT/tmp/plan-with-files/$NEW_TASK_ID/tasks.md
+NEW_TASK_PATCH="*** Add File: $PROJECT/tmp/plan-files/$NEW_TASK_ID/tasks.md
 +placeholder"
 for SPEC in 'codex codex-newtask' 'claude claude-newtask' 'copilot copilot-newtask'; do
     set -- $SPEC
     assert_eq "$(pre_tool_patch "$1" "$2" "$NEW_TASK_PATCH")" "{}" \
         "$1 PreToolUse allows creating a brand-new task's first file"
-    mkdir -p "$PROJECT/tmp/plan-with-files/$NEW_TASK_ID"
-    cat > "$PROJECT/tmp/plan-with-files/$NEW_TASK_ID/tasks.md" <<EOF
+    mkdir -p "$PROJECT/tmp/plan-files/$NEW_TASK_ID"
+    cat > "$PROJECT/tmp/plan-files/$NEW_TASK_ID/tasks.md" <<EOF
 ## Task Identity
 $NEW_TASK_ID
 ## Goal
@@ -351,18 +354,95 @@ EOF
     assert_contains "$(post_tool_patch "$1" "$2" "$NEW_TASK_PATCH")" "verify first-write auto-claim" \
         "$1 PostToolUse auto-claims once the new task's file actually exists"
     assert_eq "$(PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" resolve "$1" "$2")" \
-        "$PROJECT/tmp/plan-with-files/$NEW_TASK_ID" "$1 session is owned after post-write auto-claim"
-    assert_eq "$(cat "$PROJECT/.plan-with-files")" "$NEW_TASK_ID" \
-        "$1 .plan-with-files reflects the auto-claimed new task without any manual write"
-    rm -rf "$PROJECT/tmp/plan-with-files/$NEW_TASK_ID"
+        "$PROJECT/tmp/plan-files/$NEW_TASK_ID" "$1 session is owned after post-write auto-claim"
+    assert_eq "$(cat "$PROJECT/.plan-files")" "$NEW_TASK_ID" \
+        "$1 .plan-files reflects the auto-claimed new task without any manual write"
+    rm -rf "$PROJECT/tmp/plan-files/$NEW_TASK_ID"
 done
 
 # Claude provisions the same verified identity for later Bash bind commands.
 CLAUDE_ENV="$TEST_DIR/claude-env"
 : > "$CLAUDE_ENV"
 CLAUDE_ENV_FILE="$CLAUDE_ENV" printf '%s\n' '{"session_id":"claude-env","hook_event_name":"SessionStart"}' \
-    | CLAUDE_ENV_FILE="$CLAUDE_ENV" "$REPO_ROOT/.claude/hooks/planning-with-files/scripts/session-start.sh" >/dev/null
+    | CLAUDE_ENV_FILE="$CLAUDE_ENV" "$REPO_ROOT/.claude/hooks/plan-files/scripts/session-start.sh" >/dev/null
 assert_contains "$(cat "$CLAUDE_ENV")" "PWF_SESSION_ID=claude-env" "Claude session environment"
 assert_contains "$(cat "$CLAUDE_ENV")" "PWF_SESSION_ADAPTER=claude" "Claude adapter environment"
+
+# A finished plan stands its own lease down; a paused one does not. Without the
+# complete-only guard a deferred plan would lose both the lease and the pointer
+# and become unfindable for the session meant to resume it.
+write_settled() {
+    local status=$1 mark=$2 evidence=$3 dir="$PROJECT/tmp/plan-files/settled"
+    mkdir -p "$dir"
+    cat > "$dir/tasks.md" <<EOF
+# Tasks: settled
+
+## Goal
+Demonstrate stop-time lease handling.
+
+## Task Identity
+- Deliverable: a settled plan
+- Anchors: none
+- Non-goals: none
+
+## Current Phase
+Phase 1
+
+## Active Item
+
+## Workflow Profile
+**Profile:** C
+
+## Resume Checkpoint
+- **Next action:** none; settled
+- **Blocker:** none
+- **Details:** none
+
+## Phases
+
+### Phase 1: Work
+- [$mark] [P1.1] The work is done.
+  - Evidence: $evidence
+- **Status:** $status
+
+## Verification
+- \`make test\`: passed
+
+## Progress Notes
+- settled
+
+## Errors Encountered
+| Error | Attempt | Resolution |
+|-------|---------|------------|
+
+## Files Touched
+- none
+
+## History
+- Cold archive: none
+EOF
+}
+stop_hook() {
+    ( cd "$PROJECT" && printf '{"session_id":"%s"}' "$1" \
+        | PWF_PROJECT_ROOT="$PROJECT" "$REPO_ROOT/.claude/hooks/plan-files/scripts/agent-stop.sh" )
+}
+lease_count() { find "$PROJECT/tmp/plan-files/.sessions" -name '*.state' 2>/dev/null | wc -l | tr -d ' '; }
+
+write_settled complete x "verified in fixture"
+rm -rf "$PROJECT/tmp/plan-files/.sessions"
+PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" claim claude stop-complete settled >/dev/null
+printf 'settled\n' > "$PROJECT/.plan-files"
+assert_eq "$(stop_hook stop-complete)" "{}" "Stop allows a fully complete plan"
+assert_eq "$(lease_count)" "0" "Stop releases the lease when every phase is complete"
+assert_eq "$(cat "$PROJECT/.plan-files")" "settled" "Stop leaves the pointer to --deactivate-pointer, keeping the plan referenceable"
+
+write_settled "deferred (user paused)" " " pending
+rm -rf "$PROJECT/tmp/plan-files/.sessions"
+PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" claim claude stop-deferred settled >/dev/null
+printf 'settled\n' > "$PROJECT/.plan-files"
+assert_eq "$(stop_hook stop-deferred)" "{}" "Stop allows a deferred plan"
+assert_eq "$(lease_count)" "1" "Stop keeps the lease when a phase is deferred"
+assert_eq "$(cat "$PROJECT/.plan-files")" "settled" "Stop keeps the pointer when a phase is deferred"
+rm -rf "$PROJECT/tmp/plan-files/settled" "$PROJECT/tmp/plan-files/.sessions"
 
 printf 'session ownership tests: PASS\n'

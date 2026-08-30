@@ -67,7 +67,7 @@ def run_prompt_candidate(
 
 
 def main() -> None:
-    log_file = Path("tmp/hook-logs/plan-with-files/user-prompt-submit.log")
+    log_file = Path("tmp/hook-logs/plan-files/user-prompt-submit.log")
     log_file.parent.mkdir(parents=True, exist_ok=True)
     def log(message: str) -> None:
         try:
@@ -92,7 +92,7 @@ def main() -> None:
         print("{}")
         return
     root = resolve_superproject_root(Path(cwd or os.getcwd()).resolve())
-    if os.environ.get("PLANNING_DISABLED") == "1" or (root / ".plan-with-files-skip").exists():
+    if os.environ.get("PLANNING_DISABLED") == "1" or (root / ".plan-files-skip").exists():
         print("{}")
         return
 
@@ -103,7 +103,7 @@ def main() -> None:
         return
 
     repo_root = Path(__file__).resolve().parents[3]
-    prompt_tool = repo_root / "skills/planning-with-files/scripts/prompt-candidate.sh"
+    prompt_tool = repo_root / "skills/plan-files/scripts/prompt-candidate.sh"
     bind_tool = repo_root / ".github/hooks/scripts/bind-session.sh"
     context = run_prompt_candidate(prompt_tool, root, bind_tool, raw_payload)
     if not context:

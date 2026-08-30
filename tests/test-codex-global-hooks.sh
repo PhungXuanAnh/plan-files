@@ -19,17 +19,20 @@ mkdir -p "$PROJECT"
 python3 "$REPO_ROOT/scripts/install-codex-hooks.py" "$SOURCE" "$DEST"
 python3 "$REPO_ROOT/scripts/install-codex-hooks.py" "$SOURCE" "$DEST"
 
-PRE_TOOL_COMMAND=$(python3 - "$DEST" <<'PY'
+# Derive the checkout path instead of hardcoding it, so renaming or relocating
+# this clone does not break the suite.
+PRE_TOOL_COMMAND=$(python3 - "$DEST" "$REPO_ROOT" <<'PY'
 import json
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     hooks = json.load(handle)["hooks"]
+repo_root = sys.argv[2]
 
 for event in ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"):
     command = hooks[event][0]["hooks"][0]["command"]
-    assert "/home/xuananh/repo/planning-with-files" in command, command
-    assert "skills/planning-with-files/scripts/resolve-project-root.sh" in command, command
+    assert repo_root in command, command
+    assert "skills/plan-files/scripts/resolve-project-root.sh" in command, command
 
 print(hooks["PreToolUse"][0]["hooks"][0]["command"])
 PY

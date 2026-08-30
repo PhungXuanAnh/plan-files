@@ -4,15 +4,15 @@ This repository contains one host-neutral planning skill plus provider-specific 
 
 ## Canonical skill layout
 
-- `skills/planning-with-files/SKILL.md` is the compact entrypoint. It contains only routing, trust, hot-state, work-loop, checkpoint, and maintenance invariants.
-- `skills/planning-with-files/references/` contains conditional detail:
+- `skills/plan-files/SKILL.md` is the compact entrypoint. It contains only routing, trust, hot-state, work-loop, checkpoint, and maintenance invariants.
+- `skills/plan-files/references/` contains conditional detail:
   - `routing-and-hooks.md` — root resolution, ownership, sessions, and provider behavior.
   - `format-contract.md` — exact Markdown section/phase/item grammar and legacy migration.
   - `plan-operations.md` — bounded reads, fingerprinted edits, archival, schemas, and recovery.
   - `work-loop-and-maintenance.md` — continuation, waits, errors, compaction, and handoff.
   - `observing-runs.md` — privacy-safe telemetry and deterministic behavioral evaluation.
-- `skills/planning-with-files/templates/` defines new planning files. There is one authoritative `tasks.md` format; do not add `plan.md`, `tasks-long.md`, or an unbounded mode.
-- `skills/planning-with-files/scripts/` contains shared provider-neutral behavior:
+- `skills/plan-files/templates/` defines new planning files. There is one authoritative `tasks.md` format; do not add `plan.md`, `tasks-long.md`, or an unbounded mode.
+- `skills/plan-files/scripts/` contains shared provider-neutral behavior:
   - `plan_state.py` — parsing, validation, budgets, bounded reads, overview/resume-pack, and restore checks.
   - `plan_checkpoint.py` — execution transitions (`start`, `progress`, `complete`, finalizability).
   - `plan_edit.py` — fingerprinted structural/section edits and transactional lifecycle operations.
@@ -28,8 +28,8 @@ Planning state is private and project-local:
 
 ```text
 <project-root>/
-├── .plan-with-files                  # candidate/default task id, not ownership
-└── tmp/plan-with-files/
+├── .plan-files                  # candidate/default task id, not ownership
+└── tmp/plan-files/
     ├── .sessions/                    # private prompt-scoped ownership state
     └── <task-id>/
         ├── tasks.md                  # trusted authoritative hot plan
@@ -39,7 +39,7 @@ Planning state is private and project-local:
         └── handoff.md                # optional overwrite-only volatile snapshot
 ```
 
-- A session lease owns a task; `.plan-with-files` only supplies a candidate for humans/new prompts.
+- A session lease owns a task; `.plan-files` only supplies a candidate for humans/new prompts.
 - On every new prompt, classify the candidate as `SAME`, `DIFFERENT`, or `AMBIGUOUS`. Bind before loading SAME state; never mutate a DIFFERENT candidate; ask before changing an AMBIGUOUS one.
 - `overview`/`resume-pack` schema 2 has a strict 4 KiB serialized cap and names targeted follow-up reads for shortened sections.
 - `restore-check` schema 1 validates non-placeholder identity/resume fields, Active Item, verification, decisions/findings, and handoff/external-evidence freshness without returning complete file bodies.
@@ -70,8 +70,8 @@ Maintenance limits are enforcement boundaries, not reasons to truncate:
 
 Provider adapters live under:
 
-- `.codex/hooks/planning-with-files/scripts/`
-- `.claude/hooks/planning-with-files/scripts/`
+- `.codex/hooks/plan-files/scripts/`
+- `.claude/hooks/plan-files/scripts/`
 - `.github/hooks/scripts/`
 
 Codex, Claude Code, and GitHub Copilot must preserve the same behavioral contract:
@@ -89,7 +89,7 @@ Keep the three provider `common.sh` files byte-identical. Keep the semantic-delt
 - `make install` is safe to repeat. Correct links are preserved, stale links are replaced, and Claude Code/Codex planning hook groups are merged without duplication.
 - Skill files and provider hook scripts execute from this repository, so edits to those files apply to global installations without reinstalling.
 - Claude Code merges `.claude/settings.json.sample` into `~/.claude/settings.json`, preserving unrelated settings and hook groups. Codex similarly merges `.codex/hooks.json.sample` into `~/.codex/hooks.json`.
-- Copilot's global hook configuration is a symlink to `.github/hooks/planning-with-files.json.sample`.
+- Copilot's global hook configuration is a symlink to `.github/hooks/plan-files.json.sample`.
 - Rerun the relevant hook installer (or `make install`) after changing a Claude/Codex sample hook definition or moving this checkout. Script-only edits do not require reinstalling.
 - If Codex reports an untrusted changed hook definition, review it with `/hooks`. Restart sessions opened before a local config was renamed to `.sample`, so cached local/global layers do not both execute.
 
@@ -105,11 +105,11 @@ Before handing off a behavioral change, run the applicable checks, including:
 ```bash
 make test
 make behavioral-eval
-python3 <skill-creator-dir>/scripts/quick_validate.py skills/planning-with-files
-python3 -m py_compile skills/planning-with-files/scripts/*.py
-bash -n skills/planning-with-files/scripts/*.sh \
-  .codex/hooks/planning-with-files/scripts/*.sh \
-  .claude/hooks/planning-with-files/scripts/*.sh \
+python3 <skill-creator-dir>/scripts/quick_validate.py skills/plan-files
+python3 -m py_compile skills/plan-files/scripts/*.py
+bash -n skills/plan-files/scripts/*.sh \
+  .codex/hooks/plan-files/scripts/*.sh \
+  .claude/hooks/plan-files/scripts/*.sh \
   .github/hooks/scripts/*.sh
 git diff --check
 ```

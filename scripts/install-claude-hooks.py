@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 
-PLANNING_COMMAND_MARKER = "planning-with-files/scripts/"
+PLANNING_COMMAND_MARKER = "plan-files/scripts/"
 
 
 def load_object(path: Path, label: str) -> dict[str, Any]:

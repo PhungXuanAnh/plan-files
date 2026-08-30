@@ -7,7 +7,7 @@
             "type": "command",
             "timeout": 5,
             "statusMessage": "Checking planning ownership",
-            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && ROOT=\"$(bash \"$ROOT/skills/planning-with-files/scripts/resolve-project-root.sh\")\" && cd \"$ROOT\" && bash \"$ROOT/.codex/hooks/planning-with-files/scripts/pre-tool-use.sh\""
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && ROOT=\"$(bash \"$ROOT/skills/plan-files/scripts/resolve-project-root.sh\")\" && cd \"$ROOT\" && bash \"$ROOT/.codex/hooks/plan-files/scripts/pre-tool-use.sh\""
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && ROOT=\"$(bash \"$ROOT/skills/planning-with-files/scripts/resolve-project-root.sh\")\" && cd \"$ROOT\" && bash \"$ROOT/.codex/hooks/planning-with-files/scripts/user-prompt-submit.sh\"",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && ROOT=\"$(bash \"$ROOT/skills/plan-files/scripts/resolve-project-root.sh\")\" && cd \"$ROOT\" && bash \"$ROOT/.codex/hooks/plan-files/scripts/user-prompt-submit.sh\"",
             "timeout": 5,
             "statusMessage": "Checking planning scope"
           }
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && ROOT=\"$(bash \"$ROOT/skills/planning-with-files/scripts/resolve-project-root.sh\")\" && cd \"$ROOT\" && bash \"$ROOT/.codex/hooks/planning-with-files/scripts/post-tool-use.sh\"",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && ROOT=\"$(bash \"$ROOT/skills/plan-files/scripts/resolve-project-root.sh\")\" && cd \"$ROOT\" && bash \"$ROOT/.codex/hooks/plan-files/scripts/post-tool-use.sh\"",
             "timeout": 5,
             "statusMessage": "Injecting planning context"
           }
@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && ROOT=\"$(bash \"$ROOT/skills/planning-with-files/scripts/resolve-project-root.sh\")\" && cd \"$ROOT\" && bash \"$ROOT/.codex/hooks/planning-with-files/scripts/agent-stop.sh\"",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && ROOT=\"$(bash \"$ROOT/skills/plan-files/scripts/resolve-project-root.sh\")\" && cd \"$ROOT\" && bash \"$ROOT/.codex/hooks/plan-files/scripts/agent-stop.sh\"",
             "timeout": 10,
             "statusMessage": "Checking planning completion"
           }

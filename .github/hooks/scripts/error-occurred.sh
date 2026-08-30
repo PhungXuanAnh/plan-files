@@ -1,8 +1,8 @@
 #!/bin/bash
-# planning-with-files: Error hook for GitHub Copilot
+# plan-files: Error hook for GitHub Copilot
 # Logs errors to tasks.md when the agent encounters an error.
 # Always exits 0 — outputs JSON to stdout. Debug log written to
-#   tmp/hook-logs/plan-with-files/error-occurred.log
+#   tmp/hook-logs/plan-files/error-occurred.log
 #
 # Bash 4+ hook; session JSON uses jq, Python 3, or Node and otherwise fails closed.
 
@@ -12,16 +12,16 @@ set -o pipefail 2>/dev/null || true
 INPUT=$(cat)
 PROVIDER=copilot
 REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
-STATE_TOOL="$REPO_ROOT/skills/planning-with-files/scripts/session-state.sh"
+STATE_TOOL="$REPO_ROOT/skills/plan-files/scripts/session-state.sh"
 
 # Copilot invokes this script directly with whatever cwd the editor last set,
 # with no wrapper to correct it first. A submodule's own toplevel is not the
 # workspace root, so cd out to the outermost superproject before any relative
 # path below (the skip marker, log files, $PWD passed to session-state.sh) is
 # used — otherwise a cwd inside a submodule silently misses the session lease.
-cd "$(bash "$REPO_ROOT/skills/planning-with-files/scripts/resolve-project-root.sh")" 2>/dev/null || true
+cd "$(bash "$REPO_ROOT/skills/plan-files/scripts/resolve-project-root.sh")" 2>/dev/null || true
 
-if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e .plan-with-files-skip ]; then
+if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e .plan-files-skip ]; then
     printf '{}'
     exit 0
 fi
@@ -47,7 +47,7 @@ PLAN_SOURCE="$PROVIDER session lease -> $PLAN_DIR"
 PLAN_FILE="$PLAN_DIR/tasks.md"
 
 # --- Logging setup (flock-protected against parallel hook processes) --------
-LOG_DIR="tmp/hook-logs/plan-with-files"
+LOG_DIR="tmp/hook-logs/plan-files"
 LOG_FILE="$LOG_DIR/error-occurred.log"
 LOG_LOCK="$LOG_FILE.lock"
 LOG_MAX_LINES=3000
@@ -108,7 +108,7 @@ ERROR_MSG=${ERROR_MSG:0:200}
 
 if [ -n "${ERROR_MSG:-}" ]; then
     log "extracted error.message (truncated to 200): $ERROR_MSG"
-    CONTEXT="[planning-with-files] Error detected: ${ERROR_MSG}. Log this error in ${PLAN_FILE} under Errors Encountered with the attempt number and resolution."
+    CONTEXT="[plan-files] Error detected: ${ERROR_MSG}. Log this error in ${PLAN_FILE} under Errors Encountered with the attempt number and resolution."
     ESCAPED=$(json_escape "$CONTEXT")
     OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"ErrorOccurred\",\"additionalContext\":$ESCAPED}}"
     log "stdout: ${#OUTPUT} chars"

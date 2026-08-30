@@ -3,5 +3,5 @@
 
 [mcp_servers.github]
 command = "bash"
-args = ["-c", "/home/xuananh/Dropbox/Work/copilot/mcp-server-commands/start_github_mcp.sh plan-with-files"]
+args = ["-c", "/home/xuananh/Dropbox/Work/copilot/mcp-server-commands/start_github_mcp.sh plan-files"]
 # END synced:copilot:workspace-mcp

@@ -24,21 +24,21 @@ behavioral-eval: ## Run isolated long-run planning-memory evaluation
 # unrelated settings/hooks survive; hook commands dispatch to this repository.
 # ---------------------------------------------------------------------------
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
-SKILL_SRC := $(REPO_ROOT)/skills/planning-with-files
+SKILL_SRC := $(REPO_ROOT)/skills/plan-files
 
-CODEX_SKILL := $(HOME)/.codex/skills/planning-with-files
+CODEX_SKILL := $(HOME)/.codex/skills/plan-files
 CODEX_HOOKS := $(HOME)/.codex/hooks.json
-CLAUDE_CODE_SKILL := $(HOME)/.claude/skills/planning-with-files
+CLAUDE_CODE_SKILL := $(HOME)/.claude/skills/plan-files
 CLAUDE_CODE_SETTINGS := $(HOME)/.claude/settings.json
-CLAUDE_CODE_HOOKS := $(HOME)/.claude/hooks/planning-with-files
-COPILOT_SKILL := $(HOME)/Dropbox/Work/copilot/skills/planning-with-files
-COPILOT_HOOKS := $(HOME)/Dropbox/Work/copilot/hooks/planning-with-files.json
-KIRO_SKILL := $(HOME)/.kiro/skills/planning-with-files
+CLAUDE_CODE_HOOKS := $(HOME)/.claude/hooks/plan-files
+COPILOT_SKILL := $(HOME)/Dropbox/Work/copilot/skills/plan-files
+COPILOT_HOOKS := $(HOME)/Dropbox/Work/copilot/hooks/plan-files.json
+KIRO_SKILL := $(HOME)/.kiro/skills/plan-files
 
 CODEX_HOOKS_SRC := $(REPO_ROOT)/.codex/hooks.json.sample
 CLAUDE_CODE_SETTINGS_SRC := $(REPO_ROOT)/.claude/settings.json.sample
-CLAUDE_CODE_HOOKS_SRC := $(REPO_ROOT)/.claude/hooks/planning-with-files
-COPILOT_HOOKS_SRC := $(REPO_ROOT)/.github/hooks/planning-with-files.json.sample
+CLAUDE_CODE_HOOKS_SRC := $(REPO_ROOT)/.claude/hooks/plan-files
+COPILOT_HOOKS_SRC := $(REPO_ROOT)/.github/hooks/plan-files.json.sample
 
 define link_path
 	@target='$(1)'; dest='$(2)'; \
@@ -119,16 +119,16 @@ install-global install: install-skills install-hooks ## Install skills and avail
 
 # ---------------------------------------------------------------------------
 injected-content: ## Show what the post-tool-use hook would inject from the active tasks.md
-	@id=$$(cat .plan-with-files 2>/dev/null || true); \
+	@id=$$(cat .plan-files 2>/dev/null || true); \
 	case "$$id" in ""|.|*/*|*..*|*" "*) echo "no valid active plan"; exit 0;; esac; \
-	file="tmp/plan-with-files/$$id/tasks.md"; \
+	file="tmp/plan-files/$$id/tasks.md"; \
 	if [ ! -f "$$file" ]; then echo "active tasks.md not found: $$file"; exit 0; fi; \
 	awk '/^## (Goal|Current Phase)[[:space:]]*$$/{c=1;print;next} /^## /{c=0} c' "$$file" | awk 'BEGIN{c=0} /<!--/{c=1} c==0{print} /-->/{c=0}'
 
 plan-overview: ## Show bounded state, fingerprints, and budgets for the active plan
-	@id=$$(cat .plan-with-files 2>/dev/null || true); \
+	@id=$$(cat .plan-files 2>/dev/null || true); \
 	case "$$id" in ""|.|*/*|*..*|*" "*) echo "no valid active plan"; exit 0;; esac; \
-	file="tmp/plan-with-files/$$id/tasks.md"; \
+	file="tmp/plan-files/$$id/tasks.md"; \
 	if [ ! -f "$$file" ]; then echo "active tasks.md not found: $$file"; exit 0; fi; \
 	python3 "$(SKILL_SRC)/scripts/plan_state.py" overview "$$file"
 

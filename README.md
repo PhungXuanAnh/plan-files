@@ -2,7 +2,7 @@
 
 Persistent file-based planning for AI coding agents.
 
-The canonical skill lives in [skills/planning-with-files](./skills/planning-with-files). IDE-specific skill folders should link to that folder instead of copying it. IDE hook scripts stay in the IDE-specific folders because each tool expects hooks in a different location and format. Repository hook configs end in `.sample`; only the global hook layer is enabled by default.
+The canonical skill lives in [skills/plan-files](./skills/plan-files). IDE-specific skill folders should link to that folder instead of copying it. IDE hook scripts stay in the IDE-specific folders because each tool expects hooks in a different location and format. Repository hook configs end in `.sample`; only the global hook layer is enabled by default.
 
 ## Current Workflow
 
@@ -10,8 +10,8 @@ For each complex task, the agent uses a default pointer, prompt-scoped routing, 
 
 ```text
 <project root>/
-├── .plan-with-files
-└── tmp/plan-with-files/
+├── .plan-files
+└── tmp/plan-files/
     ├── .sessions/       # private hook-owned routing state
     └── <task-id>/
         ├── tasks.md
@@ -33,9 +33,9 @@ There is no `progress.md`. Keep current progress and verification in `tasks.md`;
 
 ## Project Root Resolution
 
-Every hook needs to agree on a single `<project root>` for the storage model above, regardless of which directory inside a workspace a tool call happens to run in. `skills/planning-with-files/scripts/resolve-project-root.sh` resolves it in this order:
+Every hook needs to agree on a single `<project root>` for the storage model above, regardless of which directory inside a workspace a tool call happens to run in. `skills/plan-files/scripts/resolve-project-root.sh` resolves it in this order:
 
-1. Walk upward from the tool call's cwd collecting every ancestor that already has a `.plan-with-files` file (present, even empty, is enough — no separate marker file). The **farthest** (outermost) match wins. A `.plan-with-files` can legitimately exist at more than one nesting level (an outer workspace-level plan, plus a leftover one inside a child repo); picking the nearest one would silently resolve to the wrong plan whenever cwd drifts into — or a session simply starts inside — that child repo.
+1. Walk upward from the tool call's cwd collecting every ancestor that already has a `.plan-files` file (present, even empty, is enough — no separate marker file). The **farthest** (outermost) match wins. A `.plan-files` can legitimately exist at more than one nesting level (an outer workspace-level plan, plus a leftover one inside a child repo); picking the nearest one would silently resolve to the wrong plan whenever cwd drifts into — or a session simply starts inside — that child repo.
 2. Otherwise, fall back to `git rev-parse --show-toplevel`, then walk out through every enclosing git superproject (`--show-superproject-working-tree`), so a cwd inside a registered git submodule resolves to the outermost superproject root, not the submodule's own toplevel.
 3. Otherwise, the cwd itself.
 
@@ -50,23 +50,23 @@ my-workspace/            # not a git repo
 └── service-c/           # its own git repo
 ```
 
-`git rev-parse` has no notion of "root" for a folder like this (there is no `.gitmodules` relationship tying the checkouts together), so step 2 above cannot help — only step 1 (an existing `.plan-with-files`) can name the true root:
+`git rev-parse` has no notion of "root" for a folder like this (there is no `.gitmodules` relationship tying the checkouts together), so step 2 above cannot help — only step 1 (an existing `.plan-files`) can name the true root:
 
-- If `my-workspace/.plan-with-files` already exists (from ordinary prior use — a successful `claim`/`bind` now keeps it populated automatically, see below), everything already works with no extra setup.
-- For a brand new such workspace with no `.plan-with-files` anywhere yet, run `touch .plan-with-files` at the intended root once, before creating the first task there.
+- If `my-workspace/.plan-files` already exists (from ordinary prior use — a successful `claim`/`bind` now keeps it populated automatically, see below), everything already works with no extra setup.
+- For a brand new such workspace with no `.plan-files` anywhere yet, run `touch .plan-files` at the intended root once, before creating the first task there.
 
 ### Opening a session directly inside a child repo
 
-It is common to `cd` into one specific repo (say `service-a/`) and start an agent session there directly, instead of at the workspace root. This is fully supported: as long as the workspace root has a `.plan-with-files`, the resolver walks upward from `service-a/` and finds it — **the session's plan is stored under the parent workspace root (`my-workspace/tmp/plan-with-files/...`), not under `service-a/`.** Ordinary work inside `service-a/` (editing files, running commands, git operations) is unaffected; only the plan-tracking storage location is centralized at the workspace root. There is intentionally no mechanism for a nested child repo to "opt out" and keep its own independent plan — every plan for a given workspace lives in one place, by design.
+It is common to `cd` into one specific repo (say `service-a/`) and start an agent session there directly, instead of at the workspace root. This is fully supported: as long as the workspace root has a `.plan-files`, the resolver walks upward from `service-a/` and finds it — **the session's plan is stored under the parent workspace root (`my-workspace/tmp/plan-files/...`), not under `service-a/`.** Ordinary work inside `service-a/` (editing files, running commands, git operations) is unaffected; only the plan-tracking storage location is centralized at the workspace root. There is intentionally no mechanism for a nested child repo to "opt out" and keep its own independent plan — every plan for a given workspace lives in one place, by design.
 
 A repo that is genuinely opened standalone — with no workspace folder as an ancestor on disk at all — is unaffected by any of this: step 1 finds nothing above it, so step 2 falls back to that repo's own `git rev-parse --show-toplevel`, and it is treated as its own independent project root.
 
 ## Repository Layout
 
 ```text
-planning-with-files/
+plan-files/
 ├── skills/
-│   └── planning-with-files/          # Canonical skill source
+│   └── plan-files/          # Canonical skill source
 │       ├── SKILL.md
 │       ├── examples.md
 │       ├── reference.md
@@ -89,9 +89,9 @@ planning-with-files/
 
 ## Use
 
-Ask the agent to use the `planning-with-files` skill for any multi-step task. The agent should:
+Ask the agent to use the `plan-files` skill for any multi-step task. The agent should:
 
-1. Treat `.plan-with-files` as a candidate, not proof that the conversation owns that task.
+1. Treat `.plan-files` as a candidate, not proof that the conversation owns that task.
 2. Compare only candidate Task Identity + Goal with the latest request and classify it as `SAME`, `DIFFERENT`, or `AMBIGUOUS`.
 3. When an ownership hook supplies a bind command, bind `SAME` before loading full hot state; ignore `DIFFERENT` without mutating it; ask only for `AMBIGUOUS`.
 4. Create a new task folder when a separate complex request needs one, and bind it when the adapter supports ownership.
@@ -101,9 +101,9 @@ Ask the agent to use the `planning-with-files` skill for any multi-step task. Th
 
 Codex, Claude Code, and GitHub Copilot hooks implement this prompt-scoped ownership handshake. An unbound or unidentified session receives no full plan injection and no hard Stop/PostTool enforcement. Future adapters can implement the same generic ownership interface without changing the shared skill contract.
 
-When `.plan-with-files` is empty, an exact `tmp/plan-with-files/<task-id>/*.md` path in the user prompt becomes the fallback candidate. As a stronger safety net, PreToolUse auto-claims an unowned session immediately before a recognized mutation that targets Markdown in exactly one existing plan directory. It never silently switches an owned or different pending task, and blocks multi-plan mutations as ambiguous.
+When `.plan-files` is empty, an exact `tmp/plan-files/<task-id>/*.md` path in the user prompt becomes the fallback candidate. As a stronger safety net, PreToolUse auto-claims an unowned session immediately before a recognized mutation that targets Markdown in exactly one existing plan directory. It never silently switches an owned or different pending task, and blocks multi-plan mutations as ambiguous.
 
-A successful `claim`/`bind` keeps `.plan-with-files` in sync with whichever task the session just became the confirmed owner of — this assumes, as this skill does, that at most one agent works a given project at a time. `.plan-with-files` remains a convenience default for humans and new sessions, never a decision input: hooks always gate and enforce against the per-session lease under `tmp/plan-with-files/.sessions/`, never against `.plan-with-files` directly.
+A successful `claim`/`bind` keeps `.plan-files` in sync with whichever task the session just became the confirmed owner of — this assumes, as this skill does, that at most one agent works a given project at a time. `.plan-files` remains a convenience default for humans and new sessions, never a decision input: hooks always gate and enforce against the per-session lease under `tmp/plan-files/.sessions/`, never against `.plan-files` directly.
 
 Stop completion is re-evaluated on every invocation, including recursive invocations marked `stop_hook_active=true`. Incomplete or structurally invalid actionable work remains blocked indefinitely; an item, checkpoint, or phase is progress rather than a final-answer boundary, so the agent must continue through every non-settled phase in the plan. A phase with a genuine external dependency must use `blocked (reason)`, while a phase explicitly postponed by the user must use `deferred (reason)`; both are settled and prevent non-actionable recursive Stop loops. Planning/discussion mode, disabled sessions, unowned sessions, and fully settled plans still allow Stop.
 

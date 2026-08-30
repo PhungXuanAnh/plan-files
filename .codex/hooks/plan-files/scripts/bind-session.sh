@@ -3,13 +3,13 @@
 
 set -u
 
-REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
+REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)
 STATE_TOOL="$REPO_ROOT/skills/plan-files/scripts/session-state.sh"
-SESSION_ID=${COPILOT_AGENT_SESSION_ID:-}
+SESSION_ID=${CODEX_THREAD_ID:-}
 
 if [ -z "$SESSION_ID" ]; then
     printf 'no verified session identity is available\n' >&2
     exit 1
 fi
 
-PWF_SESSION_ADAPTER=copilot PWF_SESSION_ID="$SESSION_ID" exec bash "$STATE_TOOL" "$@"
+PWF_SESSION_ADAPTER=codex PWF_SESSION_ID="$SESSION_ID" exec bash "$STATE_TOOL" "$@"

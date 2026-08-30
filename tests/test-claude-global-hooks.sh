@@ -33,7 +33,7 @@ for event, definitions in expected.items():
         group
         for group in actual[event]
         if any(
-            "planning-with-files/scripts/" in hook.get("command", "")
+            "plan-files/scripts/" in hook.get("command", "")
             for hook in group.get("hooks", [])
         )
     ]
@@ -71,7 +71,7 @@ settings = {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "bash /old/planning-with-files/scripts/pre-tool-use.sh",
+                        "command": "bash /old/plan-files/scripts/pre-tool-use.sh",
                     }
                 ],
             },
@@ -80,7 +80,7 @@ settings = {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "bash /duplicate/planning-with-files/scripts/pre-tool-use.sh",
+                        "command": "bash /duplicate/plan-files/scripts/pre-tool-use.sh",
                     }
                 ],
             },
@@ -126,8 +126,8 @@ assert_regular_settings_with_sample_hooks "$LEGACY_HOME/.claude/settings.json"
 [ "$SAMPLE_SUM" = "$(sha256sum "$REPO_ROOT/.claude/settings.json.sample" | cut -d' ' -f1)" ] \
     || fail "legacy migration changed the repository sample"
 
-HOOKS="$MERGE_HOME/.claude/hooks/planning-with-files"
-[ "$(readlink "$HOOKS")" = "$REPO_ROOT/.claude/hooks/planning-with-files" ] \
+HOOKS="$MERGE_HOME/.claude/hooks/plan-files"
+[ "$(readlink "$HOOKS")" = "$REPO_ROOT/.claude/hooks/plan-files" ] \
     || fail "Claude hook scripts are not linked globally"
 
 PRE_TOOL_COMMAND=$(python3 - "$MERGE_SETTINGS" <<'PY'
@@ -150,17 +150,17 @@ def planning_command(event):
     for group in hooks[event]:
         for hook in group.get("hooks", []):
             command = hook.get("command", "")
-            if "planning-with-files/scripts/" in command:
+            if "plan-files/scripts/" in command:
                 return command
     raise AssertionError(f"missing planning command for {event}")
 
 
 for event, script in scripts.items():
     command = planning_command(event)
-    expected = f'$HOME/.claude/hooks/planning-with-files/scripts/{script}'
+    expected = f'$HOME/.claude/hooks/plan-files/scripts/{script}'
     assert expected in command, command
-    assert '$ROOT/.claude/hooks/planning-with-files' not in command, command
-    assert '$HOME/.claude/hooks/planning-with-files/scripts/resolve-project-root.sh' in command, command
+    assert '$ROOT/.claude/hooks/plan-files' not in command, command
+    assert '$HOME/.claude/hooks/plan-files/scripts/resolve-project-root.sh' in command, command
 
 print(planning_command("PreToolUse"))
 PY

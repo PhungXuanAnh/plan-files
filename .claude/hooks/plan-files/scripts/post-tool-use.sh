@@ -1,5 +1,5 @@
 #!/bin/bash
-# plan-files: Post-tool-use hook for GitHub Copilot
+# plan-files: Post-tool-use hook for Claude Code
 # Runs AFTER every tool call. Injects bounded current context plus semantic-risk
 # checkpoint, restore-readiness, and maintenance guidance.
 # No-op when tasks.md does not exist - zero pollution on non-planning sessions.
@@ -15,16 +15,9 @@ set -o pipefail 2>/dev/null || true
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 INPUT=$(cat)
-PROVIDER=copilot
-REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
+PROVIDER=claude
+REPO_ROOT=$(CDPATH= cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)
 STATE_TOOL="$REPO_ROOT/skills/plan-files/scripts/session-state.sh"
-
-# Copilot invokes this script directly with whatever cwd the editor last set,
-# with no wrapper to correct it first. A submodule's own toplevel is not the
-# workspace root, so cd out to the outermost superproject before any relative
-# path below (the skip marker, log files, $PWD passed to session-state.sh) is
-# used — otherwise a cwd inside a submodule silently misses the session lease.
-cd "$(bash "$REPO_ROOT/skills/plan-files/scripts/resolve-project-root.sh")" 2>/dev/null || true
 
 if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e .plan-files-skip ]; then
     printf '{}'

@@ -1,5 +1,5 @@
 #!/bin/bash
-# plan-files: Agent stop hook for GitHub Copilot
+# plan-files: Agent stop hook for Codex
 # Checks if all phases in tasks.md are complete.
 # Injects continuation context if phases are incomplete.
 # Always exits 0 — outputs JSON to stdout. Debug log written to
@@ -14,17 +14,22 @@ set -o pipefail 2>/dev/null || true
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 INPUT=$(cat)
-PROVIDER=copilot
-REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
+PROVIDER=codex
+REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)
 STATE_TOOL="$REPO_ROOT/skills/plan-files/scripts/session-state.sh"
 
-# Copilot invokes this script directly with whatever cwd the editor last set,
-# with no wrapper to correct it first. A submodule's own toplevel is not the
-# workspace root, so cd out to the outermost superproject before any relative
-# path below (the skip marker, log files, $PWD passed to session-state.sh) is
-# used — otherwise a cwd inside a submodule silently misses the session lease.
-cd "$(bash "$REPO_ROOT/skills/plan-files/scripts/resolve-project-root.sh")" 2>/dev/null || true
+json_escape() {
+    local s=${1:-}
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    s=${s//$'\t'/\\t}
+    s=${s//$'\r'/\\r}
+    s=${s//$'\n'/\\n}
+    printf '"%s"' "$s"
+}
 
+# Ownership enforcement happens at UserPromptSubmit + PreToolUse. Stop only
+# checks completion state for an owned session.
 if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e .plan-files-skip ]; then
     printf '{}'
     exit 0
@@ -32,6 +37,13 @@ fi
 SESSION_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" session-id 2>/dev/null || true)
 PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" resolve "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
 if [ -z "$PLAN_DIR" ]; then
+    CANDIDATE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" pending-candidate "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+    if [ -n "$CANDIDATE" ]; then
+        REASON="[plan-files] OWNERSHIP ACTION REQUIRED before stopping. Candidate '$CANDIDATE' is still pending. Do not stop or report a blocker. Run the provided bind or release command from the ownership prompt, then continue."
+        ESCAPED_REASON=$(json_escape "$REASON")
+        printf '{"decision":"block","reason":%s}' "$ESCAPED_REASON"
+        exit 0
+    fi
     printf '{}'
     exit 0
 fi
@@ -230,7 +242,7 @@ if [ "${#REASON_PARTS[@]}" -gt 0 ]; then
     REASON="[plan-files] ${COMBINED}"
     log "decision: BLOCK (${#REASON_PARTS[@]} issue(s) found in one pass)"
     ESCAPED_REASON=$(json_escape "$REASON")
-    OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
+    OUTPUT="{\"decision\":\"block\",\"reason\":$ESCAPED_REASON}"
     log "stop continuation=true output_chars=${#OUTPUT}"
     log "stdout: ${#OUTPUT} chars"
     echo "$OUTPUT"
@@ -342,14 +354,14 @@ fi
 log "progress fingerprint=${FINGERPRINT:-unavailable} state=$STOP_PROGRESS_STATE no_progress_count=$NO_PROGRESS_COUNT active_item=${ACTIVE_ITEM:-none} first_item=${FIRST_ITEM:-none}"
 
 # Task incomplete -> BLOCK the stop and tell the agent why to continue.
-# Per docs (https://code.visualstudio.com/docs/copilot/customization/hooks#_stop):
-#   hookEventName must be exactly "Stop"; use decision="block" + reason
+# Per Codex docs:
+#   Stop continuation uses top-level decision="block" + reason.
 #   (additionalContext does NOT apply to Stop hooks).
 SETTLED=$((COMPLETE + BLOCKED + DEFERRED))
 REASON="[plan-files] Task incomplete ($SETTLED/$TOTAL phases settled: $COMPLETE complete, $BLOCKED blocked, $DEFERRED deferred).${REMAINING_LINE}${TARGET_LINE}${RECOVERY_LINE} Completing one item or checkpoint is progress, not a stopping boundary. Do not emit a final answer while any phase remains actionable. Continue every unchecked item in every non-settled phase, starting with Current Phase; after each phase, advance Current Phase and keep working until every phase is settled. If a genuine external dependency leaves a phase with no actionable path, update its checkpoint and set '- **Status:** blocked (reason)'. Use '- **Status:** deferred (reason)' only when the user explicitly postpones that phase. Then continue any other non-settled phases; stop only when every phase is complete, blocked, or deferred."
 log "decision: BLOCK ($SETTLED/$TOTAL phases settled, blocked=$BLOCKED deferred=$DEFERRED progress_state=$STOP_PROGRESS_STATE no_progress_count=$NO_PROGRESS_COUNT)"
 ESCAPED_REASON=$(json_escape "$REASON")
-OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"decision\":\"block\",\"reason\":$ESCAPED_REASON}}"
+OUTPUT="{\"decision\":\"block\",\"reason\":$ESCAPED_REASON}"
 log "stop continuation=true output_chars=${#OUTPUT} progress_state=$STOP_PROGRESS_STATE no_progress_count=$NO_PROGRESS_COUNT"
 log "stdout: ${#OUTPUT} chars"
 echo "$OUTPUT"

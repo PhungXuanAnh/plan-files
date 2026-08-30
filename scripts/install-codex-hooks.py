@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install planning-with-files Codex hooks while preserving other hooks."""
+"""Install plan-files Codex hooks while preserving other hooks."""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ def normalize_global_commands(hooks: dict, source: Path) -> None:
     """
     source = source.resolve()
     repo_root = source.parent.parent
-    script_root = repo_root / ".codex/hooks/planning-with-files/scripts"
-    resolver = repo_root / "skills/planning-with-files/scripts/resolve-project-root.sh"
+    script_root = repo_root / ".codex/hooks/plan-files/scripts"
+    resolver = repo_root / "skills/plan-files/scripts/resolve-project-root.sh"
     scripts = {
         "UserPromptSubmit": "user-prompt-submit.sh",
         "PostToolUse": "post-tool-use.sh",
