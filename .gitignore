@@ -8,6 +8,7 @@ Thumbs.db
 *~
 .vscode/
 .idea/
+.serena/
 
 # Development planning files (meta: I used this skill to build this skill!)
 .plan-files
