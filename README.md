@@ -80,6 +80,7 @@ plan-files/
 │           └── handoff.md
 ├── .claude/hooks/                         # Claude Code hook scripts
 ├── .codex/hooks/                          # Codex hook scripts
+├── .grok/hooks/                           # Native Grok Build hook sample + adapter scripts
 ├── .github/hooks/                         # GitHub Copilot hook scripts
 ├── CHANGELOG.md
 ├── CONTRIBUTORS.md
@@ -92,7 +93,7 @@ plan-files/
 The hook system follows an Abstract Core + Adapter architecture. These are architectural roles independent of implementation language. Bash is the current implementation, not a permanent constraint; the core and adapters may be migrated to Python when the complexity and maintenance benefits justify it.
 
 ```text
-Codex / Claude / Copilot event
+Codex / Claude / Copilot / Grok event
              │ provider-specific JSON, fields, session id
              ▼
       Provider Adapter
@@ -109,7 +110,7 @@ Codex / Claude / Copilot event
 
 The abstract core owns all planning behavior: project-root and session resolution, restore and maintenance gates, phase/item state, semantic risk, checkpoint guidance, Stop finalization, and telemetry policy. In the Bash implementation this role is fulfilled by the canonical `hook-*.sh` scripts and their shared helpers under `skills/plan-files/scripts/`.
 
-A provider adapter owns only the protocol boundary. It converts the provider's event name, input fields, session identity, and capabilities into the logical core request, invokes the canonical core, then converts the provider-neutral result into the exact JSON envelope expected by Codex, Claude Code, or GitHub Copilot. The scripts under `.codex/hooks/`, `.claude/hooks/`, and `.github/hooks/` fulfill this adapter role and should remain small.
+A provider adapter owns only the protocol boundary. It converts the provider's event name, input fields, session identity, and capabilities into the logical core request, invokes the canonical core, then converts the provider-neutral result into the exact JSON envelope expected by Codex, Claude Code, GitHub Copilot, or Grok Build. The scripts under `.codex/hooks/`, `.claude/hooks/`, `.github/hooks/`, and `.grok/hooks/` fulfill this adapter role and should remain small.
 
 To prevent duplication:
 
@@ -126,7 +127,7 @@ Porting from Bash to Python is appropriate when JSON/protocol handling, state tr
 - Remove the superseded Bash policy after the new implementation passes parity tests; do not maintain the same policy in both Bash and Python.
 - Keep stable provider hook paths where possible so installed configurations do not break.
 
-In an object-oriented Python implementation, preserve the same boundary: one `AbstractHook`/`HookCore` accepts a normalized `HookRequest` and returns a normalized `HookResult`; `CodexAdapter`, `ClaudeAdapter`, and `CopilotAdapter` classes perform `from_provider_input(...)` and `to_provider_output(...)`. Provider subclasses must not override or duplicate planning policy.
+In an object-oriented Python implementation, preserve the same boundary: one `AbstractHook`/`HookCore` accepts a normalized `HookRequest` and returns a normalized `HookResult`; `CodexAdapter`, `ClaudeAdapter`, `CopilotAdapter`, and `GrokAdapter` classes perform `from_provider_input(...)` and `to_provider_output(...)`. Provider subclasses must not override or duplicate planning policy.
 
 ## Use
 
@@ -140,7 +141,7 @@ Ask the agent to use the `plan-files` skill for any multi-step task. The agent s
 6. Checkpoint the Active Item immediately after its evidence becomes true; the checkpoint synchronizes the exact Resume next action.
 7. Keep a rolling window of at most 12 hot phase headings: `phase-add` archives the oldest eligible complete phase before adding a thirteenth, and `compact-oldest` performs the same history-first eviction explicitly. Archive writes are locked and journaled for automatic crash recovery. Split only an independent goal; never raw-truncate or raise the ceiling.
 
-Codex, Claude Code, and GitHub Copilot hooks implement this prompt-scoped ownership handshake through shared shell cores under `skills/plan-files/scripts/`. Provider wrappers translate only the event arguments, session identity, and output-envelope differences required by each host. An unbound or unidentified session receives no full plan injection and no hard Stop/PostTool enforcement. A future provider can reuse the same cores by adding a similarly small wrapper.
+Codex, Claude Code, GitHub Copilot, and Grok Build hooks implement this prompt-scoped ownership handshake through shared shell cores under `skills/plan-files/scripts/`. Provider wrappers translate only the event arguments, session identity, and output-envelope differences required by each host. An unbound or unidentified session receives no full plan injection and no hard Stop/PostTool enforcement. A future provider can reuse the same cores by adding a similarly small wrapper.
 
 When `.plan-files` is empty, an exact `tmp/plan-files/<task-id>/*.md` path in the user prompt becomes the fallback candidate. As a stronger safety net, PreToolUse auto-claims an unowned session immediately before a recognized mutation that targets Markdown in exactly one existing plan directory. It never silently switches an owned or different pending task, and blocks multi-plan mutations as ambiguous.
 
@@ -154,6 +155,8 @@ The canonical skill remains host-neutral. Each ownership-aware hook adapter reso
 
 GitHub's `user-prompt-transformed.py` remains a provider-specific envelope adapter: it preserves the incoming transformed prompt and returns it as `modifiedTransformedPrompt` with candidate context appended. Candidate selection and session state remain provider-neutral through the canonical scripts it calls.
 
+Grok's native adapter follows the [official hook contract](https://docs.x.ai/build/features/hooks): it validates camelCase `sessionId` against `GROK_SESSION_ID`, maps the shared PreToolUse block verdict to Grok's `deny`, and gates Stop only when `reason == "end_turn"`. An allowing `UserPromptSubmit` cannot inject context, so the next denied PreToolUse or pending Stop includes the bounded Task Identity, Goal, and exact bind/release commands. PostToolUse always performs auto-claim/cache side effects; it also emits standard `additionalContext` for Grok releases that deliver it, but correctness does not depend on that channel. Grok forcibly ends a turn after eight Stop continuations, so an unfinished lease remains resumable on the next prompt.
+
 ## Install Shape
 
 Install all supported skills and hooks globally from this checkout:
@@ -162,9 +165,24 @@ Install all supported skills and hooks globally from this checkout:
 make install-global
 ```
 
-`make install-hooks` installs only the hooks. Claude Code merges the planning groups in `.claude/settings.json.sample` into the regular global file `~/.claude/settings.json`; missing groups are added, stale or duplicate planning groups are replaced, and unrelated settings and hook groups are preserved even when they share the same event. Codex merges its sample into `~/.codex/hooks.json`. Copilot's global hook config remains a symlink to its `.sample` file. Hook scripts execute from this checkout, so script-only edits apply globally without reinstalling. Rerun `make install-hooks` after changing a Claude or Codex hook definition, or after moving this checkout. The command is safe to repeat and leaves an already matching Claude settings file unchanged.
+`make install-hooks` installs only the hooks. Claude Code merges the planning groups in `.claude/settings.json.sample` into the regular global file `~/.claude/settings.json`; missing groups are added, stale or duplicate planning groups are replaced, and unrelated settings and hook groups are preserved even when they share the same event. Codex merges its sample into `~/.codex/hooks.json`. Copilot's global hook config remains a symlink to its `.sample` file. Grok installs an owned native file at `${GROK_HOME:-$HOME/.grok}/hooks/plan-files.json` and leaves every sibling JSON hook untouched. Hook scripts execute from this checkout, so script-only edits apply globally without reinstalling. Rerun the relevant installer after changing a sample definition or moving this checkout.
 
-Do not rename the `.sample` files back to active project-local config names unless a second local hook layer is intentional. Codex runs every matching global and project hook, so enabling both layers executes both configurations.
+Install only the native Grok hook into the normal global home:
+
+```bash
+make install-hook-grok
+```
+
+Install the Grok skill and hook together, or target an isolated runtime explicitly:
+
+```bash
+make install-grok
+GROK_HOME=/path/to/isolated/grok-home make install-hook-grok
+```
+
+The Grok installer writes atomically, is byte-idempotent, and refuses to overwrite an unrelated existing `plan-files.json`. `.grok/hooks/plan-files.json.sample` is the source-controlled project example; it deliberately does not end in `.json`, so opening this checkout cannot register a duplicate project layer. Rename/copy it to `.json` only when a trusted project-local layer is intentional, then grant Grok project hook trust.
+
+Do not rename the `.sample` files back to active project-local config names unless a second local hook layer is intentional. Codex and Grok run every matching global and project hook, so enabling both layers executes both configurations.
 
 ## License
 

@@ -18,6 +18,7 @@ PROVIDER=${1:-}
 REPO_ROOT=${2:-}
 PENDING_STOP_GUARD=${3:-0}
 STOP_OUTPUT=${4:-top}
+BIND_TOOL=${5:-}
 [ -n "$PROVIDER" ] && [ -d "$REPO_ROOT/skills/plan-files/scripts" ] || { printf '{}'; exit 0; }
 STATE_TOOL="$REPO_ROOT/skills/plan-files/scripts/session-state.sh"
 
@@ -57,7 +58,18 @@ if [ -z "$PLAN_DIR" ]; then
         CANDIDATE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" pending-candidate "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
     fi
     if [ -n "${CANDIDATE:-}" ]; then
-        REASON="[plan-files] OWNERSHIP ACTION REQUIRED before stopping. Candidate '$CANDIDATE' is still pending. Do not stop or report a blocker. Run the provided bind or release command from the ownership prompt, then continue."
+        CANDIDATE_CONTEXT=""
+        if [ -x "$BIND_TOOL" ]; then
+            CANDIDATE_CONTEXT=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" candidate-context \
+                "$CANDIDATE" "$BIND_TOOL" 2>/dev/null || true)
+        fi
+        if [ -n "$CANDIDATE_CONTEXT" ]; then
+            REASON="[plan-files] OWNERSHIP ACTION REQUIRED before stopping.
+$CANDIDATE_CONTEXT
+[plan-files] Run the exact SAME or DIFFERENT command above, then continue; do not report an external blocker."
+        else
+            REASON="[plan-files] OWNERSHIP ACTION REQUIRED before stopping. Candidate '$CANDIDATE' is still pending. Do not stop or report a blocker. Run the provided bind or release command from the ownership prompt, then continue."
+        fi
         render_stop_block "$REASON"
         exit 0
     fi

@@ -1,7 +1,7 @@
 .PHONY: help test behavioral-eval check-installs injected-content plan-overview \
-        install-skill-copilot install-skill-claude-code install-skill-codex install-skill-kiro install-skills \
-        install-hook-copilot install-hook-claude-code install-hook-codex install-hooks \
-        install-copilot install-claude-code install-codex install-global install \
+        install-skill-copilot install-skill-claude-code install-skill-codex install-skill-grok install-skill-kiro install-skills \
+        install-hook-copilot install-hook-claude-code install-hook-codex install-hook-grok install-hooks \
+        install-copilot install-claude-code install-codex install-grok install-global install \
         sync-upstream sync-upstream-rebase sync-upstream-merge install-hooks-json
 
 help: ## Show this help
@@ -13,6 +13,7 @@ test: ## Run planning contract tests
 	@bash tests/test-project-root-resolution.sh
 	@bash tests/test-codex-global-hooks.sh
 	@bash tests/test-claude-global-hooks.sh
+	@bash tests/test-grok-global-hooks.sh
 
 behavioral-eval: ## Run isolated long-run planning-memory evaluation
 	@python3 "$(SKILL_SRC)/scripts/behavioral_eval.py"
@@ -34,11 +35,15 @@ CLAUDE_CODE_HOOKS := $(HOME)/.claude/hooks/plan-files
 COPILOT_SKILL := $(HOME)/Dropbox/Work/copilot/skills/plan-files
 COPILOT_HOOKS := $(HOME)/Dropbox/Work/copilot/hooks/plan-files.json
 KIRO_SKILL := $(HOME)/.kiro/skills/plan-files
+GROK_HOME ?= $(HOME)/.grok
+GROK_SKILL := $(GROK_HOME)/skills/plan-files
+GROK_HOOKS := $(GROK_HOME)/hooks/plan-files.json
 
 CODEX_HOOKS_SRC := $(REPO_ROOT)/.codex/hooks.json.sample
 CLAUDE_CODE_SETTINGS_SRC := $(REPO_ROOT)/.claude/settings.json.sample
 CLAUDE_CODE_HOOKS_SRC := $(REPO_ROOT)/.claude/hooks/plan-files
 COPILOT_HOOKS_SRC := $(REPO_ROOT)/.github/hooks/plan-files.json.sample
+GROK_HOOKS_SRC := $(REPO_ROOT)/.grok/hooks/plan-files.json.sample
 
 define link_path
 	@target='$(1)'; dest='$(2)'; \
@@ -81,6 +86,8 @@ check-installs: ## Show global skill/hook install status
 	$(call check_path,$(CLAUDE_CODE_HOOKS))
 	$(call check_path,$(COPILOT_SKILL))
 	$(call check_path,$(COPILOT_HOOKS))
+	$(call check_path,$(GROK_SKILL))
+	$(call check_path,$(GROK_HOOKS))
 	$(call check_path,$(KIRO_SKILL))
 
 install-skill-codex: ## Link skill into global Codex skills
@@ -108,12 +115,20 @@ install-hook-copilot: ## Link sample hook JSON into global GitHub Copilot hooks
 
 install-copilot: install-skill-copilot install-hook-copilot ## Link GitHub Copilot skill and hook JSON globally
 
+install-skill-grok: ## Link skill into the selected GROK_HOME
+	$(call link_path,$(SKILL_SRC),$(GROK_SKILL))
+
+install-hook-grok: ## Install native hooks into the selected GROK_HOME without touching sibling JSON files
+	@python3 scripts/install-grok-hooks.py "$(GROK_HOOKS_SRC)" "$(GROK_HOOKS)"
+
+install-grok: install-skill-grok install-hook-grok ## Install the skill and native hooks into the selected GROK_HOME
+
 install-skill-kiro: ## Link skill into global Kiro skills
 	$(call link_path,$(SKILL_SRC),$(KIRO_SKILL))
 
-install-skills: install-skill-codex install-skill-claude-code install-skill-copilot install-skill-kiro ## Link skills globally
+install-skills: install-skill-codex install-skill-claude-code install-skill-copilot install-skill-grok install-skill-kiro ## Link skills globally
 
-install-hooks: install-hook-codex install-hook-claude-code install-hook-copilot ## Install hook JSON/settings globally
+install-hooks: install-hook-codex install-hook-claude-code install-hook-copilot install-hook-grok ## Install hook JSON/settings globally
 
 install-global install: install-skills install-hooks ## Install skills and available hook JSON/settings globally
 

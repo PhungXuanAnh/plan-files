@@ -92,7 +92,16 @@ MUTATION_TOOL_TOKENS = {
     "replace",
     "write",
 }
-SHELL_TOOL_NAMES = {"bash", "shell", "terminal", "exec", "exec_command", "run_command"}
+SHELL_TOOL_NAMES = {
+    "bash",
+    "shell",
+    "terminal",
+    "exec",
+    "exec_command",
+    "run_command",
+    "run_terminal_cmd",
+    "run_terminal_command",
+}
 EVIDENCE_TOOL_TOKENS = {
     "check",
     "click",

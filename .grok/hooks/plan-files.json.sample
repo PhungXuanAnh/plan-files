@@ -1,0 +1,52 @@
+{
+  "_planFilesHook": {
+    "managedBy": "plan-files-grok-installer",
+    "schemaVersion": 1
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && ROOT=\"$(bash \"$ROOT/skills/plan-files/scripts/resolve-project-root.sh\")\" && cd \"$ROOT\" && bash \"$ROOT/.grok/hooks/plan-files/scripts/user-prompt-submit.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && ROOT=\"$(bash \"$ROOT/skills/plan-files/scripts/resolve-project-root.sh\")\" && cd \"$ROOT\" && bash \"$ROOT/.grok/hooks/plan-files/scripts/pre-tool-use.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && ROOT=\"$(bash \"$ROOT/skills/plan-files/scripts/resolve-project-root.sh\")\" && cd \"$ROOT\" && bash \"$ROOT/.grok/hooks/plan-files/scripts/post-tool-use.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && ROOT=\"$(bash \"$ROOT/skills/plan-files/scripts/resolve-project-root.sh\")\" && cd \"$ROOT\" && bash \"$ROOT/.grok/hooks/plan-files/scripts/agent-stop.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -70,10 +70,11 @@ extract_tool_command() {
     local command=""
     if command -v jq >/dev/null 2>&1; then
         command=$(printf '%s' "$INPUT" | jq -jr '
-          if (.tool_input | type) == "object" then
-            (.tool_input.command // .tool_input.cmd // empty)
-          elif (.tool_input | type) == "string" then
-            .tool_input
+          (.tool_input // .toolInput) as $input
+          | if ($input | type) == "object" then
+            ($input.command // $input.cmd // empty)
+          elif ($input | type) == "string" then
+            $input
           else empty end
           | select(type == "string")
         ' 2>/dev/null || true)
@@ -81,11 +82,11 @@ extract_tool_command() {
         command=$(printf '%s' "$INPUT" | python3 -c 'import json,sys
 try: p=json.load(sys.stdin)
 except Exception: raise SystemExit(0)
-v=p.get("tool_input") if isinstance(p,dict) else None
+v=(p.get("tool_input") if "tool_input" in p else p.get("toolInput")) if isinstance(p,dict) else None
 if isinstance(v,dict): v=v.get("command") or v.get("cmd")
 if isinstance(v,str): sys.stdout.write(v)' 2>/dev/null || true)
     elif command -v node >/dev/null 2>&1; then
-        command=$(printf '%s' "$INPUT" | node -e 'let s="";process.stdin.setEncoding("utf8");process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>{try{const p=JSON.parse(s);let v=p&&p.tool_input;if(v&&typeof v==="object")v=v.command||v.cmd;if(typeof v==="string")process.stdout.write(v)}catch(_){}})' 2>/dev/null || true)
+        command=$(printf '%s' "$INPUT" | node -e 'let s="";process.stdin.setEncoding("utf8");process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>{try{const p=JSON.parse(s);let v=p&&Object.prototype.hasOwnProperty.call(p,"tool_input")?p.tool_input:p&&p.toolInput;if(v&&typeof v==="object")v=v.command||v.cmd;if(typeof v==="string")process.stdout.write(v)}catch(_){}})' 2>/dev/null || true)
     fi
     printf '%s' "$command" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
@@ -204,7 +205,14 @@ if [ -z "$PLAN_DIR" ]; then
         log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-exact-release tool=$TOOL_NAME"
         printf '{}'; exit 0
     fi
-    REASON_TEXT="[plan-files] OWNERSHIP ACTION REQUIRED (not a permission failure and not an external blocker). Candidate '$CANDIDATE' is pending for this prompt. Do not stop or report that the environment is blocked. Resolve ownership now by running exactly one action: SAME task -> $EXPECTED_BIND OR DIFFERENT task -> $EXPECTED_RELEASE. After bind/release succeeds, retry the original tool call."
+    CANDIDATE_CONTEXT=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" candidate-context \
+        "$CANDIDATE" "$BIND_TOOL" 2>/dev/null || true)
+    if [ -n "$CANDIDATE_CONTEXT" ]; then
+        REASON_TEXT="$CANDIDATE_CONTEXT
+[plan-files] This PreToolUse call was blocked only until ownership is resolved. Do not report an external blocker. Run the exact SAME or DIFFERENT command above, then retry the original tool call."
+    else
+        REASON_TEXT="[plan-files] OWNERSHIP ACTION REQUIRED (not a permission failure and not an external blocker). Candidate '$CANDIDATE' is pending for this prompt. Do not stop or report that the environment is blocked. Resolve ownership now by running exactly one action: SAME task -> $EXPECTED_BIND OR DIFFERENT task -> $EXPECTED_RELEASE. After bind/release succeeds, retry the original tool call."
+    fi
     log "session=$SESSION_ID candidate=$CANDIDATE decision=block-ownership tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
     block "$REASON_TEXT"
 fi

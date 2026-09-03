@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import platform
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -252,6 +253,80 @@ def _hook_probe(project: Path, scripts: Path) -> dict[str, object]:
     }
 
 
+def _grok_hook_probe(project: Path, scripts: Path) -> dict[str, object]:
+    """Exercise Grok routing without assuming PostToolUse stdout is delivered."""
+    repo = scripts.parents[2]
+    adapter = repo / ".grok/hooks/plan-files/scripts"
+    state_tool = scripts / "session-state.sh"
+    session = "eval-grok-session"
+    hook_env = os.environ.copy() | {
+        "GROK_SESSION_ID": session,
+        "GROK_WORKSPACE_ROOT": str(project),
+    }
+    scope_env = os.environ.copy() | {"PWF_PROJECT_ROOT": str(project)}
+
+    def invoke(script: str, payload: dict[str, object]) -> str:
+        return subprocess.run(
+            [str(adapter / script)],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=project,
+            env=hook_env,
+        ).stdout.strip()
+
+    prompt_output = invoke(
+        "user-prompt-submit.sh",
+        {
+            "hookEventName": "user_prompt_submit",
+            "sessionId": session,
+            "prompt": "resume eval-task",
+        },
+    )
+    pre_base = {
+        "hookEventName": "pre_tool_use",
+        "sessionId": session,
+        "toolName": "run_terminal_cmd",
+    }
+    denied = json.loads(invoke("pre-tool-use.sh", pre_base | {"toolInput": {"command": "git status"}}))
+    bind_command = (
+        f"PWF_PROJECT_ROOT={shlex.quote(str(project))} bash "
+        f"{shlex.quote(str(adapter / 'bind-session.sh'))} bind eval-task"
+    )
+    allowed = json.loads(
+        invoke("pre-tool-use.sh", pre_base | {"toolInput": {"command": bind_command}})
+    )
+    subprocess.run(
+        ["bash", "-c", bind_command], check=True, capture_output=True, text=True, cwd=project, env=hook_env
+    )
+    resolved = _run([str(state_tool), "resolve", "grok", session], env=scope_env)
+    stop = json.loads(
+        invoke(
+            "agent-stop.sh",
+            {
+                "hookEventName": "stop",
+                "sessionId": session,
+                "reason": "end_turn",
+                "stopHookActive": False,
+            },
+        )
+    )
+    reason = denied.get("reason", "")
+    return {
+        "prompt_stdout_passive": prompt_output == "{}",
+        "pretool_denied": denied.get("decision") == "deny",
+        "candidate_context_complete": all(
+            marker in reason for marker in ("## Task Identity", "## Goal", "SAME: run", "DIFFERENT: first run")
+        ),
+        "exact_bind_allowed": allowed.get("decision") == "allow",
+        "session_resolved": Path(resolved).resolve()
+        == (project / "tmp/plan-files/eval-task").resolve(),
+        "actionable_stop_blocked": stop.get("decision") == "block",
+        "posttool_delivery_assumed": False,
+    }
+
+
 def evaluate() -> dict[str, object]:
     scripts = Path(__file__).resolve().parent
     with tempfile.TemporaryDirectory(prefix="pwf-behavioral-eval-") as directory:
@@ -278,6 +353,7 @@ def evaluate() -> dict[str, object]:
             "broken_issues": broken_issues,
         }
         hook_probe = _hook_probe(project, scripts)
+        grok_hook_probe = _grok_hook_probe(project, scripts)
         legacy = overview_payload(plan, 2 * 1024, 0)
         legacy.pop("view_meta", None)
         revised = overview_payload(plan, 2 * 1024, 4 * 1024)
@@ -331,6 +407,7 @@ def evaluate() -> dict[str, object]:
             "lifecycle": lifecycle,
             "restore_probe": restore_probe,
             "hook_probe": hook_probe,
+            "grok_hook_probe": grok_hook_probe,
             "policies": policies,
             "checks": {
                 "revised_packet_bounded": len(revised_text) <= 4096,
@@ -355,6 +432,12 @@ def evaluate() -> dict[str, object]:
                 < hook_probe["legacy_read_only_false_reminders"],
                 "missed_checkpoint_detected": hook_probe["missed_checkpoint_detected"],
                 "stale_state_detected": hook_probe["stale_state_detected"],
+                "grok_native_routing": all(
+                    value
+                    for key, value in grok_hook_probe.items()
+                    if key != "posttool_delivery_assumed"
+                )
+                and not grok_hook_probe["posttool_delivery_assumed"],
             },
         }
 
@@ -389,6 +472,17 @@ def main(argv: Iterable[str] | None = None) -> int:
             f"{probe['legacy_read_only_false_reminders']} legacy; "
             f"missed-checkpoint={probe['missed_checkpoint_detected']}; "
             f"actionable-stop-blocked={probe['actionable_finalization_blocked']}"
+        )
+        grok_probe = payload["grok_hook_probe"]
+        print(
+            "Grok probe: "
+            f"prompt-passive={grok_probe['prompt_stdout_passive']}; "
+            f"pretool-denied={grok_probe['pretool_denied']}; "
+            f"context-complete={grok_probe['candidate_context_complete']}; "
+            f"bind-allowed={grok_probe['exact_bind_allowed']}; "
+            f"resolved={grok_probe['session_resolved']}; "
+            f"stop-blocked={grok_probe['actionable_stop_blocked']}; "
+            f"posttool-delivery-assumed={grok_probe['posttool_delivery_assumed']}"
         )
     return 0 if all(payload["checks"].values()) else 2
 
