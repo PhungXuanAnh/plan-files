@@ -2,7 +2,7 @@
 
 Persistent file-based planning for AI coding agents.
 
-The canonical skill lives in [skills/plan-files](./skills/plan-files). IDE-specific skill folders should link to that folder instead of copying it. IDE hook scripts stay in the IDE-specific folders because each tool expects hooks in a different location and format. Repository hook configs end in `.sample`; only the global hook layer is enabled by default.
+The canonical skill lives in [skills/plan-files](./skills/plan-files). IDE-specific skill folders should link to that folder instead of copying it. Provider hook paths stay in the IDE-specific folders because each tool expects hooks in a different location and format, but duplicated behavior lives in canonical shared shell scripts and the provider files remain thin launch shims. Repository hook configs end in `.sample`; only the global hook layer is enabled by default.
 
 ## Current Workflow
 
@@ -71,7 +71,7 @@ plan-files/
 │       ├── examples.md
 │       ├── reference.md
 │       ├── references/              # Focused routing, format, operations, evaluation details
-│       ├── scripts/                 # Canonical prompt/session routing helper
+│       ├── scripts/                 # Canonical planning tools and shared shell hook cores
 │       └── templates/
 │           ├── tasks.md
 │           ├── findings.md
@@ -87,6 +87,47 @@ plan-files/
 └── README.md
 ```
 
+## Hook Architecture: Abstract Core and Provider Adapters
+
+The hook system follows an Abstract Core + Adapter architecture. These are architectural roles independent of implementation language. Bash is the current implementation, not a permanent constraint; the core and adapters may be migrated to Python when the complexity and maintenance benefits justify it.
+
+```text
+Codex / Claude / Copilot event
+             │ provider-specific JSON, fields, session id
+             ▼
+      Provider Adapter
+             │ normalized hook request
+             ▼
+       Abstract Hook Core
+             │ provider-neutral hook result
+             ▼
+      Provider Adapter
+             │ provider-specific output envelope
+             ▼
+             Agent
+```
+
+The abstract core owns all planning behavior: project-root and session resolution, restore and maintenance gates, phase/item state, semantic risk, checkpoint guidance, Stop finalization, and telemetry policy. In the Bash implementation this role is fulfilled by the canonical `hook-*.sh` scripts and their shared helpers under `skills/plan-files/scripts/`.
+
+A provider adapter owns only the protocol boundary. It converts the provider's event name, input fields, session identity, and capabilities into the logical core request, invokes the canonical core, then converts the provider-neutral result into the exact JSON envelope expected by Codex, Claude Code, or GitHub Copilot. The scripts under `.codex/hooks/`, `.claude/hooks/`, and `.github/hooks/` fulfill this adapter role and should remain small.
+
+To prevent duplication:
+
+- Never copy planning decisions, parsing rules, reminder text, Stop policy, or telemetry policy into a provider directory.
+- If behavior is needed by two providers, move it into a canonical core/helper and keep only conversion at the provider boundary.
+- A provider-only event may remain local, but it must reuse canonical candidate, session, and plan-state operations wherever those semantics overlap.
+- Test shared behavior once at the core level and test each adapter only for input normalization, capability selection, and output-envelope rendering.
+- Adding a provider means adding an adapter, not forking an existing provider's policy implementation.
+
+Porting from Bash to Python is appropriate when JSON/protocol handling, state transitions, error handling, locking, testing, or the expected volume of changes has become difficult to maintain safely in shell. Treat the migration as an architectural change, not a line-by-line translation:
+
+- Migrate a complete shared responsibility or the complete hook runtime, including its tests and all provider entrypoints that consume it.
+- Preserve one normalized `HookRequest`/`HookResult` contract and the existing observable provider behavior.
+- Remove the superseded Bash policy after the new implementation passes parity tests; do not maintain the same policy in both Bash and Python.
+- Keep stable provider hook paths where possible so installed configurations do not break.
+
+In an object-oriented Python implementation, preserve the same boundary: one `AbstractHook`/`HookCore` accepts a normalized `HookRequest` and returns a normalized `HookResult`; `CodexAdapter`, `ClaudeAdapter`, and `CopilotAdapter` classes perform `from_provider_input(...)` and `to_provider_output(...)`. Provider subclasses must not override or duplicate planning policy.
+
 ## Use
 
 Ask the agent to use the `plan-files` skill for any multi-step task. The agent should:
@@ -99,7 +140,7 @@ Ask the agent to use the `plan-files` skill for any multi-step task. The agent s
 6. Checkpoint the Active Item immediately after its evidence becomes true; the checkpoint synchronizes the exact Resume next action.
 7. Keep a rolling window of at most 12 hot phase headings: `phase-add` archives the oldest eligible complete phase before adding a thirteenth, and `compact-oldest` performs the same history-first eviction explicitly. Archive writes are locked and journaled for automatic crash recovery. Split only an independent goal; never raw-truncate or raise the ceiling.
 
-Codex, Claude Code, and GitHub Copilot hooks implement this prompt-scoped ownership handshake. An unbound or unidentified session receives no full plan injection and no hard Stop/PostTool enforcement. Future adapters can implement the same generic ownership interface without changing the shared skill contract.
+Codex, Claude Code, and GitHub Copilot hooks implement this prompt-scoped ownership handshake through shared shell cores under `skills/plan-files/scripts/`. Provider wrappers translate only the event arguments, session identity, and output-envelope differences required by each host. An unbound or unidentified session receives no full plan injection and no hard Stop/PostTool enforcement. A future provider can reuse the same cores by adding a similarly small wrapper.
 
 When `.plan-files` is empty, an exact `tmp/plan-files/<task-id>/*.md` path in the user prompt becomes the fallback candidate. As a stronger safety net, PreToolUse auto-claims an unowned session immediately before a recognized mutation that targets Markdown in exactly one existing plan directory. It never silently switches an owned or different pending task, and blocks multi-plan mutations as ambiguous.
 
@@ -111,7 +152,7 @@ Run `make behavioral-eval` for an isolated 12→13 rollover/new-session comparis
 
 The canonical skill remains host-neutral. Each ownership-aware hook adapter resolves its own session identity and injects a directly executable bind command, so the skill never hardcodes `/home/...` or requires the agent to discover hook scripts. An absolute command produced by a hook may point through a symlink or to the source tree; both are valid.
 
-The GitHub `user-prompt-transformed.py` file is intentionally adapter-specific: that event must preserve the incoming transformed prompt and return it as `modifiedTransformedPrompt` with candidate context appended. Shared candidate selection and state remain in the canonical skill scripts.
+GitHub's `user-prompt-transformed.py` remains a provider-specific envelope adapter: it preserves the incoming transformed prompt and returns it as `modifiedTransformedPrompt` with candidate context appended. Candidate selection and session state remain provider-neutral through the canonical scripts it calls.
 
 ## Install Shape
 

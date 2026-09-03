@@ -18,6 +18,8 @@ This repository contains one host-neutral planning skill plus provider-specific 
   - `plan_edit.py` — fingerprinted structural/section edits and transactional lifecycle operations.
   - `session-state.sh` and `resolve-project-root.sh` — prompt-scoped ownership and workspace resolution.
   - `pre-tool-gate.sh` and `maintenance-tool-allowed.py` — restore/maintenance enforcement and semantic tool classification.
+  - `hook-common.sh`, `hook-post-tool-use.sh`, and `hook-agent-stop.sh` — shared hook helpers plus canonical PostTool and Stop policy.
+  - `hook-user-prompt-submit.sh` and `hook-bind-session.sh` — shared prompt and session-binding behavior for providers with compatible envelopes.
   - `observe.py` and `behavioral_eval.py` — telemetry reporting and isolated regression evaluation.
 
 Use snake_case for importable Python module filenames. Resolve all skill script paths relative to `SKILL.md`; never hardcode a user's installation path in the canonical skill.
@@ -81,7 +83,26 @@ Codex, Claude Code, and GitHub Copilot must preserve the same behavioral contrac
 - Stop: continue actionable/invalid work until every phase is settled and finalization succeeds.
 - Telemetry: log provider plus hashed task/session scope, injection sizes, semantic class/risk, and Stop continuations; never log raw session ids or raw hook input previews.
 
-Keep the three provider `common.sh` files byte-identical. Keep the semantic-delta block in all three PostTool adapters behaviorally and textually aligned. Provider-only code should translate event input/output envelopes, not redefine planning policy.
+Keep the three provider `common.sh` bridges byte-identical. Provider event scripts must remain thin launch shims into the canonical shell cores; provider-only code may translate event arguments, session identity, or output envelopes, but must not redefine planning policy. Keep semantic-delta policy single-sourced in `hook-post-tool-use.sh` and Stop policy single-sourced in `hook-agent-stop.sh`.
+
+Treat the hook design as an Abstract Core + Provider Adapter architecture. These roles are language-independent. Bash is the current implementation, not a permanent constraint.
+
+- The abstract core accepts a logical normalized hook request and produces a logical provider-neutral result. It exclusively owns root/session resolution, plan parsing, restore/maintenance gating, semantic risk, checkpoint guidance, Stop/finalization decisions, message text, locking, and telemetry policy.
+- A provider adapter converts the raw provider event/input/session/capabilities to the core contract, invokes the core, and converts the result to the exact provider output envelope. It may not read plan Markdown to make policy decisions or duplicate core messages and conditions.
+- If equivalent logic is required by two providers, extract it to `skills/plan-files/scripts/`; never solve parity by copying one provider script into another.
+- Provider-only events may remain local only when no cross-provider event exists. They must still delegate overlapping candidate, ownership, and plan-state semantics to canonical scripts.
+- Test policy at the shared-core boundary. Provider tests should focus on input normalization, capability flags, session identity, and output rendering for every supported envelope.
+- A new provider must be implemented as a new adapter around the existing core, not as a fork of Codex, Claude, or Copilot policy code.
+
+Port shared hook code to Python when shell complexity creates a meaningful maintenance or correctness cost—for example, complex JSON/protocol conversion, state transitions, concurrency/locking, error recovery, testability problems, or a large expected change surface. When porting:
+
+- Migrate a complete shared responsibility or the complete runtime, not scattered branches inside provider wrappers.
+- Switch every affected provider entrypoint and its tests to the new implementation together.
+- Prove behavioral and output-envelope parity before removing the old implementation.
+- Remove superseded Bash policy once parity passes; never leave Bash and Python as two authoritative implementations of the same behavior.
+- Preserve stable hook paths or update installers/configuration atomically when a path must change.
+
+For an object-oriented Python implementation, retain one `AbstractHook`/`HookCore` with `handle(HookRequest) -> HookResult` and separate `CodexAdapter`, `ClaudeAdapter`, and `CopilotAdapter` classes with `from_provider_input(...)` and `to_provider_output(...)`. Provider classes must not override planning behavior.
 
 ## Repository installation
 
@@ -114,4 +135,4 @@ bash -n skills/plan-files/scripts/*.sh \
 git diff --check
 ```
 
-Also verify provider `common.sh` identity and semantic-delta parity whenever shared hook behavior changes.
+Also verify provider `common.sh` identity and exercise every provider adapter whenever shared hook behavior changes.

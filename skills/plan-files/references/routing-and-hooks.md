@@ -45,7 +45,7 @@ A direct complete-file read is valid for format repair, compaction judgment, or 
 
 ## Provider contract
 
-Codex, Claude Code, and Copilot adapters share the same resolver, session-state tools, common format helpers, semantic stale policy, maintenance gate, and Stop finalization contract. Provider shells only translate event JSON and response shape.
+Codex, Claude Code, and Copilot reuse canonical shell hook cores for resolver/session integration, common format helpers, semantic stale policy, maintenance gating, telemetry, and Stop finalization. Provider launch shims pass the provider name, session identity, and the small output-envelope differences required by each host. Provider-unique events may keep a local adapter when their input or output contract has no shared counterpart, but that adapter must delegate candidate selection and session state to the canonical scripts.
 
 - PreTool gates ambiguous ownership, invalid item/restore state, and over-budget unrelated mutations while allowing read-only diagnosis and owned-plan repair. It recognizes both from the tool input, never from a tool or script name: a call passes when it is demonstrably read-only, or when its input targets or explicitly names the owned plan directory. A repair/checkpoint command that names no plan path — a bare `--help`, a version probe — is therefore blocked like any other unrecognized call; pass `--plan <plan-dir>/tasks.md` and it is allowed. Every block message states this condition, so treat it as the instruction rather than as a broken gate.
 - PostTool injects bounded current context, checkpoint reminders, restore repairs, and compaction warnings. It does not complete items.

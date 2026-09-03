@@ -1,15 +1,5 @@
 #!/usr/bin/env bash
-# Translate this host's tool-session environment into the shared bind interface.
-
 set -u
-
 REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
-STATE_TOOL="$REPO_ROOT/skills/plan-files/scripts/session-state.sh"
-SESSION_ID=${COPILOT_AGENT_SESSION_ID:-}
-
-if [ -z "$SESSION_ID" ]; then
-    printf 'no verified session identity is available\n' >&2
-    exit 1
-fi
-
-PWF_SESSION_ADAPTER=copilot PWF_SESSION_ID="$SESSION_ID" exec bash "$STATE_TOOL" "$@"
+exec bash "$REPO_ROOT/skills/plan-files/scripts/hook-bind-session.sh" \
+    copilot "$REPO_ROOT" "${COPILOT_AGENT_SESSION_ID:-}" "$@"
