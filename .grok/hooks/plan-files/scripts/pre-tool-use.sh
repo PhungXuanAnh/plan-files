@@ -10,7 +10,7 @@ printf '%s' "$INPUT" | grok_input_has_verified_session \
 
 OUTPUT=$(printf '%s' "$INPUT" \
     | bash "$GROK_REPO_ROOT/skills/plan-files/scripts/pre-tool-gate.sh" \
-        grok "$GROK_ADAPTER_DIR/bind-session.sh" "Grok Build")
+        grok "$GROK_ADAPTER_DIR/bind-session.sh" "Grok Build" 256)
 
 # The shared core uses the provider-neutral block verdict. Grok's canonical
 # PreToolUse vocabulary is deny/allow, so translate only the envelope.

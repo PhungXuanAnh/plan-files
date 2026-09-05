@@ -56,6 +56,10 @@ Only current/incomplete work stays detailed. The old phase is one line because i
 
 On a new prompt, ownership hooks expose only the Task Identity and Goal above. A request to continue `AUTH-421` is `SAME`, so the agent runs the supplied bind command; a report-performance request is `DIFFERENT` even if it touches the same auth module; only unclear wording requires a question.
 
+If that task began as research with “production implementation” under Non-goals, “Here are the lead's answers; implement this plan” is also SAME. Bind, record the authorization and answers, revise the outdated scope/profile and pending phases, then implement. Keep unrelated restrictions. By contrast, “Use AUTH-421 as an example while reviewing the planning hooks” names the task as background and does not ask to continue its implementation.
+
+For “continue that work” with unclear task identity, run the hook's `clarify` command, ask which task, and wait. The next prompt retains the candidate; no `release` is needed just to ask. For “explain why the hook blocked this plan; do not implement yet”, bind the named plan, then run the same command with `discuss` instead of `bind`. Read-only diagnosis and questions remain available even with an oversized handoff; outside writes stay gated and the answer does not complete any phase.
+
 ## Archive during compaction
 
 Before:

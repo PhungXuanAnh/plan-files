@@ -8,6 +8,7 @@ help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 test: ## Run planning contract tests
+	@python3 tests/test-ownership-flow.py
 	@bash tests/test-planning-contract.sh
 	@bash tests/test-session-ownership.sh
 	@bash tests/test-project-root-resolution.sh

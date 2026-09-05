@@ -149,6 +149,12 @@ assert_empty "$(state resolve grok grok-one 2>/dev/null || true)" "pending lease
 DENIAL=$(pre_command grok-one 'git status --short')
 assert_eq "$(printf '%s' "$DENIAL" | json_value '["decision"]')" deny "Grok PreToolUse translates block to deny"
 REASON=$(printf '%s' "$DENIAL" | json_value '["reason"]')
+REASON_CHARS=$(printf '%s' "$REASON" | python3 -c 'import sys; print(len(sys.stdin.read()))')
+[ "$REASON_CHARS" -le 256 ] || fail "official Grok denial exceeds 256 characters"
+FEEDBACK_PATH=$(state feedback-file grok grok-one)
+assert_contains "$REASON" "$FEEDBACK_PATH" "short denial names the complete feedback file"
+assert_eq "$(pre_command grok-one "cat $FEEDBACK_PATH" | json_value '["decision"]')" allow "feedback read passes unresolved ownership"
+REASON=$(cat "$FEEDBACK_PATH")
 assert_contains "$REASON" '## Task Identity' "pending denial includes Task Identity"
 assert_contains "$REASON" '## Goal' "pending denial includes Goal"
 assert_contains "$REASON" 'SAME: run' "pending denial includes SAME command"

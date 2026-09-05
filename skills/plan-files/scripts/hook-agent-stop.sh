@@ -44,13 +44,18 @@ render_stop_block() {
     fi
 }
 
-# Ownership enforcement happens at UserPromptSubmit + PreToolUse. Stop only
-# checks completion state for an owned session.
+# Stop repeats unresolved routing; explicit clarification/discussion may yield.
+# Execution leases continue through completion checks below.
 if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e .plan-files-skip ]; then
     printf '{}'
     exit 0
 fi
 SESSION_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" session-id 2>/dev/null || true)
+# Explicit ambiguity is allowed to wait without clearing the candidate or plan.
+ROUTE_STATUS=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+if [ "$ROUTE_STATUS" = "waiting" ] || [ "$ROUTE_STATUS" = "discussing" ]; then
+    printf '{}'; exit 0
+fi
 PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" resolve "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
 if [ -z "$PLAN_DIR" ]; then
     CANDIDATE=""
@@ -64,9 +69,7 @@ if [ -z "$PLAN_DIR" ]; then
                 "$CANDIDATE" "$BIND_TOOL" 2>/dev/null || true)
         fi
         if [ -n "$CANDIDATE_CONTEXT" ]; then
-            REASON="[plan-files] OWNERSHIP ACTION REQUIRED before stopping.
-$CANDIDATE_CONTEXT
-[plan-files] Run the exact SAME or DIFFERENT command above, then continue; do not report an external blocker."
+            REASON="$CANDIDATE_CONTEXT"
         else
             REASON="[plan-files] OWNERSHIP ACTION REQUIRED before stopping. Candidate '$CANDIDATE' is still pending. Do not stop or report a blocker. Run the provided bind or release command from the ownership prompt, then continue."
         fi

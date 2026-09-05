@@ -6,6 +6,8 @@ Resolve all script paths relative to `SKILL.md`.
 
 ## Bounded reads
 
+`restore-check` schema 1 includes additive `discussion_mode`: true for an unstarted plan with empty Current Phase/Active Item and all phases pending. Such a plan may pass restore checks and yield for discussion, but PreTool still requires starting an item before execution. `assert-finalizable` continues to require settled phases; discussion is not completion.
+
 ```bash
 python3 <skill-dir>/scripts/plan_state.py overview <task-dir>/tasks.md
 python3 <skill-dir>/scripts/plan_state.py resume-pack <task-dir>/tasks.md

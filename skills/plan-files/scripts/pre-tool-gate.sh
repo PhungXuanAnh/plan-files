@@ -7,6 +7,7 @@ set -o pipefail 2>/dev/null || true
 PROVIDER=${1:-}
 BIND_TOOL=${2:-}
 LABEL=${3:-$PROVIDER}
+REASON_LIMIT=${4:-0}
 INPUT=$(cat)
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
@@ -107,6 +108,9 @@ restore_warning() {
     printf '%s' "$payload" | python3 -c 'import json,sys
 try: p=json.load(sys.stdin)
 except Exception: raise SystemExit(0)
+if p.get("discussion_mode"):
+    print("[plan-files] DISCUSSION ONLY. Start the user-authorized Active Item with plan_checkpoint.py before operational work.", end="")
+    raise SystemExit(0)
 if p.get("ok", True): raise SystemExit(0)
 issues=p.get("issues", [])
 parts=[]
@@ -131,6 +135,12 @@ mutation_plan_id() {
 
 block() {
     local reason=$1
+    if [ "$REASON_LIMIT" -gt 0 ] && [ -n "${FEEDBACK_FILE:-}" ]; then
+        if printf '%s' "$reason" | python3 "$SCRIPT_DIR/feedback_transport.py" render "$FEEDBACK_FILE" "$REASON_LIMIT"; then
+            exit 0
+        fi
+        reason="[plan-files] Could not create the recovery file. Stop to receive recovery guidance; do not release the plan merely to bypass this denial."
+    fi
     printf '{"decision":"block","reason":%s}' "$(json_escape "$reason")"
     exit 0
 }
@@ -145,6 +155,14 @@ log "tool_call tool_name=$TOOL_NAME tool_input=$TOOL_INPUT_JSON"
 
 SESSION_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" session-id 2>/dev/null || true)
 [ -n "$SESSION_ID" ] || { log "decision=allow reason=no-verified-session"; printf '{}'; exit 0; }
+
+FEEDBACK_FILE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" feedback-file "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+# Explicitly input-based: any tool carrying this session's generated feedback
+# path passes, including unfamiliar tools or calls with additional arguments.
+if [ -n "$FEEDBACK_FILE" ] && printf '%s' "$TOOL_INPUT_JSON" \
+    | python3 "$SCRIPT_DIR/feedback_transport.py" allows "$FEEDBACK_FILE"; then
+    printf '{}'; exit 0
+fi
 
 TOOL_COMMAND=$(extract_tool_command)
 MUTATION_STATUS=0
@@ -197,6 +215,14 @@ if [ -z "$PLAN_DIR" ]; then
     printf -v task_arg '%q' "$CANDIDATE"
     EXPECTED_BIND="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg bind $task_arg"
     EXPECTED_RELEASE="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg release $task_arg"
+    EXPECTED_CLARIFY="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg clarify $task_arg"
+    if [ "$TOOL_COMMAND" = "$EXPECTED_CLARIFY" ]; then
+        printf '{}'; exit 0
+    fi
+    if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION_ID")" = "waiting" ] \
+        && printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" question-tool; then
+        printf '{}'; exit 0
+    fi
     if [ "$TOOL_COMMAND" = "$EXPECTED_BIND" ]; then
         log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-exact-bind tool=$TOOL_NAME"
         printf '{}'; exit 0
@@ -208,14 +234,32 @@ if [ -z "$PLAN_DIR" ]; then
     CANDIDATE_CONTEXT=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" candidate-context \
         "$CANDIDATE" "$BIND_TOOL" 2>/dev/null || true)
     if [ -n "$CANDIDATE_CONTEXT" ]; then
-        REASON_TEXT="$CANDIDATE_CONTEXT
-[plan-files] This PreToolUse call was blocked only until ownership is resolved. Do not report an external blocker. Run the exact SAME or DIFFERENT command above, then retry the original tool call."
+        REASON_TEXT="$CANDIDATE_CONTEXT"
     else
         REASON_TEXT="[plan-files] OWNERSHIP ACTION REQUIRED (not a permission failure and not an external blocker). Candidate '$CANDIDATE' is pending for this prompt. Do not stop or report that the environment is blocked. Resolve ownership now by running exactly one action: SAME task -> $EXPECTED_BIND OR DIFFERENT task -> $EXPECTED_RELEASE. After bind/release succeeds, retry the original tool call."
     fi
     log "session=$SESSION_ID candidate=$CANDIDATE decision=block-ownership tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
     block "$REASON_TEXT"
 fi
+
+# Discussion is explicit, prompt-scoped, and cannot enable execution.
+printf -v project_root_arg '%q' "$PWD"
+printf -v bind_tool_arg '%q' "$BIND_TOOL"
+printf -v task_arg '%q' "$(basename "$PLAN_DIR")"
+EXPECTED_DISCUSS="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg discuss $task_arg"
+printf -v plan_arg '%q' "$PLAN_DIR/tasks.md"
+printf -v state_arg '%q' "$PLAN_STATE_TOOL"
+MAINTENANCE_ACTION="Run: python3 $state_arg budgets $plan_arg. Then archive/consolidate completed material in the owned plan; preserve unfinished work."
+if [ "$TOOL_COMMAND" = "$EXPECTED_DISCUSS" ]; then
+    printf '{}'; exit 0
+fi
+if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION_ID")" = "discussing" ]; then
+    if maintenance_tool_allowed "$PLAN_DIR"; then
+        printf '{}'; exit 0
+    fi
+    block "[plan-files] DISCUSSION ONLY. Reads, questions, and owned-plan maintenance are allowed; execution requires a new user prompt and bind. The candidate and unfinished work are preserved."
+fi
+DISCUSSION_HINT="If the user requested only discussion of this plan/workflow, run exactly: $EXPECTED_DISCUSS. This permits a discussion Stop while keeping execution gated; do not use it to pause authorized implementation."
 
 # The gate recognizes a repair/checkpoint call from its tool input, never from
 # a script or tool name, so a block message must state that condition instead
@@ -254,7 +298,7 @@ if [ -n "$COMPACTION_WARN" ]; then
         printf '{}'
         exit 0
     fi
-    REASON_TEXT="$COMPACTION_WARN Planning maintenance is mandatory before unrelated work. Allowed while compacting: (1) use any tool that is demonstrably read-only to inspect/search/read anywhere in the current project (for example Read, rg/grep/cat/head/tail, git status/diff/show/log, and Serena find/get/list/search tools); (2) use any mutation tool when its tool_input targets or explicitly references the owned plan directory $PLAN_DIR, including tasks.md, findings.md, decisions.md, handoff.md, and history.md. The gate does not require a specific mutation tool name; when explicit writable targets can be recognized, every target must stay inside that plan directory. Blocked until budgets clear: recognized mutations outside that plan folder and unknown calls that neither prove read-only behavior nor reference the owned plan directory. The gate re-checks budgets on every tool call."
+    REASON_TEXT="[plan-files] MAINTENANCE ACTION REQUIRED. $MAINTENANCE_ACTION Allowed: read-only diagnosis, questions, and owned-plan maintenance. Blocked: outside writes and unknown calls. Include the owned plan path in repair commands; every recognized write target must remain inside it. Budgets are rechecked each call. $COMPACTION_WARN $DISCUSSION_HINT"
     log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") maintenance=required decision=block-compaction tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
     block "$REASON_TEXT"
 fi

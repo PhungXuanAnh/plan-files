@@ -7,6 +7,7 @@
 
 ## Task Identity
 <!-- Keep this deterministic and concise; session-owned hooks expose it before binding. -->
+<!-- Update scope after explicit user authorization within this same plan; other Non-goals remain in force. -->
 - Deliverable: [specific result this task owns]
 - Anchors: [ticket, PR, task id, or other stable identifiers; `none` if absent]
 - Non-goals: [nearby work that must not be mistaken for this task]

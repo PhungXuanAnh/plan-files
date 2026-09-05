@@ -290,6 +290,12 @@ def _grok_hook_probe(project: Path, scripts: Path) -> dict[str, object]:
         "toolName": "run_terminal_cmd",
     }
     denied = json.loads(invoke("pre-tool-use.sh", pre_base | {"toolInput": {"command": "git status"}}))
+    short_reason = str(denied.get("reason", ""))
+    feedback = Path(_run([str(state_tool), "feedback-file", "grok", session], env=scope_env))
+    feedback_allowed = json.loads(invoke(
+        "pre-tool-use.sh", pre_base | {"toolName": "arbitrary_reader", "toolInput": {"source": str(feedback)}}
+    ))
+    reason = feedback.read_text() if str(feedback) in short_reason and feedback.is_file() else short_reason
     bind_command = (
         f"PWF_PROJECT_ROOT={shlex.quote(str(project))} bash "
         f"{shlex.quote(str(adapter / 'bind-session.sh'))} bind eval-task"
@@ -312,10 +318,11 @@ def _grok_hook_probe(project: Path, scripts: Path) -> dict[str, object]:
             },
         )
     )
-    reason = denied.get("reason", "")
     return {
         "prompt_stdout_passive": prompt_output == "{}",
         "pretool_denied": denied.get("decision") == "deny",
+        "reason_within_official_cap": len(short_reason) <= 256,
+        "feedback_read_allowed": feedback_allowed.get("decision") == "allow",
         "candidate_context_complete": all(
             marker in reason for marker in ("## Task Identity", "## Goal", "SAME: run", "DIFFERENT: first run")
         ),

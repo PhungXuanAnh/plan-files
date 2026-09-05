@@ -68,6 +68,8 @@ If a true dependency blocks one phase, update Resume Checkpoint, use `blocked (r
 
 ## Finalization
 
+For a user-requested clarification or discussion-only turn, follow the `clarify`/`discuss` routing contract in [routing-and-hooks.md](routing-and-hooks.md). Keep unfinished phase state; these modes allow yielding without claiming execution is finalizable. Never use them to abandon authorized actionable work.
+
 After all in-scope work settles:
 
 1. Complete the final item with current evidence and `--deactivate-pointer`.

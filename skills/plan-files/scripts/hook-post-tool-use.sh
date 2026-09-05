@@ -29,6 +29,9 @@ if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e .plan-files-skip ]; then
     exit 0
 fi
 SESSION_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" session-id 2>/dev/null || true)
+if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION_ID" 2>/dev/null)" = "discussing" ]; then
+    printf '{}'; exit 0
+fi
 PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" resolve "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
 if [ -z "$PLAN_DIR" ] && [ -n "$SESSION_ID" ] && command -v python3 >/dev/null 2>&1; then
     # PreToolUse cannot claim a brand-new task's first Write (tasks.md/

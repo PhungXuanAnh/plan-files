@@ -702,8 +702,8 @@ head -c 33000 /dev/zero | tr '\0' x > "$PLAN_DIR/findings.md"
 PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" pending codex codex-compaction >/dev/null
 PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=codex PWF_SESSION_ID=codex-compaction "$STATE_TOOL" bind test-task >/dev/null
 COMPACTION_BLOCK=$(cd "$PROJECT" && printf '%s\n' '{"session_id":"codex-compaction","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"npm test"}}' | "$REPO_ROOT/.codex/hooks/plan-files/scripts/pre-tool-use.sh")
-assert_contains "$COMPACTION_BLOCK" "demonstrably read-only" "compaction block explains project reads"
-assert_contains "$COMPACTION_BLOCK" "does not require a specific mutation tool name" "compaction block explains schema-independent plan mutations"
+assert_contains "$COMPACTION_BLOCK" "read-only diagnosis" "compaction block explains project reads"
+assert_contains "$COMPACTION_BLOCK" "every recognized write target must remain inside" "compaction block explains scoped plan mutations"
 assert_contains "$COMPACTION_BLOCK" "$PLAN_DIR" "compaction block names owned plan directory"
 COMPACTION_LOG=$(cat "$PROJECT/tmp/hook-logs/plan-files/pre-tool-use.log")
 assert_contains "$COMPACTION_LOG" "tool_call tool_name=Bash" "pre-tool log records full tool name"

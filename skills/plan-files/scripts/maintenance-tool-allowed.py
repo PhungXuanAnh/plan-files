@@ -17,6 +17,9 @@ import sys
 from pathlib import Path
 
 
+QUESTION_TOOLS = {"askuserquestion", "ask_user_question", "request_user_input", "request_user_input_async"}
+
+
 READ_TOOL_PREFIXES = (
     "read",
     "get_",
@@ -324,7 +327,7 @@ def tool_class(payload: dict, plan_dir: Path) -> dict[str, object]:
     if plan_maintenance:
         category = "plan_maintenance"
         semantic_weight = 0
-    elif any(simple_name.startswith(prefix) for prefix in READ_TOOL_PREFIXES) or (
+    elif simple_name.rsplit(".", 1)[-1] in QUESTION_TOOLS or any(simple_name.startswith(prefix) for prefix in READ_TOOL_PREFIXES) or (
         simple_name in SHELL_TOOL_NAMES and bash_is_read_only(tool_input)
     ):
         category = "read_only_exploration"
@@ -427,6 +430,12 @@ def load_payload() -> dict | None:
 
 
 def main() -> int:
+    if len(sys.argv) == 2 and sys.argv[1] == "question-tool":
+        payload = load_payload()
+        if payload is None:
+            return 1
+        name = str(payload.get("tool_name") or payload.get("toolName") or "").lower()
+        return 0 if name.rsplit("__", 1)[-1].rsplit(".", 1)[-1] in QUESTION_TOOLS else 1
     if len(sys.argv) == 3 and sys.argv[1] == "tool-class":
         payload = load_payload()
         if payload is None:
@@ -453,7 +462,7 @@ def main() -> int:
     simple_name = tool_name.rsplit("__", 1)[-1]
     tool_input = payload_tool_input(payload)
 
-    if any(simple_name.startswith(prefix) for prefix in READ_TOOL_PREFIXES):
+    if simple_name.rsplit(".", 1)[-1] in QUESTION_TOOLS or any(simple_name.startswith(prefix) for prefix in READ_TOOL_PREFIXES):
         return 0
     if simple_name in SHELL_TOOL_NAMES:
         if bash_is_read_only(tool_input):

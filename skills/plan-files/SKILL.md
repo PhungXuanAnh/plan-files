@@ -5,7 +5,7 @@ description: Uses persistent Markdown planning files to organize and resume comp
 
 # Planning with Files
 
-Treat the task folder as persistent memory. Keep current state bounded, restore it before acting, and load cold detail only when a specific need points to it.
+Use the task folder as persistent memory. Keep current state bounded, restore it before acting, and read archived detail only when needed.
 
 ## Core files
 
@@ -21,15 +21,21 @@ Create new files from [the templates](templates/). Keep `tmp/` and the root `.pl
 
 ## Start and resume
 
-The latest user request is authoritative. A pointer is only a candidate/default; a session lease is ownership.
+The latest user request is authoritative. `.plan-files` suggests a candidate; a session lease owns it for one user prompt. A new prompt suspends the old lease even when the pointer is unchanged.
 
-1. Classify the request as `SAME`, `DIFFERENT`, or `AMBIGUOUS`. Shared files, branch, or repo are weak evidence; an explicit task id/resume or explicit separate request is strong evidence.
-2. For `SAME`, run the hook-supplied bind command verbatim before reading other planning content. Load `plan_state.py overview <tasks.md>`, run `restore-check`, then read only the named phase/item/sections needed. Full-file access remains allowed for broad judgment or repair.
-3. For `DIFFERENT`, do not bind, repair, compact, or mutate the candidate. Create a separate plan only if the new work needs one.
-4. For `AMBIGUOUS`, ask before switching or mutating a plan.
+If a denial names a feedback file, read it first. **Any tool call containing that path in its arguments is allowed in full**, including nested or additional arguments. Follow the file's recovery instructions; reading it does not bind or release. The path expires when the prompt or ownership changes.
+
+1. Classify the request as `SAME`, `DIFFERENT`, or `AMBIGUOUS`. An explicit request to continue/implement the named plan is `SAME`, including research → implementation after answers. Merely citing a plan as background is not a continuation; shared files, branch, or repo are weak evidence.
+2. For `SAME`, run the hook-supplied bind command verbatim before reading planning state. Then restore state using the work loop below. Before implementation, reconcile Goal, Task Identity, profile, and pending work with the user's new decisions. Existing non-goals apply unless the user supersedes them.
+3. For `DIFFERENT`, run the supplied release command; do not bind, repair, compact, or mutate the candidate. Create a separate plan only if the new work needs one. Release rejects a candidate; it is not end-of-turn cleanup.
+4. For `AMBIGUOUS`, run the supplied `clarify` command, then ask and wait. It preserves the candidate and allows question tools or a text-only question, while blocking plan reads and work. Never release just to wait for clarification.
 5. For a new task, create the three required files. Hooks auto-claim after `tasks.md` exists; without ownership hooks, update `.plan-files` manually.
 
-Read [routing and hook semantics](references/routing-and-hooks.md) before diagnosing ownership, nested-workspace resolution, provider behavior, or a failed bind. `PLANNING_DISABLED=1` disables routing/enforcement for one invocation.
+An ownership denial requires routing, not an environment-blocker report. Resolve it before exploring, then retry. Never release a continuing plan just to unlock tools. Within an owned prompt, use `resolve` if uncertain; do not bind again.
+
+For user-requested discussion only about the owned plan/workflow, replace `bind` with `discuss` in the supplied command. Reads, questions, and plan maintenance remain allowed; Stop may yield with unfinished work. Bind a new prompt before execution. This also permits discussing an unstarted proposal, but neither completes the plan nor excuses stopping authorized implementation.
+
+Read [routing and hook semantics](references/routing-and-hooks.md) for ownership diagnosis, root resolution, provider behavior, or user-requested workflow disabling.
 
 ## Trust boundary
 
@@ -53,14 +59,14 @@ Use `blocked` only when no actionable path remains because of an external depend
 
 ## Work loop
 
-1. Create a plan before complex work and choose Workflow Profile A (PR handoff), B (staging verified), or C (research/document).
+1. Before complex work, create a plan and choose Workflow Profile A (PR handoff), B (staging verified), or C (research/document).
 2. Before each phase or resume, refresh bounded `overview` and `restore-check`, then target-read the active phase, decisions, and relevant findings. Repair any restore issue before implementation.
 3. Work only the Active Item. When its evidence predicate becomes true, the next workflow operation must checkpoint it before any unrelated tool. Record material partial/error evidence while it remains false.
 4. Write to `findings.md` when a discovery changes what the next session would need to know, and before every checkpoint, compaction, and pause. Record durable conclusions, not a transcript of operations. Read `decisions.md` before changing it; preserve superseded choices and open questions.
 5. Log errors immediately, diagnose them, and change approach. An error is a failure that changes your approach; a retry that then succeeds is not one. Try three materially different actionable paths before treating an external dependency as a blocker.
 6. Keep exact requested verification and executable acceptance checks. Do not substitute a cheaper check for a requested E2E or observable result.
 7. Progress belongs in commentary. Continue every actionable item and phase in the same turn; an item/phase checkpoint is not a stopping boundary.
-8. Stop only when every phase is complete or validly blocked/deferred. Re-read disk state and run `assert-finalizable` before final output; Stop-hook feedback means continue/repair, not summarize again.
+8. During execution, stop only when every phase is complete or validly blocked/deferred. Re-read disk state and run `assert-finalizable` before final output; Stop-hook feedback means continue/repair, not summarize again. Clarification/discussion may yield as described above without claiming finalization.
 
 Read [work-loop and maintenance details](references/work-loop-and-maintenance.md) for async waits, error retention, phase continuation, pause handling, and compaction order.
 
@@ -75,19 +81,7 @@ python3 <skill-dir>/scripts/plan_checkpoint.py --plan <tasks.md> complete P2.1 -
 python3 <skill-dir>/scripts/plan_checkpoint.py --plan <tasks.md> assert-finalizable --project-root <project-root>
 ```
 
-To settle a phase without completing it, use one call rather than hand-editing the status line:
-
-```bash
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <file_fingerprint> \
-  phase-update <N> --status deferred --reason "<what the user postponed>"
-```
-
-When the user pauses the work, `pause` settles the phase, stands down Active Item, syncs Resume Checkpoint, and writes `handoff.md` last in one call. Write `decisions.md` and `findings.md` yourself first; `pause` does not author them.
-
-```bash
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <file_fingerprint> \
-  pause --all-remaining --reason "<why work stops>" --handoff-content '<body>'
-```
+Use `plan_edit.py phase-update` for blocked/deferred phases. For a user pause, update decisions/findings first, then use `pause` to settle phases, clear Active Item, sync Resume Checkpoint, and write any handoff last. Read the [phase and pause commands](references/plan-operations.md) before either operation.
 
 On the `complete` call whose JSON reports `"next_item":null`, add `--deactivate-pointer`. It clears the pointer only when this plan still owns it. Skipping this makes finalization fail with `POINTER_ACTIVE`.
 
@@ -104,9 +98,9 @@ python3 <skill-dir>/scripts/plan_state.py section <decisions.md> "Active Decisio
 python3 <skill-dir>/scripts/plan_state.py budgets <tasks.md>
 ```
 
-Read output supplies two hashes: `file_fingerprint` (full SHA-256) is the only value `plan_edit.py --expected-fingerprint` accepts; the 16-hex `fingerprint` is a semantic progress hash and is never an edit token. Stale, invalid, unsafe, or budget-worsening edits fail closed. `--plan`, `--expected-fingerprint`, and `--dry-run` are global flags that precede the subcommand; use `--dry-run` for consequential structure changes. Every subcommand has `--help` that states its exact requirements. Direct Markdown reads/edits remain valid for uncommon repair or narrative restructuring. Keep `plan_checkpoint.py` as the execution-transition API.
+For `plan_edit.py --expected-fingerprint`, use `file_fingerprint` (full SHA-256), never the 16-hex progress `fingerprint`. Stale, invalid, unsafe, or budget-worsening edits are rejected. Put global flags (`--plan`, `--expected-fingerprint`, `--dry-run`) before the subcommand; use `--dry-run` for consequential structure changes and `--help` for exact syntax. Direct Markdown access remains allowed for broad judgment or repair; execution transitions still use `plan_checkpoint.py`.
 
-Read [targeted plan operations](references/plan-operations.md) before structural/section/archive/handoff commands. Archive operations are lock-protected and journaled; the next invocation recovers an interrupted history-first transaction or stops on a fingerprint conflict.
+Read [targeted plan operations](references/plan-operations.md) before structural, section, archive, or handoff commands, including recovery after interrupted archival.
 
 ## Maintenance invariants
 
@@ -125,11 +119,4 @@ Compact completed notes, verification, resolved errors, and oldest non-current c
 
 Keep `Resume Checkpoint` current. Create `handoff.md` only when volatile pause state cannot fit there. It requires timezone-aware ISO-8601 `Updated` and `Reverify after`; ignore/re-verify it when expired or when required planning files are newer. Mark volatile results `[external-state observed=<ISO-8601> reverify-after=<ISO-8601>]` and rerun them after expiry.
 
-## References
-
-- [Routing and hook semantics](references/routing-and-hooks.md) — ownership, root resolution, session lifecycle, provider behavior.
-- [Exact format contract](references/format-contract.md) — section order, phase/status/item grammar, legacy migration.
-- [Targeted plan operations](references/plan-operations.md) — read/edit/archive commands, schemas, recovery.
-- [Work loop and maintenance](references/work-loop-and-maintenance.md) — waits, errors, continuation, compaction, handoff.
-- [Observing long runs](references/observing-runs.md) — telemetry and deterministic behavioral evaluation.
-- [Context-engineering rationale](reference.md) and [examples](examples.md).
+For telemetry or behavioral evaluation, read [observing long runs](references/observing-runs.md). For background or worked plans, see the [rationale](reference.md) and [examples](examples.md).

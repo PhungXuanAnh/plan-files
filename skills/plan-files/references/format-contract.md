@@ -14,7 +14,7 @@ Task Identity contains concise visible bullets:
 - Non-goals: <scope boundary or explicit none>
 ```
 
-Before work, Current Phase and Active Item may be empty. During work:
+Before work, Current Phase and Active Item may be empty with all phases pending; this is valid discussion state. An operational mutation still requires starting an item. During work:
 
 ```markdown
 ## Current Phase

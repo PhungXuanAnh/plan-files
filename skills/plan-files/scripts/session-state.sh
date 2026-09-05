@@ -93,7 +93,9 @@ write_route() {
         if [ -n "$candidate" ]; then
             printf 'candidate=%s\n' "$candidate"
         fi
-    } > "$tmp" && mv "$tmp" "$file"
+    } > "$tmp" && mv "$tmp" "$file" || return 1
+    # A feedback exception never carries across a prompt/ownership transition.
+    python3 "$_SCRIPT_DIR/feedback_transport.py" clear "$file" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -117,8 +119,8 @@ mark_pending() {
     if [ -f "$file" ]; then
         status=$(read_value "$file" status)
         case "$status" in
-            owned) candidate=$(read_value "$file" task) ;;
-            pending) candidate=$(read_value "$file" candidate) ;;
+            owned|discussing) candidate=$(read_value "$file" task) ;;
+            pending|waiting) candidate=$(read_value "$file" candidate) ;;
         esac
     fi
     if ! task_exists "$candidate"; then
@@ -187,7 +189,7 @@ resolve_owned() {
     file=$(route_file "$adapter_id" "$session_id") || return 1
     [ -f "$file" ] || return 1
     status=$(read_value "$file" status)
-    [ "$status" = "owned" ] || return 1
+    { [ "$status" = "owned" ] || [ "$status" = "discussing" ]; } || return 1
     task=$(read_value "$file" task)
     task_exists "$task" || return 1
     printf '%s/%s' "$PLAN_ROOT" "$task"
@@ -198,7 +200,7 @@ pending_candidate() {
     file=$(route_file "$adapter_id" "$session_id") || return 1
     [ -f "$file" ] || return 1
     status=$(read_value "$file" status)
-    [ "$status" = "pending" ] || return 1
+    { [ "$status" = "pending" ] || [ "$status" = "waiting" ]; } || return 1
     candidate=$(read_value "$file" candidate)
     task_exists "$candidate" || return 1
     printf '%s' "$candidate"
@@ -239,13 +241,55 @@ bind_current() {
         return 1
     }
     status=$(read_value "$file" status)
-    [ "$status" = "pending" ] || {
+    { [ "$status" = "pending" ] || [ "$status" = "waiting" ]; } || {
         printf 'planning lease is not awaiting a scope decision -- it is likely already owned (auto-claimed when this task'"'"'s plan file was created/edited) or settled; this bind call is unnecessary. Run "resolve" to confirm ownership instead of hand-editing .plan-files.\n' >&2
         return 1
     }
     write_route "$file" owned "$task_id" "" || return 1
     write_pointer "$task_id"
     printf 'planning task bound for this prompt: %s\n' "$task_id"
+}
+
+# An explicit clarification yields the prompt without rejecting its candidate.
+# Waiting is deliberately not claimable: only an explicit bind can resume it.
+clarify_current() {
+    local task_id=$1 identity adapter_id session_id file candidate
+    [ "${PLANNING_DISABLED:-0}" != "1" ] && [ ! -e "$PROJECT_ROOT/.plan-files-skip" ] || return 1
+    identity=$(current_identity) || return 1
+    adapter_id=${identity%%$'\t'*}
+    session_id=${identity#*$'\t'}
+    candidate=$(pending_candidate "$adapter_id" "$session_id") || return 1
+    [ "$candidate" = "$task_id" ] || return 1
+    file=$(route_file "$adapter_id" "$session_id") || return 1
+    write_route "$file" waiting "" "$candidate" || return 1
+    printf 'planning candidate preserved: %s; ask the user now, then wait for their answer.\n' "$candidate"
+}
+
+# A user-requested discussion turn retains the task while gating execution.
+# A fresh prompt must scope-check again before implementation can resume.
+discuss_current() {
+    local task_id=$1 identity adapter_id session_id file owned
+    [ "${PLANNING_DISABLED:-0}" != "1" ] && [ ! -e "$PROJECT_ROOT/.plan-files-skip" ] || return 1
+    identity=$(current_identity) || return 1
+    adapter_id=${identity%%$'\t'*}
+    session_id=${identity#*$'\t'}
+    owned=$(resolve_owned "$adapter_id" "$session_id") || return 1
+    [ "$(basename "$owned")" = "$task_id" ] || return 1
+    file=$(route_file "$adapter_id" "$session_id") || return 1
+    write_route "$file" discussing "$task_id" "" || return 1
+    printf 'planning discussion only: %s; execution is gated until a new prompt is bound.\n' "$task_id"
+}
+
+route_status() {
+    local file
+    file=$(route_file "$1" "$2") || return 1
+    read_value "$file" status
+}
+
+feedback_file() {
+    local file
+    file=$(route_file "$1" "$2") || return 1
+    python3 "$_SCRIPT_DIR/feedback_transport.py" path "$file"
 }
 
 finish_task() {
@@ -267,6 +311,7 @@ finish_task() {
     # complete call, and clearing it here too would erase BOTH signals, leaving
     # a finished plan the user cannot refer back to in their next message.
     rm -f "$file" "${file%.state}.hook-state" "${file%.state}.hook-state.lock"
+    python3 "$_SCRIPT_DIR/feedback_transport.py" clear "$file" 2>/dev/null || true
     return 0
 }
 
@@ -299,6 +344,7 @@ release_current() {
     fi
 
     rm -f "$file" "${file%.state}.hook-state" "${file%.state}.hook-state.lock"
+    python3 "$_SCRIPT_DIR/feedback_transport.py" clear "$file" 2>/dev/null || true
     if [ "$pointer_id" = "$task_id" ]; then
         : > "$POINTER_FILE"
         printf 'planning candidate released and pointer cleared: %s\n' "$task_id"
@@ -330,21 +376,21 @@ candidate_context() {
     file="$PLAN_ROOT/$task_id/tasks.md"
     identity=$(extract_section "$file" 'Task Identity' 700)
     goal=$(extract_section "$file" 'Goal' 700)
-    [ -n "$identity$goal" ] || return 1
-    printf '%s\n' "[plan-files] Candidate task '$task_id' is not owned for this prompt. Scope-check it before loading any other planning file."
+    printf -v project_root_arg '%q' "$PROJECT_ROOT"
+    printf -v bind_tool_arg '%q' "$bind_tool"
+    printf -v task_arg '%q' "$task_id"
+    printf '%s\n' "[plan-files] OWNERSHIP ACTION REQUIRED for this prompt. Continue/implement this plan = SAME, even after research. Resolve ownership before other tools; this is not an external blocker."
+    printf '%s\n' "- SAME: run \`PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg bind $task_arg\`."
+    printf '%s\n' "- DIFFERENT: first run \`PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg release $task_arg\` only for a separate goal. This may clear the candidate pointer."
+    printf '%s\n' "- AMBIGUOUS: run \`PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg clarify $task_arg\`, then ask and wait. This keeps the candidate and blocks work; do not release it."
+    printf '%s\n' "After bind: overview, restore-check, then targeted reads; reconcile user-authorized scope changes before implementation. After release: continue separately. Never release merely to bypass a gate."
+    printf '\n%s\n' "Candidate task '$task_id' is not owned for this prompt. A previous prompt's bind does not carry forward. Non-goals still apply unless the user supersedes them."
     if [ -n "$identity" ]; then
         printf '\n## Task Identity\n%s\n' "$identity"
     fi
     if [ -n "$goal" ]; then
         printf '\n## Goal\n%s\n' "$goal"
     fi
-    printf -v project_root_arg '%q' "$PROJECT_ROOT"
-    printf -v bind_tool_arg '%q' "$bind_tool"
-    printf -v task_arg '%q' "$task_id"
-    printf '\n%s\n' "Classify the latest request using deterministic identity evidence first, then semantics: SAME, DIFFERENT, or AMBIGUOUS. A pending candidate MUST be resolved before any tool use: bind it for SAME, or release it when you will not continue it."
-    printf '%s\n' "- SAME: run \`PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg bind $task_arg\` before reading tasks.md, decisions.md, findings.md, or handoff.md."
-    printf '%s\n' "- DIFFERENT: first run \`PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg release $task_arg\`; this clears .plan-files only if it still points to this candidate. Then continue separately, creating/binding a new plan only if needed."
-    printf '%s\n' "- AMBIGUOUS: ask the user before mutating or switching a plan. If you must stop while waiting, release this candidate first so no unresolved pointer survives the turn."
 }
 
 extract_session_id() {
@@ -423,12 +469,28 @@ case "$command" in
         [ "$#" -eq 2 ] || exit 2
         release_current "$2"
         ;;
+    discuss)
+        [ "$#" -eq 2 ] || exit 2
+        discuss_current "$2"
+        ;;
+    clarify)
+        [ "$#" -eq 2 ] || exit 2
+        clarify_current "$2"
+        ;;
+    route-status)
+        [ "$#" -eq 3 ] || exit 2
+        route_status "$2" "$3"
+        ;;
+    feedback-file)
+        [ "$#" -eq 3 ] || exit 2
+        feedback_file "$2" "$3"
+        ;;
     candidate-context)
         [ "$#" -eq 3 ] || exit 2
         candidate_context "$2" "$3"
         ;;
     *)
-        printf 'usage: %s {bind TASK_ID|release TASK_ID|finish ADAPTER_ID SESSION_ID TASK_ID|pending ADAPTER_ID SESSION_ID [PREFERRED_TASK_ID]|claim ADAPTER_ID SESSION_ID TASK_ID|pending-candidate ADAPTER_ID SESSION_ID|resolve ADAPTER_ID SESSION_ID|cache ADAPTER_ID SESSION_ID|session-id|candidate-context TASK_ID BIND_TOOL}\n' "$0" >&2
+        printf 'usage: %s {bind TASK_ID|release TASK_ID|clarify TASK_ID|discuss TASK_ID|route-status ADAPTER_ID SESSION_ID|finish ADAPTER_ID SESSION_ID TASK_ID|pending ADAPTER_ID SESSION_ID [PREFERRED_TASK_ID]|claim ADAPTER_ID SESSION_ID TASK_ID|pending-candidate ADAPTER_ID SESSION_ID|resolve ADAPTER_ID SESSION_ID|cache ADAPTER_ID SESSION_ID|session-id|candidate-context TASK_ID BIND_TOOL}\n' "$0" >&2
         exit 2
         ;;
 esac

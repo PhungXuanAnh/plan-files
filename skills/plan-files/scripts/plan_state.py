@@ -682,7 +682,14 @@ def restore_payload(plan: Path) -> dict[str, object]:
     )
 
     actionable = any(phase.status not in SETTLED for phase in state.phases)
-    active_ok = not state.contracted or not actionable or (
+    # Discussion plans have not begun execution. PreTool still gates operational
+    # calls until an item is explicitly started; absence here is not corrupt state.
+    discussion = (
+        state.contracted and bool(state.phases)
+        and state.current_phase is None and not state.active_item
+        and all(phase.status == "pending" for phase in state.phases)
+    )
+    active_ok = discussion or not state.contracted or not actionable or (
         state.active_item is not None
         and not any(issue in state.issues for issue in ("ACTIVE_ITEM_INVALID", "ACTIVE_ITEM_REQUIRED"))
     )
@@ -761,6 +768,7 @@ def restore_payload(plan: Path) -> dict[str, object]:
         "ok": not issues,
         "plan": str(plan),
         "active_item": state.active_item,
+        "discussion_mode": discussion,
         "checks": checks,
         "freshness": {"handoff": handoff, "external_evidence": external},
         "issues": issues,
