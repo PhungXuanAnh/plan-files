@@ -733,7 +733,7 @@ write_contracted_plan
 sed -i '/^## Active Item$/{n;/^P1\.1$/d;}' "$PLAN_DIR/tasks.md"
 for SPEC in 'codex codex-contract' 'claude claude-contract' 'copilot copilot-contract'; do
     set -- $SPEC
-    assert_contains "$(pre_hook "$1" "$2" "npm test")" "ITEM STATE ACTION REQUIRED" "$1 PreTool blocks operation with missing Active Item"
+    assert_contains "$(pre_hook "$1" "$2" "npm test")" "OUTCOME-ITEM CONTRACT VIOLATION" "$1 PreTool blocks operation with missing Active Item"
     assert_eq "$(pre_hook "$1" "$2" "rg Phase .")" "{}" "$1 PreTool allows read-only item repair diagnosis"
     assert_eq "$(pre_hook "$1" "$2" "python3 $CHECKPOINT_TOOL --plan $PLAN_DIR/tasks.md start P1.1")" "{}" "$1 PreTool allows structured item repair"
 done
@@ -759,19 +759,19 @@ write_contracted_plan
 for SPEC in 'codex codex-contract' 'claude claude-contract' 'copilot copilot-contract'; do
     set -- $SPEC
     assert_contains "$(post_hook "$1" "$2" Read)" "Active Item P1.1" "$1 PostTool initial item context"
-    assert_eq "$(post_hook "$1" "$2" Read)" "{}" "$1 PostTool suppresses read-only reminder noise"
+    assert_not_contains "$(post_hook "$1" "$2" Read)" "Active Item P1.1" "$1 PostTool keeps repeated Stop advisory compact"
     assert_contains "$(post_hook "$1" "$2" Bash "pytest -q")" "structured checkpoint before any unrelated tool" "$1 PostTool checkpoint barrier after likely evidence"
     POST_STATE=$(PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" cache "$1" "$2")
     sed -i 's/^unchanged_risk_score=.*/unchanged_risk_score=2/; s/^last_item_nudge_ts=.*/last_item_nudge_ts=0/; s/^last_stale_ts=.*/last_stale_ts=0/; s/^item_nudge_streak=.*/item_nudge_streak=0/' "$POST_STATE"
     STALE_FIRST=$(post_hook "$1" "$2" Bash "pytest -q")
     assert_contains "$STALE_FIRST" "STALE ITEM STATE: no plan change for" "$1 PostTool risk-aware stale item detection"
-    assert_contains "$STALE_FIRST" "plan_checkpoint.py progress P1.1" "$1 PostTool stale line offers a partial-evidence path"
+    assert_contains "$STALE_FIRST" "$CHECKPOINT_TOOL --plan $PLAN_DIR/tasks.md progress P1.1" "$1 PostTool stale line offers a runnable partial-evidence command"
     # The line must not restate itself on every later call: repeating a growing
     # counter is what drowned real signal during long browser/E2E journeys.
     sed -i 's/^last_item_nudge_ts=.*/last_item_nudge_ts=0/' "$POST_STATE"
     assert_not_contains "$(post_hook "$1" "$2" Bash "pytest -q")" "STALE ITEM STATE" "$1 PostTool stale line stays re-armed, not repeated"
     # Read-only exploration must not accrue semantic risk at all.
-    assert_eq "$(post_hook "$1" "$2" Bash "cd /tmp && grep -n foo bar.py")" "{}" "$1 PostTool ignores prefixed read-only shell exploration"
+    assert_not_contains "$(post_hook "$1" "$2" Bash "cd /tmp && grep -n foo bar.py")" "Active Item P1.1" "$1 PostTool avoids repeated context for read-only shell exploration"
 done
 grep -q '^- \[ \] \[P1.1\]' "$PLAN_DIR/tasks.md" || fail "PostTool never auto-completes an item"
 POST_LOG=$(cat "$PROJECT/tmp/hook-logs/plan-files/post-tool-use.log")

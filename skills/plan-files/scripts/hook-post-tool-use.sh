@@ -17,6 +17,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/hook-common.sh"
 INPUT=$(cat)
 PROVIDER=${1:-}
 REPO_ROOT=${2:-}
+# Optional so an un-updated provider shim degrades to silence, never to an error.
+BIND_TOOL=${3:-}
 [ -n "$PROVIDER" ] && [ -d "$REPO_ROOT/skills/plan-files/scripts" ] || { printf '{}'; exit 0; }
 STATE_TOOL="$REPO_ROOT/skills/plan-files/scripts/session-state.sh"
 
@@ -32,6 +34,17 @@ SESSION_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" session-id 2>/dev/null || true
 if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION_ID" 2>/dev/null)" = "discussing" ]; then
     printf '{}'; exit 0
 fi
+# --- JSON escape (bash-only, no python) -------------------------------------
+json_escape() {
+    local s=${1:-}
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    s=${s//$'\t'/\\t}
+    s=${s//$'\r'/\\r}
+    s=${s//$'\n'/\\n}
+    printf '"%s"' "$s"
+}
+
 PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" resolve "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
 if [ -z "$PLAN_DIR" ] && [ -n "$SESSION_ID" ] && command -v python3 >/dev/null 2>&1; then
     # PreToolUse cannot claim a brand-new task's first Write (tasks.md/
@@ -46,20 +59,24 @@ if [ -z "$PLAN_DIR" ] && [ -n "$SESSION_ID" ] && command -v python3 >/dev/null 2
     fi
 fi
 if [ -z "$PLAN_DIR" ]; then
+    # Unresolved ownership is the one state Stop is guaranteed to block on, so
+    # staying silent here hides the problem until the turn is already over.
+    # Repeat the same routing actions Stop would give, bounded, every call.
+    CANDIDATE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" pending-candidate "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+    if [ -n "$CANDIDATE" ] && [ -x "$BIND_TOOL" ]; then
+        OWNERSHIP_WARN=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" candidate-context \
+            "$CANDIDATE" "$BIND_TOOL" 2>/dev/null || true)
+        if [ -n "$OWNERSHIP_WARN" ]; then
+            OWNERSHIP_WARN="[plan-files] STOP WILL BLOCK: ownership is unresolved for this prompt.
+$(planning_bounded_warning "$OWNERSHIP_WARN")"
+            printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":%s}}' \
+                "$(json_escape "$OWNERSHIP_WARN")"
+            exit 0
+        fi
+    fi
     printf '{}'
     exit 0
 fi
-
-# --- JSON escape (bash-only, no python) -------------------------------------
-json_escape() {
-    local s=${1:-}
-    s=${s//\\/\\\\}
-    s=${s//\"/\\\"}
-    s=${s//$'\t'/\\t}
-    s=${s//$'\r'/\\r}
-    s=${s//$'\n'/\\n}
-    printf '"%s"' "$s"
-}
 
 PLAN_SOURCE="$PROVIDER session lease -> $PLAN_DIR"
 PLAN_FILE="$PLAN_DIR/tasks.md"
@@ -119,15 +136,32 @@ log "${PLAN_FILE}: present (${PLAN_BYTES} bytes)"
 count_phases "$PLAN_FILE"
 log "phases: total=$TOTAL complete=$COMPLETE in_progress=$IN_PROGRESS pending=$PENDING blocked=$BLOCKED deferred=$DEFERRED"
 
-SETTLED_ISSUE=""
-if [ "$TOTAL" -gt 0 ] && [ $((COMPLETE + BLOCKED + DEFERRED)) -ge "$TOTAL" ]; then
-    SETTLED_ISSUE=$(planning_settled_integrity_issue "$PLAN_FILE")
-    if [ -z "$SETTLED_ISSUE" ]; then
-        log "decision: valid owned plan is settled -> emitting {}"
-        echo '{}'
-        exit 0
+BACKGROUND_WARN=$(printf '%s' "$INPUT" | python3 "$REPO_ROOT/skills/plan-files/scripts/maintenance-tool-allowed.py" planning-background-warning)
+# Evaluate before settlement/debounce, so unchanged violations never go silent.
+INTEGRITY_WARN=$(planning_integrity_warning "$PLAN_FILE")
+COMPACTION_WARN=$(planning_file_budget_warning "$PLAN_DIR")
+RESTORE_WARN=$(planning_restore_warning "$PLAN_DIR")
+STOP_RISK=""
+if [ -n "$INTEGRITY_WARN" ]; then
+    STOP_RISK="[plan-files] STOP WILL BLOCK: repair plan integrity now.
+${INTEGRITY_WARN}"
+elif [ "$TOTAL" -gt 0 ] && [ $((COMPLETE + BLOCKED + DEFERRED)) -lt "$TOTAL" ] \
+    && [ $((COMPLETE + IN_PROGRESS + BLOCKED + DEFERRED)) -gt 0 ]; then
+    STOP_RISK="[plan-files] STOP WILL BLOCK: actionable phases remain. Continue the Active Item and remaining phases; checkpoint evidence immediately."
+fi
+FINALIZE_WARN=""
+if [ "$TOTAL" -gt 0 ] && [ $((COMPLETE + BLOCKED + DEFERRED)) -ge "$TOTAL" ] \
+    && [ -z "$INTEGRITY_WARN" ]; then
+    # Pointer cleanup is a finalization reminder, not an execution prerequisite.
+    if grep -qE '^## Active Item[[:space:]]*$' "$PLAN_FILE"; then
+        FINALIZE_ISSUE=$(planning_assert_finalizable "$PLAN_FILE" "$PWD")
+        if [ "$FINALIZE_ISSUE" != "FINALIZABLE" ]; then
+            FINALIZE_WARN="[plan-files] FINALIZATION ACTION REQUIRED ($FINALIZE_ISSUE). Run: python3 $(planning_script_path plan_checkpoint.py) --plan $PLAN_FILE assert-finalizable --project-root $PWD. Finish pointer cleanup before final output."
+        fi
     fi
-    log "settled plan remains active because integrity check found: $SETTLED_ISSUE"
+    if [ -z "$COMPACTION_WARN$RESTORE_WARN$FINALIZE_WARN$BACKGROUND_WARN" ]; then
+        echo '{}'; exit 0
+    fi
 fi
 
 # Per-section hard caps. Prevents runaway model verbosity from inflating
@@ -387,9 +421,9 @@ CHECKPOINT_LAG_SECS=0
 
 log "item_state fingerprint=${PLAN_FINGERPRINT:-unavailable} active_item=${ACTIVE_ITEM:-none} plan_changed=$PLAN_CHANGED unchanged_tools=$UNCHANGED_TOOL_COUNT risk=$UNCHANGED_RISK_SCORE tool_class=$TOOL_CLASS checkpoint_lag=${CHECKPOINT_LAG_SECS}s stale=$STALE_CHECKPOINT emit_nudge=$EMIT_NUDGE inject_full=$INJECT_FULL"
 
-if [ -n "$SETTLED_ISSUE" ]; then
+EMIT_CONTEXT_NUDGE=$EMIT_NUDGE
+if [ -n "$STOP_RISK$COMPACTION_WARN$RESTORE_WARN$FINALIZE_WARN$BACKGROUND_WARN" ]; then
     EMIT_NUDGE=true
-    INJECT_FULL=true
 fi
 
 if [ "$EMIT_NUDGE" = "false" ]; then
@@ -418,49 +452,30 @@ ${PHASE_BODY}"
     fi
 fi
 
+NUDGE=""
+if [ "$EMIT_CONTEXT_NUDGE" = "true" ]; then
 if [ "$CONTRACTED" = "true" ] && [ -n "$ACTIVE_ITEM" ]; then
     NUDGE="[plan-files] Active Item ${ACTIVE_ITEM}: ${ACTIVE_TEXT} Evidence: ${ACTIVE_EVIDENCE:-pending}
 [plan-files] If this tool result satisfies the outcome, your next workflow operation must be the structured checkpoint before any unrelated tool. Otherwise continue the same item and record material partial/error evidence; arbitrary tool success is not semantic completion."
     if [ "$STALE_CHECKPOINT" = "true" ]; then
         NUDGE="${NUDGE}
-[plan-files] STALE ITEM STATE: no plan change for ${CHECKPOINT_LAG_SECS}s across ${UNCHANGED_TOOL_COUNT} tool result(s) (latest class ${TOOL_CLASS}). Checkpoint ${ACTIVE_ITEM} now if its evidence predicate is true. If it is legitimately a long multi-step item, record what you have with 'plan_checkpoint.py progress ${ACTIVE_ITEM} --evidence ...' and keep going. This line repeats at most every ${STALE_REPEAT_SECS}s until the plan changes."
+[plan-files] STALE ITEM STATE: no plan change for ${CHECKPOINT_LAG_SECS}s across ${UNCHANGED_TOOL_COUNT} tool result(s) (latest class ${TOOL_CLASS}). Checkpoint ${ACTIVE_ITEM} now if its evidence predicate is true. If it is legitimately a long multi-step item, record what you have with 'python3 $(planning_script_path plan_checkpoint.py) --plan ${PLAN_FILE} progress ${ACTIVE_ITEM} --evidence ...' and keep going. This line repeats at most every ${STALE_REPEAT_SECS}s until the plan changes."
     fi
 else
-    NUDGE="[plan-files] Update tasks.md with what you just did. If a phase is now complete, update ${PLAN_FILE} status. If you no longer see the plan-files SKILL.md rules in your context (post-/compact, or you have forgotten them), reload the plan-files skill by yourself before continuing."
+    NUDGE="[plan-files] Update tasks.md with what you just did. If a phase is now complete, update ${PLAN_FILE} status. If the plan-files skill rules are no longer in your context (post-/compact, or you have forgotten them), reload them by reading $(planning_doc_path SKILL.md) before continuing."
 fi
-if [ -n "$SETTLED_ISSUE" ]; then
-    NUDGE="${NUDGE}
-[plan-files] Settled markers failed integrity check (${SETTLED_ISSUE}); keep this owned plan active and fix it before stopping."
 fi
-COMPACTION_WARN=$(planning_file_budget_warning "$PLAN_DIR")
-if [ -n "$COMPACTION_WARN" ]; then
-    NUDGE="${NUDGE}
-${COMPACTION_WARN}"
-    log "compaction warn injected (${#COMPACTION_WARN} chars)"
-fi
-RESTORE_WARN=$(planning_restore_warning "$PLAN_DIR")
-if [ -n "$RESTORE_WARN" ]; then
-    NUDGE="${NUDGE}
-${RESTORE_WARN}"
-    log "restore warn injected (${#RESTORE_WARN} chars)"
-fi
+for WARNING in "$STOP_RISK" "$COMPACTION_WARN" "$RESTORE_WARN" "$FINALIZE_WARN" "$BACKGROUND_WARN"; do
+    if [ -n "$WARNING" ]; then
+        NUDGE="${NUDGE:+${NUDGE}
+}$(planning_bounded_warning "$WARNING")"
+    fi
+done
 # Only attach REMAINING_LINE on the call where the count actually changed,
 # OR on the first injection in a session (LAST_REMAINING_COUNT empty).
 if [ "$INJECT_FULL" = "true" ] && [ -n "$REMAINING_LINE" ]; then
     NUDGE="${NUDGE}
 ${REMAINING_LINE}"
-fi
-
-# --- Format / Workflow-Profile reminder (delegated to common.sh)
-# Re-check when the plan changes; structural validation remains active throughout.
-if [ "$INJECT_FULL" = "true" ]; then
-    FORMAT_ISSUE=$(check_task_plan_format "$PLAN_FILE")
-    FORMAT_WARN=$(task_plan_format_messages "$FORMAT_ISSUE" "$PLAN_FILE" "$TOTAL")
-    if [ -n "$FORMAT_WARN" ]; then
-        NUDGE="${NUDGE}
-[plan-files] ${FORMAT_WARN}"
-        log "format warn injected (${#FORMAT_WARN} chars)"
-    fi
 fi
 
 if [ -n "$PLAN_SUMMARY" ]; then

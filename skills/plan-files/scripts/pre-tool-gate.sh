@@ -13,6 +13,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 STATE_TOOL="$SCRIPT_DIR/session-state.sh"
 PLAN_STATE_TOOL="$SCRIPT_DIR/plan_state.py"
+source "$SCRIPT_DIR/hook-common.sh"
 
 # The caller's cwd is not necessarily the workspace root (a submodule's own
 # toplevel isn't, and a plain non-git folder containing several checkouts has
@@ -99,26 +100,9 @@ budget_warning() {
     python3 "$PLAN_STATE_TOOL" budget-warning "$plan_dir/tasks.md" 2>/dev/null || true
 }
 
+# PreTool reports unstarted discussion state; the shared core owns the wording.
 restore_warning() {
-    local plan_dir=$1 payload
-    [ -f "$plan_dir/tasks.md" ] || return 0
-    command -v python3 >/dev/null 2>&1 || return 0
-    payload=$(python3 "$PLAN_STATE_TOOL" restore-check "$plan_dir/tasks.md" 2>/dev/null) || true
-    [ -n "$payload" ] || return 0
-    printf '%s' "$payload" | python3 -c 'import json,sys
-try: p=json.load(sys.stdin)
-except Exception: raise SystemExit(0)
-if p.get("discussion_mode"):
-    print("[plan-files] DISCUSSION ONLY. Start the user-authorized Active Item with plan_checkpoint.py before operational work.", end="")
-    raise SystemExit(0)
-if p.get("ok", True): raise SystemExit(0)
-issues=p.get("issues", [])
-parts=[]
-for issue in issues[:3]:
-    parts.append("{code} in {source} ## {heading}: {repair}".format(**issue))
-more=len(issues)-len(parts)
-if more > 0: parts.append(f"{more} more issue(s)")
-print("[plan-files] RESTORE STATE ACTION REQUIRED: " + "; ".join(parts) + ". Run plan_state.py restore-check on the owned tasks.md for the bounded complete diagnosis.", end="")' 2>/dev/null || true
+    planning_restore_warning "${1:-}" with-discussion
 }
 
 maintenance_tool_allowed() {
@@ -165,6 +149,20 @@ if [ -n "$FEEDBACK_FILE" ] && printf '%s' "$TOOL_INPUT_JSON" \
 fi
 
 TOOL_COMMAND=$(extract_tool_command)
+
+# Recognize a read-only read of the skill entrypoint before any gate can reject
+# it, and record it immediately. An agent that loads the rules first is doing
+# the right thing in every routing state, so that read must count even when it
+# happens before bind — otherwise the skill gate punishes the correct order.
+SKILL_DOC=$(planning_doc_path SKILL.md)
+SKILL_READ=false
+if [ -f "$SKILL_DOC" ] \
+    && [ -n "$(printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" names-skill-doc "$SKILL_DOC" 2>/dev/null)" ]; then
+    SKILL_READ=true
+    PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" skill-loaded "$PROVIDER" "$SESSION_ID" mark 2>/dev/null || true
+    log "session=$SESSION_ID skill_read=observed tool=$TOOL_NAME"
+fi
+
 MUTATION_STATUS=0
 MUTATION_PLAN=$(mutation_plan_id 2>/dev/null) || MUTATION_STATUS=$?
 if [ "$MUTATION_STATUS" -eq 2 ]; then
@@ -216,7 +214,17 @@ if [ -z "$PLAN_DIR" ]; then
     EXPECTED_BIND="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg bind $task_arg"
     EXPECTED_RELEASE="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg release $task_arg"
     EXPECTED_CLARIFY="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg clarify $task_arg"
-    if [ "$TOOL_COMMAND" = "$EXPECTED_CLARIFY" ]; then
+    # Every routing verb the candidate message offers must be runnable here,
+    # or the message names an action its own gate refuses.
+    EXPECTED_DISCUSS="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg discuss $task_arg"
+    if [ "$TOOL_COMMAND" = "$EXPECTED_CLARIFY" ] || [ "$TOOL_COMMAND" = "$EXPECTED_DISCUSS" ]; then
+        printf '{}'; exit 0
+    fi
+    # Reading the skill is how the agent learns to classify this very prompt, so
+    # it precedes routing rather than waiting on it. Read-only and confined to
+    # the skill install directory, it touches no plan or project state.
+    if [ "$SKILL_READ" = "true" ]; then
+        log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-skill-read-before-routing tool=$TOOL_NAME"
         printf '{}'; exit 0
     fi
     if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION_ID")" = "waiting" ] \
@@ -247,6 +255,9 @@ printf -v project_root_arg '%q' "$PWD"
 printf -v bind_tool_arg '%q' "$BIND_TOOL"
 printf -v task_arg '%q' "$(basename "$PLAN_DIR")"
 EXPECTED_DISCUSS="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg discuss $task_arg"
+BACKGROUND_WARN=$(printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" planning-background-warning)
+[ -z "$BACKGROUND_WARN" ] || block "$BACKGROUND_WARN"
+
 printf -v plan_arg '%q' "$PLAN_DIR/tasks.md"
 printf -v state_arg '%q' "$PLAN_STATE_TOOL"
 MAINTENANCE_ACTION="Run: python3 $state_arg budgets $plan_arg. Then archive/consolidate completed material in the owned plan; preserve unfinished work."
@@ -257,7 +268,15 @@ if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION
     if maintenance_tool_allowed "$PLAN_DIR"; then
         printf '{}'; exit 0
     fi
-    block "[plan-files] DISCUSSION ONLY. Reads, questions, and owned-plan maintenance are allowed; execution requires a new user prompt and bind. The candidate and unfinished work are preserved."
+    # A discussion lease protects the plan, not the filesystem. A user who asks a
+    # question and asks for it written down must still get the file, so a write
+    # whose targets all sit outside the plan root is allowed; the plan itself,
+    # and any command whose targets cannot be located, is not.
+    if printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" outside-every-plan "$PWD"; then
+        log "session=$SESSION_ID decision=allow-discussion-non-plan-write tool=$TOOL_NAME"
+        printf '{}'; exit 0
+    fi
+    block "[plan-files] DISCUSSION ONLY. Allowed: reads, questions, owned-plan maintenance, and writes whose targets all lie outside $PWD/tmp/plan-files (a report or notes the user asked for). Blocked: writes into any plan directory, and shell commands whose write targets cannot be located — use a write tool with an explicit path for those. Advancing the plan itself requires a new user prompt and bind. The candidate and unfinished work are preserved."
 fi
 DISCUSSION_HINT="If the user requested only discussion of this plan/workflow, run exactly: $EXPECTED_DISCUSS. This permits a discussion Stop while keeping execution gated; do not use it to pause authorized implementation."
 
@@ -267,28 +286,15 @@ DISCUSSION_HINT="If the user requested only discussion of this plan/workflow, ru
 # morally "plan-local repair" but names nothing -- `plan_edit.py --help`, a
 # version probe -- reads as a broken gate rather than as a call the classifier
 # simply cannot see.
-ALLOWED_HINT="Still allowed, recognized from the tool input rather than from a tool or script name: (1) calls that are demonstrably read-only; (2) calls whose input targets or explicitly names the owned plan directory $PLAN_DIR. So pass --plan $PLAN_DIR/tasks.md on repair/checkpoint commands; a bare --help or a version probe names nothing and is blocked like any other unrecognized call."
+ALLOWED_HINT="Still allowed, recognized from the tool input rather than from a tool or script name: (1) calls that are demonstrably read-only; (2) calls whose write targets all lie inside the owned plan directory $PLAN_DIR; (3) shell commands that actually execute one of the planning helper scripts in $(planning_script_path '' | sed 's:/$::'), passing --plan $PLAN_DIR/tasks.md. A shell command's write targets cannot be parsed, so merely mentioning a plan path in it authorizes nothing; a bare --help or a version probe names nothing and is blocked like any other unrecognized call."
 
-# Contracted plans fail closed for operational mutations when item state is
-# invalid. Read-only diagnosis and plan-local repair/checkpoint calls remain
-# available so the agent can repair the state instead of claiming a blocker.
-ITEM_ISSUE=""
-if grep -qE '^## Active Item[[:space:]]*$' "$PLAN_DIR/tasks.md" 2>/dev/null; then
-    if command -v python3 >/dev/null 2>&1 && [ -f "$PLAN_STATE_TOOL" ]; then
-        ITEM_ISSUE=$(python3 "$PLAN_STATE_TOOL" validate "$PLAN_DIR/tasks.md" 2>/dev/null || true)
-    else
-        ITEM_ISSUE=ITEM_STATE_TOOL_UNAVAILABLE
+# Invalid format/profile/status blocks execution before Stop, including legacy plans.
+INTEGRITY_WARN=$(planning_integrity_warning "$PLAN_DIR/tasks.md")
+if [ -n "$INTEGRITY_WARN" ]; then
+    if maintenance_tool_allowed "$PLAN_DIR"; then
+        printf '{}'; exit 0
     fi
-fi
-if [ -n "$ITEM_ISSUE" ]; then
-    if [ -n "$MUTATION_PLAN" ] || maintenance_tool_allowed "$PLAN_DIR"; then
-        log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") item_issue=$ITEM_ISSUE decision=allow-item-repair tool=$TOOL_NAME"
-        printf '{}'
-        exit 0
-    fi
-    REASON_TEXT="[plan-files] ITEM STATE ACTION REQUIRED ($ITEM_ISSUE). Operational mutation is blocked until the owned plan has one valid unchecked Active Item in Current Phase with phase-matching unique P/V IDs and Evidence lines. $ALLOWED_HINT Repair/start the item, then retry this tool; do not report an external blocker."
-    log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") item_issue=$ITEM_ISSUE decision=block-item-state tool=$TOOL_NAME"
-    block "$REASON_TEXT"
+    block "$INTEGRITY_WARN Operational mutation is blocked until plan integrity is repaired. $ALLOWED_HINT"
 fi
 
 COMPACTION_WARN=$(budget_warning "$PLAN_DIR")
@@ -313,6 +319,18 @@ if [ -n "$RESTORE_WARN" ]; then
     REASON_TEXT="$RESTORE_WARN Operational mutation waits until restore-check passes. $ALLOWED_HINT"
     log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") restore=required decision=block-restore-state tool=$TOOL_NAME"
     block "$REASON_TEXT"
+fi
+
+# Last gate: an agent that never loaded the skill does not know the format
+# contract, the checkpoint protocol, or where these scripts live, and recovers
+# by guessing paths. Concrete plan faults above are reported first because they
+# are the more actionable blocker. Reads, owned-plan repair, and the skill read
+# itself remain available, so one read of the named path always clears this.
+if [ -f "$SKILL_DOC" ] \
+    && ! PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" skill-loaded "$PROVIDER" "$SESSION_ID" check 2>/dev/null \
+    && ! maintenance_tool_allowed "$PLAN_DIR"; then
+    log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=block-skill-unloaded tool=$TOOL_NAME"
+    block "[plan-files] SKILL NOT LOADED. Read $SKILL_DOC before operational work on the owned plan; it defines the format contract, the checkpoint protocol, and where these scripts live. Reading it once clears this gate for the session. If the rules are already in your context, read the file anyway so the gate can observe it. $ALLOWED_HINT"
 fi
 
 log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") maintenance=ok restore=ok decision=allow tool=$TOOL_NAME"

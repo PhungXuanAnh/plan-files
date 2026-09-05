@@ -57,8 +57,8 @@ A direct complete-file read is valid for format repair, compaction judgment, or 
 
 Codex, Claude Code, Copilot, and Grok Build reuse canonical shell hook cores for resolver/session integration, common format helpers, semantic stale policy, maintenance gating, telemetry, and Stop finalization. Provider launch shims pass the provider name, session identity, and the small output-envelope differences required by each host. Provider-unique events may keep a local adapter when their input or output contract has no shared counterpart, but that adapter must delegate candidate selection and session state to the canonical scripts.
 
-- PreTool gates ambiguous ownership, invalid item/restore state, and over-budget unrelated mutations while allowing read-only diagnosis and owned-plan repair. It recognizes both from the tool input, never from a tool or script name: a call passes when it is demonstrably read-only, or when its input targets or explicitly names the owned plan directory. A repair/checkpoint command that names no plan path — a bare `--help`, a version probe — is therefore blocked like any other unrecognized call; pass `--plan <plan-dir>/tasks.md` and it is allowed. Every block message states this condition, so treat it as the instruction rather than as a broken gate.
-- PostTool injects bounded current context, checkpoint reminders, restore repairs, and compaction warnings. It does not complete items.
+- PreTool gates ambiguous ownership, an unloaded skill, invalid format/profile/item/status/restore state (including legacy plans), explicit background planning helpers, and over-budget unrelated mutations while allowing read-only diagnosis and owned-plan repair. It recognizes both from the tool input, never from a tool or script name: a call passes when it is demonstrably read-only, or when its input targets or explicitly names the owned plan directory. A repair/checkpoint command that names no plan path — a bare `--help`, a version probe — is therefore blocked like any other unrecognized call; pass `--plan <plan-dir>/tasks.md` and it is allowed. Every block message states this condition, so treat it as the instruction rather than as a broken gate.
+- PostTool repeats the routing actions while ownership is unresolved instead of staying silent, then checks integrity, restore state, and budgets before debounce or the settled-plan fast path. Unresolved diagnostics repeat every call; actionable work gets a short Stop warning every call. Full plan context and evidence reminders retain their debounce. It does not complete items.
 - Stop blocks actionable or invalid plans and supplies a continuation instruction.
 
 An unstarted contracted plan (empty Current Phase/Active Item, all phases pending) is restorable discussion state. PreTool still requires starting an Active Item before operational work. Over-budget plans continue to allow questions, recognized reads, and owned-plan repair; a question about an unrelated task does not authorize binding or compacting the candidate.
@@ -72,3 +72,44 @@ Official Grok applies a 256-Unicode-character budget to PreTool denial reasons b
 The feedback exception is deliberately based on tool arguments, not tool names: any call whose arguments contain the current generated path is allowed in full, including unfamiliar tools, nested values, or additional arguments. Other tool calls retain the normal ownership/restore/maintenance gates. Reading feedback does not confer ownership. A new prompt, bind, clarify, discuss, release, or finish invalidates the previous feedback file. Different projects/providers/sessions cannot use each other's path as an exception. The file contains only the hook's existing trusted recovery message, never arbitrary tool input or hidden session state.
 
 The same core mechanism can serve another adapter with a small reason budget; provider wrappers only declare the capability. Stop can still deliver its full context directly. Grok source is reference-only: the official installed executable needs no modification or rebuild. Tests measure the short delivered reason and the complete recovered instructions separately, including through the unchanged Grok runner.
+
+## Early enforcement and Stop audit
+
+All three events use `planning_integrity_warning` in the canonical core; adapters only render their envelopes. Re-evaluate disk state on each tool event, including companion-file freshness. Repair calls and read-only diagnosis remain available; unrelated operational calls wait until the fault is repaired.
+
+| Condition | PreToolUse | PostToolUse | Stop |
+|---|---|---|---|
+| Pending ownership | Require a routing verb before work | Repeat the same routing actions every call | Repeat routing actions |
+| Malformed sections, phase headings/statuses, Current Phase, missing/unfilled profile | Block operational work, including legacy plans | Repeat bounded repair diagnostics each call | Block with full shared diagnosis |
+| Invalid Active Item, ids, evidence | Block operational work | Repeat shared diagnosis | Block |
+| Complete phase with unchecked work, stale Current Phase, hidden non-phase work | Block operational work | Repeat shared diagnosis | Block |
+| Missing/placeholder resume state, stale handoff/external evidence | Block operational work | Repeat restore repairs each call | Explicit restore-check remains required before final output |
+| Hot-state over budget | Block outside writes/unknown calls | Repeat compaction guidance each call | Maintenance remains required by the work loop |
+| Valid actionable phases | Allow authorized work | Short Stop warning each call; no repeated full context | Continue remaining work |
+| Settled contracted plan with active candidate pointer | Allow cleanup | Repeat finalization/POINTER_ACTIVE reminder | Existing lease settlement behavior is preserved; assert-finalizable remains required |
+| Never-started proposal or explicit clarify/discuss lease | Preserve routing/discussion gates | No execution pressure in explicit discussion | Allow discussion without claiming completion |
+| Skill never read in this session | Block operational mutation, naming the absolute `SKILL.md` path; allow the read-only skill read in any routing state | Existing reload advisory | No separate Stop condition |
+
+Persistent integrity diagnostics are capped at 3000 characters plus a short repair-read hint; full reasons remain available at Stop. Other warning families are bounded separately. Clearing one fault removes its warning on the next PostTool; other faults still repeat. Pending work is not an invalid state and must never be used to block the tools needed to complete it. Stop remains the final backstop rather than the first diagnosis.
+
+Explicit background flags (`background`, `is_background`, `run_in_background`) or shell detachment are denied for recognized short planning helper execution/discovery. The shared classifier handles known shell tool names and ordinary command forms; this is workflow guidance/enforcement, not a general shell security boundary. Background builds, servers and test suites remain available. A provider that renames arguments or automatically backgrounds a foreground command needs adapter capability support; the skill cannot intercept UI interrupts or suppress host completion notifications. Existing feedback-file and explicit routing recovery exceptions still apply.
+
+## Self-sufficient messages
+
+A message that tells the agent to run or read something names its absolute path, resolved at runtime by `planning_skill_dir`/`planning_script_path`/`planning_doc_path` from the core's own location through install symlinks. Never hardcode an install path, and never emit a bare script basename: an agent that has to guess a path guesses the provider hook directory it was invoked from, fails, and then searches the filesystem. `tests/test-ownership-flow.py::test_messages_name_absolute_paths` fails any bare mention across every adapter.
+
+The candidate/ownership message offers every verb its own gate accepts: `bind`, `release`, `clarify`, and `discuss`. `discuss` applies to an owned plan and to a pending candidate, so a question about the plan, this workflow, or the agent's own behavior has an offered action that settles Stop instead of blocking on unresolved ownership.
+
+The skill gate is the last PreTool mutation gate, so concrete plan faults are reported first. Recognition, however, runs before every gate: a read-only call whose input names the resolved `SKILL.md` path is recorded immediately and allowed even while ownership is pending, because reading the rules is how the agent classifies the prompt it is being routed on. The marker is session-scoped and status-independent, so a read before bind still counts after it. Requiring read-only means naming the path cannot carry an unrelated mutation past the gates this signal opens.
+
+A harness that loads the skill natively still has to read the file once; that is deliberate, because the gate can only observe what passes through a tool call. Every message that asks for the read therefore states it as required rather than conditional — telling an agent to read the file "if the rules are not in your context" leaves one that believes it knows them blocked on its first mutation, which is the failure this gate was meant to prevent.
+
+## What authorizes a call
+
+Authorization is read from tool input, and the signal must be one the input can actually prove:
+
+- A call is read-only, or every recognized write target lies inside the owned plan directory.
+- A shell command qualifies as plan maintenance only when the program it executes is a planning helper. Its write targets cannot be parsed, so a plan path appearing somewhere in the command proves nothing about what it writes — otherwise `<any mutation>; cat <plan>/tasks.md` would launder arbitrary work through the owned-plan allowance, and an agent reading the allowed-calls hint would find that bypass and use it. Malformed or unquotable commands fail closed.
+- The path-mention fallback survives only for non-shell tools with unknown input schemas, where an explicit path field is absent but the plan is still named.
+
+A discussion lease protects the plan, not the filesystem. Under `discussing`, a mutation whose recognized targets all lie outside the plan root is allowed, so a user who asks a question and asks for the answer written down still gets the file. Writes into a plan directory keep their existing rules, and a command whose targets cannot be located stays blocked.

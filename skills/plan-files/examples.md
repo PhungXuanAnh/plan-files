@@ -162,3 +162,17 @@ Overwrite the file at the next pause. Ignore and re-verify it after `Reverify af
 ```
 
 Read the ledger before editing it; never silently delete the earlier choice.
+
+## Repair before execution
+
+If a plan has `Phase 99` as Current Phase without such a phase, a missing status, and `**Profile:** [A | B | C]`, the next PreTool blocks operational work. Read the owned plan and fix all three fields; reads and owned-plan edits still pass. PostTool repeats the unresolved diagnosis even when the plan has not changed. Once repaired, that diagnosis disappears; a compact Stop warning remains while work is actionable.
+
+Every hook message names the absolute path of what it asks for, so copy the command as printed: `Run: python3 /abs/skill-dir/scripts/plan_state.py restore-check /abs/project/tmp/plan-files/<task>/tasks.md`. Do not re-derive the location; a background `find` across the home directory is never the recovery. If the host already returns a task id, wait/get that result before dependent work instead of launching the same command again.
+
+## Answering a question without owning the plan
+
+The user asks why the last run behaved a certain way, and the prompt hook reports a pending candidate. This is neither SAME, DIFFERENT, nor AMBIGUOUS: nothing is being implemented and nothing needs clarifying. Run the `discuss` command the message offers, answer, and stop. Execution stays gated and the candidate pointer survives for the next prompt.
+
+## First operational call in a session
+
+Read the absolute `SKILL.md` path the ownership message names before anything else, including before bind: that read is allowed in every routing state and counts once the plan is bound. Read it even when the rules already appear in context — the gate observes tool calls, not context. Skip it and the first operational call answers `SKILL NOT LOADED` with the same path; diagnosis reads and owned-plan repair still work while it blocks, so there is never a reason to release the plan or report an environment blocker.

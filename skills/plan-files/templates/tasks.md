@@ -13,13 +13,13 @@
 - Non-goals: [nearby work that must not be mistaken for this task]
 
 ## Current Phase
-<!-- Keep empty while planning/discussing. Otherwise the entire body must be exactly "Phase N". -->
+<!-- Keep empty only before any phase starts. Otherwise use exactly an existing "Phase N", even after settlement. PreTool gates invalid format; PostTool repeats repairs until fixed. -->
 
 ## Active Item
 <!-- Keep empty while planning/discussing or after settlement. During work use exactly one unchecked ID from Current Phase, for example P2.1 or V2.1. -->
 
 ## Workflow Profile
-<!-- Pick exactly one before implementation: A, B, or C. -->
+<!-- Fill exactly one before operational work: A, B, or C. Unfilled profiles trigger PreTool repair gating. -->
 **Profile:** [A | B | C]
 
 - **A - PR-Handoff:** stop after PR opened, CI green, reviewers requested.

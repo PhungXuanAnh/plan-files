@@ -279,7 +279,7 @@ bind codex codex-b
 SECOND_POST=$(post_hook codex codex-b)
 assert_contains "$FIRST_POST" "Update tasks.md" "first session PostTool"
 assert_contains "$SECOND_POST" "Update tasks.md" "second session PostTool"
-assert_eq "$(post_hook codex codex-a)" "{}" "same-session debounce"
+assert_not_contains "$(post_hook codex codex-a)" "## Goal" "same-session full context debounce"
 
 # Pending ownership must be recoverable, not interpreted as an environment block.
 PENDING_OUTPUT=$(prompt codex codex-pending)

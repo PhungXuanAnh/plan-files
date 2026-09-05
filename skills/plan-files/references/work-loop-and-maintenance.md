@@ -29,6 +29,12 @@ Retain errors by future value:
 
 ## Async waits
 
+Run `plan_state.py`, `plan_edit.py`, `plan_checkpoint.py`, session binding/root resolution and their path discovery in the foreground. Use the script directory next to the loaded `SKILL.md`; do not scan the home directory to rediscover a known installation. These are short, dependency-bearing operations: wait for the result before another plan mutation or implementation step. Do not combine them with a background build/test command; split the calls.
+
+Grok exposes `background` (some versions/tools use `is_background`); Claude exposes `run_in_background`. Keep the applicable flag false. For Codex or another tool that yields a running session after its foreground time budget, use the returned wait/output tool in the same turn. Do not rerun a still-running checkpoint: collect its result first. Keep waits bounded so user updates remain possible.
+
+Grok also permits the user to background a foreground command with Ctrl+B or a new message; a completion `<system-reminder>` is a host task notification, not a planning validation failure. The notification alone does not reveal which trigger applied. A home-wide `find` may take a long time even when its output is small. Hooks can deny an explicit background request they receive, but cannot undo host/UI scheduling or remove already queued notifications. Use the returned task id to collect output and continue; do not change harness binaries or disable all background work.
+
 For a long command, external job, or test run, prefer a streaming/monitor tool that returns output into the same turn. Do not end turns merely to poll; each turn re-triggers Stop without proving useful progress. If no monitor exists and the external wait genuinely spans turns, record the exact resume check and mark the phase `blocked (reason)`, then continue other actionable phases.
 
 ## Exact verification

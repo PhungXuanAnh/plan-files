@@ -24,7 +24,7 @@ Phase 2
 P2.1
 ```
 
-The entire visible Current Phase body is exactly `Phase N`. The Active Item body is exactly one unchecked id in that phase. Clear Active Item after all phases settle.
+The entire visible Current Phase body is exactly an existing `Phase N`; retain the final resolved phase after settlement. Format/profile and status-integrity errors are checked before operational tools and repeated after every tool until repaired, using the same policy as Stop. The Active Item body is exactly one unchecked id in that phase. Clear Active Item after all phases settle.
 
 Workflow Profile is exactly one of:
 

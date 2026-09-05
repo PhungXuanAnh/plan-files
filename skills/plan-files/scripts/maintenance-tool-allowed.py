@@ -322,7 +322,8 @@ def tool_class(payload: dict, plan_dir: Path) -> dict[str, object]:
     targets = mutation_targets(tool_input)
     plan_maintenance = mutation and (
         (bool(targets) and all(inside(path, plan_dir) for path in targets))
-        or references_owned_plan(tool_input, plan_dir)
+        or (shell_runs_planning_helper(tool_input) if simple_name in SHELL_TOOL_NAMES
+            else references_owned_plan(tool_input, plan_dir))
     )
     if plan_maintenance:
         category = "plan_maintenance"
@@ -429,7 +430,133 @@ def load_payload() -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
+PLANNING_HELPERS = {"plan_state.py", "plan_edit.py", "plan_checkpoint.py", "session-state.sh",
+                    "resolve-project-root.sh", "bind-session.sh"}
+
+
+def shell_command_text(payload_or_input: object) -> str:
+    args = payload_or_input
+    command = (args.get("command") or args.get("cmd") or "") if isinstance(args, dict) else args
+    return command if isinstance(command, str) else ""
+
+
+def planning_helper_segments(command: str):
+    """Yield (segment, words) for segments whose executed program is a planning helper.
+
+    Inspects the program actually run, never an incidental argument, so naming a
+    helper or a plan path inside some other command grants nothing.
+    """
+    for segment in SEGMENT_SPLIT_RE.split(command):
+        try:
+            words = shlex.split(segment)
+        except ValueError:
+            continue
+        start = next((i for i, word in enumerate(words) if "=" not in word
+                      and Path(word).name not in {"env", "nohup", "setsid"}), None)
+        if start is None:
+            continue
+        executable = Path(words[start]).name
+        operands = words[start + 1:]
+        planning = executable in PLANNING_HELPERS
+        if executable in {"python", "python3", "bash", "sh"}:
+            script = next((word for word in operands if not word.startswith("-")), "")
+            planning = "-c" not in operands and "-m" not in operands and Path(script).name in PLANNING_HELPERS
+        elif executable in {"find", "rg", "ls", "readlink", "realpath"}:
+            planning = any(Path(word).name in PLANNING_HELPERS for word in operands)
+        if planning:
+            yield segment, words
+
+
+def shell_runs_planning_helper(tool_input: object) -> bool:
+    """True when the command actually executes a planning helper."""
+    return any(True for _ in planning_helper_segments(shell_command_text(tool_input)))
+
+
+def planning_background_warning(payload: dict) -> str:
+    """Recognize explicit detachment of short planning helpers, not arbitrary jobs."""
+    name = str(payload.get("tool_name") or payload.get("toolName") or "")
+    if name.lower().rsplit("__", 1)[-1].rsplit(".", 1)[-1] not in SHELL_TOOL_NAMES:
+        return ""
+    args = payload_tool_input(payload)
+    command = shell_command_text(args)
+    if not command:
+        return ""
+    explicit = isinstance(args, dict) and any(
+        args.get(key) is True for key in ("background", "is_background", "run_in_background")
+    )
+    for segment, words in planning_helper_segments(command):
+        # Only treat an unquoted shell ampersand as explicit detachment.
+        lexer = shlex.shlex(segment, posix=False, punctuation_chars="&>")
+        lexer.whitespace_split = True
+        detached = "&" in list(lexer) or any(word in {"nohup", "setsid"} for word in words)
+        if explicit or detached:
+            return ("[plan-files] FOREGROUND PLANNING COMMAND REQUIRED. Run planning helpers and their "
+                    "path discovery with background/is_background/run_in_background=false and without "
+                    "shell detachment. Resolve scripts relative to the loaded SKILL.md; avoid home-wide find. "
+                    "If the harness already returned a task id, wait/get its output in this turn before "
+                    "dependent work; do not launch a duplicate or end the turn just to poll.")
+    return ""
+
+
+def is_read_only_call(payload: dict) -> bool:
+    """Same read-only recognition the maintenance gate applies, reusable alone."""
+    name = str(payload.get("tool_name") or payload.get("toolName") or "").lower()
+    simple = name.rsplit("__", 1)[-1]
+    tool_input = payload_tool_input(payload)
+    if simple.rsplit(".", 1)[-1] in QUESTION_TOOLS or any(
+            simple.startswith(prefix) for prefix in READ_TOOL_PREFIXES):
+        return True
+    return simple in SHELL_TOOL_NAMES and bash_is_read_only(tool_input)
+
+
+def names_skill_document(payload: dict, skill_md: str) -> bool:
+    """Recognize a read-only read of the skill entrypoint, from tool input.
+
+    Any tool that names the resolved SKILL.md path counts, so a harness with an
+    unfamiliar reader schema can still satisfy the gate in one call. Requiring
+    read-only means naming the path cannot smuggle an unrelated mutation past a
+    gate that this same signal is allowed to open.
+    """
+    target = skill_md.replace("\\", "/")
+    if not target:
+        return False
+    if not any(target in value.replace("\\", "/")
+               for value in strings(payload_tool_input(payload))):
+        return False
+    return is_read_only_call(payload)
+
+
+def outside_every_plan(tool_input: object, project_root: Path) -> bool:
+    """True when every recognized write target lies outside the plan root.
+
+    A discussion lease protects the plan, not the filesystem, so a report the
+    user asked for may be written. Unrecognizable targets return False: a shell
+    command's writes cannot be located, so it cannot be cleared this way.
+    """
+    targets = mutation_targets(tool_input)
+    if not targets:
+        return False
+    roots = [Path(os.path.realpath(project_root / "tmp" / name))
+             for name in ("plan-files", "plan-with-files")]
+    return not any(inside(path, root) for path in targets for root in roots)
+
+
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] == "outside-every-plan":
+        payload = load_payload()
+        if payload is None:
+            return 1
+        return 0 if outside_every_plan(payload_tool_input(payload),
+                                       Path(os.path.realpath(sys.argv[2]))) else 1
+    if len(sys.argv) == 3 and sys.argv[1] == "names-skill-doc":
+        payload = load_payload()
+        print("1" if payload is not None and names_skill_document(payload, sys.argv[2]) else "", end="")
+        return 0
+    if len(sys.argv) == 2 and sys.argv[1] == "planning-background-warning":
+        payload = load_payload()
+        if payload is not None:
+            print(planning_background_warning(payload), end="")
+        return 0
     if len(sys.argv) == 2 and sys.argv[1] == "question-tool":
         payload = load_payload()
         if payload is None:
@@ -471,6 +598,12 @@ def main() -> int:
     targets = mutation_targets(tool_input)
     if targets:
         return 0 if all(inside(path, plan_dir) for path in targets) else 1
+    # A shell command's write targets are not parseable, so a plan path appearing
+    # somewhere in it proves nothing about what it writes. Authorize it only when
+    # it actually runs a planning helper; otherwise `<mutation>; cat <plan>/x.md`
+    # would launder any mutation through the owned-plan allowance.
+    if simple_name in SHELL_TOOL_NAMES:
+        return 0 if shell_runs_planning_helper(tool_input) else 1
     if references_owned_plan(tool_input, plan_dir):
         return 0
     return 1

@@ -30,7 +30,7 @@ Interpret the signals separately:
 
 For controlled comparisons, pin the model/effort, Codex version, bridge revision, skill revision, prompt, and fixture. Run several repetitions because first-final timing is stochastic. Compare planning disabled, the current policy, and the revised item-aware policy only on safe local/mock fixtures; production mutations are not required.
 
-Both JSON reporters use schema version 1. Scope telemetry hashes task/session identifiers and never logs raw hook input. New counters are additive; older PostTool lines without semantic class/risk remain readable as `legacy`/zero values.
+Both JSON reporters use schema version 1. Scope telemetry hashes task/session identifiers and never logs raw hook input. `stop_risk_advisories` counts expected repeated Stop warnings in behavioral evaluation. `redundant_reminders` measures repeated full goal/item context, and `read_only_false_reminders` measures inappropriate checkpoint/stale pressure, excluding compact Stop advisories. New counters are additive; older PostTool lines without semantic class/risk remain readable as `legacy`/zero values.
 
 ## Recorded comparison (2026-08-28)
 

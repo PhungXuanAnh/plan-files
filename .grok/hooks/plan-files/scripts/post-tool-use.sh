@@ -12,4 +12,4 @@ printf '%s' "$INPUT" | grok_input_has_verified_session || { printf '{}'; exit 0;
 # builds safely ignore it, so correctness never depends on that delivery.
 printf '%s' "$INPUT" \
     | bash "$GROK_REPO_ROOT/skills/plan-files/scripts/hook-post-tool-use.sh" \
-        grok "$GROK_REPO_ROOT"
+        grok "$GROK_REPO_ROOT" "$GROK_ADAPTER_DIR/bind-session.sh"

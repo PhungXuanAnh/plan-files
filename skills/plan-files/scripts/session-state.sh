@@ -213,6 +213,24 @@ cache_file() {
     printf '%s.hook-state' "${file%.state}"
 }
 
+# The skill rules do not vary per task, so this marker is session-scoped and
+# survives rebinding. It is a separate file because PostTool rewrites its own
+# cache wholesale. Deliberately status-independent: an agent that loads the
+# skill before resolving ownership is doing the right thing, and that read must
+# still count once the plan is bound.
+skill_loaded() {
+    local mode=${3:-check} file marker
+    file=$(route_file "$1" "$2") || return 1
+    marker="${file%.state}.skill-loaded"
+    case "$mode" in
+        mark)  mkdir -p "$(dirname "$marker")" 2>/dev/null || return 1
+               : > "$marker" 2>/dev/null || return 1 ;;
+        clear) rm -f "$marker" 2>/dev/null || true ;;
+        check) [ -f "$marker" ] || return 1 ;;
+        *)     return 2 ;;
+    esac
+}
+
 current_identity() {
     [ -n "${PWF_SESSION_ADAPTER:-}" ] && [ -n "${PWF_SESSION_ID:-}" ] || return 1
     valid_adapter_id "$PWF_SESSION_ADAPTER" && valid_session_id "$PWF_SESSION_ID" || return 1
@@ -268,15 +286,25 @@ clarify_current() {
 # A user-requested discussion turn retains the task while gating execution.
 # A fresh prompt must scope-check again before implementation can resume.
 discuss_current() {
-    local task_id=$1 identity adapter_id session_id file owned
+    local task_id=$1 identity adapter_id session_id file owned candidate
     [ "${PLANNING_DISABLED:-0}" != "1" ] && [ ! -e "$PROJECT_ROOT/.plan-files-skip" ] || return 1
     identity=$(current_identity) || return 1
     adapter_id=${identity%%$'\t'*}
     session_id=${identity#*$'\t'}
-    owned=$(resolve_owned "$adapter_id" "$session_id") || return 1
-    [ "$(basename "$owned")" = "$task_id" ] || return 1
+    # A question about a plan is answerable whether or not this prompt bound it,
+    # so a pending candidate may enter discussion directly. Without this, a pure
+    # question has no offered verb that settles Stop.
+    owned=$(resolve_owned "$adapter_id" "$session_id" 2>/dev/null || true)
+    candidate=$(pending_candidate "$adapter_id" "$session_id" 2>/dev/null || true)
+    if [ -n "$owned" ] && [ "$(basename "$owned")" = "$task_id" ]; then
+        candidate=""
+    elif [ -n "$candidate" ] && [ "$candidate" = "$task_id" ]; then
+        :
+    else
+        return 1
+    fi
     file=$(route_file "$adapter_id" "$session_id") || return 1
-    write_route "$file" discussing "$task_id" "" || return 1
+    write_route "$file" discussing "$task_id" "$candidate" || return 1
     printf 'planning discussion only: %s; execution is gated until a new prompt is bound.\n' "$task_id"
 }
 
@@ -372,6 +400,7 @@ extract_section() {
 
 candidate_context() {
     local task_id=$1 bind_tool=$2 file identity goal project_root_arg bind_tool_arg task_arg
+    local state_tool_arg plan_arg skill_arg
     task_exists "$task_id" || return 1
     file="$PLAN_ROOT/$task_id/tasks.md"
     identity=$(extract_section "$file" 'Task Identity' 700)
@@ -379,11 +408,22 @@ candidate_context() {
     printf -v project_root_arg '%q' "$PROJECT_ROOT"
     printf -v bind_tool_arg '%q' "$bind_tool"
     printf -v task_arg '%q' "$task_id"
+    printf -v state_tool_arg '%q' "$_SCRIPT_DIR/plan_state.py"
+    printf -v plan_arg '%q' "$file"
+    printf -v skill_arg '%q' "$(CDPATH= cd -P -- "$_SCRIPT_DIR/.." && printf '%s/SKILL.md' "$PWD")"
     printf '%s\n' "[plan-files] OWNERSHIP ACTION REQUIRED for this prompt. Continue/implement this plan = SAME, even after research. Resolve ownership before other tools; this is not an external blocker."
     printf '%s\n' "- SAME: run \`PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg bind $task_arg\`."
     printf '%s\n' "- DIFFERENT: first run \`PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg release $task_arg\` only for a separate goal. This may clear the candidate pointer."
     printf '%s\n' "- AMBIGUOUS: run \`PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg clarify $task_arg\`, then ask and wait. This keeps the candidate and blocks work; do not release it."
-    printf '%s\n' "After bind: overview, restore-check, then targeted reads; reconcile user-authorized scope changes before implementation. After release: continue separately. Never release merely to bypass a gate."
+    # A question about this workflow, the agent's own behavior, or the plan
+    # without continuing it is none of the three above. Without this verb such
+    # a prompt has no offered way to settle Stop and blocks on a false positive.
+    printf '%s\n' "- DISCUSSION ONLY (a question about this plan, this workflow, or your own behavior, with no implementation): run \`PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg discuss $task_arg\`. This answers and stops cleanly while keeping execution gated and the candidate intact."
+    # State this as a required step, not a conditional one. The gate observes
+    # tool calls, not context, so "read it if you do not already know it" leaves
+    # an agent that believes it knows the rules blocked on its first mutation.
+    printf '%s\n' "Read $skill_arg once in this session before operational work — required even if its rules are already in your context, because the gate observes tool calls. Reading it also resolves routing correctly and is allowed before bind."
+    printf '%s\n' "After bind: run \`python3 $state_tool_arg overview $plan_arg\` and \`python3 $state_tool_arg restore-check $plan_arg\` before targeted reads; reconcile user-authorized scope changes before implementation. After release: continue separately. Never release merely to bypass a gate."
     printf '\n%s\n' "Candidate task '$task_id' is not owned for this prompt. A previous prompt's bind does not carry forward. Non-goals still apply unless the user supersedes them."
     if [ -n "$identity" ]; then
         printf '\n## Task Identity\n%s\n' "$identity"
@@ -457,6 +497,10 @@ case "$command" in
         [ "$#" -eq 3 ] || exit 2
         cache_file "$2" "$3"
         ;;
+    skill-loaded)
+        { [ "$#" -eq 3 ] || [ "$#" -eq 4 ]; } || exit 2
+        skill_loaded "$2" "$3" "${4:-check}"
+        ;;
     bind)
         [ "$#" -eq 2 ] || exit 2
         bind_current "$2"
@@ -490,7 +534,7 @@ case "$command" in
         candidate_context "$2" "$3"
         ;;
     *)
-        printf 'usage: %s {bind TASK_ID|release TASK_ID|clarify TASK_ID|discuss TASK_ID|route-status ADAPTER_ID SESSION_ID|finish ADAPTER_ID SESSION_ID TASK_ID|pending ADAPTER_ID SESSION_ID [PREFERRED_TASK_ID]|claim ADAPTER_ID SESSION_ID TASK_ID|pending-candidate ADAPTER_ID SESSION_ID|resolve ADAPTER_ID SESSION_ID|cache ADAPTER_ID SESSION_ID|session-id|candidate-context TASK_ID BIND_TOOL}\n' "$0" >&2
+        printf 'usage: %s {bind TASK_ID|release TASK_ID|clarify TASK_ID|discuss TASK_ID|route-status ADAPTER_ID SESSION_ID|finish ADAPTER_ID SESSION_ID TASK_ID|pending ADAPTER_ID SESSION_ID [PREFERRED_TASK_ID]|claim ADAPTER_ID SESSION_ID TASK_ID|pending-candidate ADAPTER_ID SESSION_ID|resolve ADAPTER_ID SESSION_ID|cache ADAPTER_ID SESSION_ID|skill-loaded ADAPTER_ID SESSION_ID [check|mark|clear]|session-id|candidate-context TASK_ID BIND_TOOL}\n' "$0" >&2
         exit 2
         ;;
 esac

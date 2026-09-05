@@ -3,6 +3,9 @@
 # Source this file from hook-agent-stop.sh and hook-post-tool-use.sh; do NOT execute directly.
 #
 # Provides:
+#   planning_skill_dir                — absolute installed skills/plan-files directory
+#   planning_script_path NAME         — absolute path of a skill script for messages
+#   planning_doc_path RELPATH         — absolute path of SKILL.md or a references/ file
 #   resolve_plan_dir ROOT             — set TASK_ID PLAN_DIR PLAN_FILE from pointer
 #   current_phase_pointer PLAN_FILE   — print only a valid exact `Phase N` pointer
 #   planning_item_context PLAN_FILE   — print contracted item state as compact JSON
@@ -52,19 +55,47 @@ current_phase_pointer() {
     fi
 }
 
-planning_state_tool() {
+# ---------------------------------------------------------------------------
+# planning_skill_dir
+# Absolute path of the installed skills/plan-files directory, resolved through
+# install symlinks from this file's own location. Messages must name paths the
+# agent can act on directly; a bare script name makes it guess or search.
+# ---------------------------------------------------------------------------
+planning_skill_dir() {
     local _dir _candidate
     _dir=$(CDPATH= cd -P -- "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd) || return 1
     for _candidate in \
-        "$_dir/plan_state.py" \
-        "$_dir/../../../../skills/plan-files/scripts/plan_state.py" \
-        "$_dir/../../../skills/plan-files/scripts/plan_state.py"; do
-        if [ -f "$_candidate" ]; then
-            (cd "$(dirname "$_candidate")" && printf '%s/%s' "$PWD" "$(basename "$_candidate")")
+        "$_dir/.." \
+        "$_dir/../../../../skills/plan-files" \
+        "$_dir/../../../skills/plan-files"; do
+        if [ -f "$_candidate/SKILL.md" ]; then
+            (CDPATH= cd -P -- "$_candidate" 2>/dev/null && printf '%s' "$PWD")
             return 0
         fi
     done
     return 1
+}
+
+# planning_script_path NAME — absolute path of a skill script, or the bare name
+# when the skill layout cannot be resolved, so a message never loses its verb.
+planning_script_path() {
+    local _dir
+    _dir=$(planning_skill_dir) || { printf '%s' "${1:-}"; return 0; }
+    printf '%s/scripts/%s' "$_dir" "${1:-}"
+}
+
+# planning_doc_path RELPATH — absolute path of SKILL.md or a references/ file.
+planning_doc_path() {
+    local _dir
+    _dir=$(planning_skill_dir) || { printf '%s' "${1:-}"; return 0; }
+    printf '%s/%s' "$_dir" "${1:-}"
+}
+
+planning_state_tool() {
+    local _path
+    _path=$(planning_script_path plan_state.py)
+    [ -f "$_path" ] || return 1
+    printf '%s' "$_path"
 }
 
 planning_privacy_key() {
@@ -392,7 +423,7 @@ task_plan_format_message() {
             printf 'FORMAT CONTRACT VIOLATION in %s: every phase heading must be exactly "### Phase N: Title" with an integer, colon, and non-empty title.' "$_plan_file"
             ;;
         NO_PHASES)
-            printf 'FORMAT CONTRACT VIOLATION in %s: 0 phases detected. Required heading format is exactly "### Phase N: Title" (level-3, colon, no decorations, no backticks), and each phase MUST have one recognized status. See skills/plan-files/SKILL.md > FORMAT CONTRACT. Fix the plan file headings/status markers, then continue.' "$_plan_file"
+            printf 'FORMAT CONTRACT VIOLATION in %s: 0 phases detected. Required heading format is exactly "### Phase N: Title" (level-3, colon, no decorations, no backticks), and each phase MUST have one recognized status. See %s > FORMAT CONTRACT. Fix the plan file headings/status markers, then continue.' "$_plan_file" "$(planning_doc_path SKILL.md)"
             ;;
         PHASE_STATUS_INVALID)
             printf 'FORMAT CONTRACT VIOLATION in %s: every phase must have exactly one recognized inline or body status.' "$_plan_file"
@@ -404,10 +435,10 @@ task_plan_format_message() {
             printf 'FORMAT CONTRACT VIOLATION in %s: "**Status:** deferred" requires a non-empty parenthesised reason. Use "- **Status:** deferred (user-directed reason)" only when the user explicitly postpones the phase. Do not use it to silence the hook after a transient error.' "$_plan_file"
             ;;
         PROFILE_MISSING)
-            printf 'MISSING SECTION in %s: "## Workflow Profile" not found. This section is REQUIRED before implementation begins. It declares the agent handoff point: Profile A = PR-Handoff (stop after CI green), B = Staging-Verified (stop after staging E2E), C = Research/Document (no code/PR). Add it between "## Current Phase" and "## Phases", with "**Profile:** A" (or B or C) filled in. See skills/plan-files/SKILL.md > Workflow Profile.' "$_plan_file"
+            printf 'MISSING SECTION in %s: "## Workflow Profile" not found. This section is REQUIRED before implementation begins. It declares the agent handoff point: Profile A = PR-Handoff (stop after CI green), B = Staging-Verified (stop after staging E2E), C = Research/Document (no code/PR). Add it between "## Current Phase" and "## Phases", with "**Profile:** A" (or B or C) filled in. See %s > Workflow Profile.' "$_plan_file" "$(planning_doc_path SKILL.md)"
             ;;
         PROFILE_UNFILLED)
-            printf 'UNFILLED SECTION in %s: "## Workflow Profile" found but **Profile:** is not set to A, B, or C (placeholder still present or missing). Replace the "[A | B | C]" placeholder with exactly one letter: A (PR-Handoff — stop after CI green + reviewers), B (Staging-Verified — stop after staging E2E passes), or C (Research/Document — deliverable file complete). See skills/plan-files/SKILL.md > Workflow Profile.' "$_plan_file"
+            printf 'UNFILLED SECTION in %s: "## Workflow Profile" found but **Profile:** is not set to A, B, or C (placeholder still present or missing). Replace the "[A | B | C]" placeholder with exactly one letter: A (PR-Handoff — stop after CI green + reviewers), B (Staging-Verified — stop after staging E2E passes), or C (Research/Document — deliverable file complete). See %s > Workflow Profile.' "$_plan_file" "$(planning_doc_path SKILL.md)"
             ;;
         ACTIVE_ITEM_SECTION_INVALID)
             printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: "## Active Item" must appear exactly once, positioned after "## Current Phase" and before "## Phases", and its non-comment body must be empty or exactly one existing ID of the form "P<phase>.<n>" or "V<phase>.<n>" (for example "P2.1"). Fix the section count/position, or replace the body with a single valid ID or leave it empty.' "$_plan_file"
@@ -434,7 +465,7 @@ task_plan_format_message() {
             printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: an item is checked "[x]" but its Evidence line is still a placeholder (empty, "pending", "none", "n/a", "todo", or "tbd"). Replace it with concrete non-placeholder evidence — a command result, UI/API state, test result, or artifact reference — before the item may stay checked, or uncheck it if the work is not actually done.' "$_plan_file"
             ;;
         ITEM_STATE_TOOL_UNAVAILABLE)
-            printf 'ENVIRONMENT ISSUE while validating outcome items in %s: python3 or scripts/plan_state.py could not be run (missing python3 on PATH, or the skill scripts directory is not intact). This is not a plan-content problem — fix the environment and retry; do not edit tasks.md to work around it.' "$_plan_file"
+            printf 'ENVIRONMENT ISSUE while validating outcome items in %s: python3 or %s could not be run (missing python3 on PATH, or the skill scripts directory is not intact). This is not a plan-content problem — fix the environment and retry; do not edit tasks.md to work around it.' "$_plan_file" "$(planning_script_path plan_state.py)"
             ;;
     esac
 }
@@ -572,35 +603,6 @@ check_non_phase_work() {
 }
 
 # ---------------------------------------------------------------------------
-# planning_settled_integrity_issue TASKS_FILE
-# Empty only when an all-settled plan is structurally and semantically clean.
-# ---------------------------------------------------------------------------
-planning_settled_integrity_issue() {
-    local _plan_file="${1:-}" _issue _summary _num _status _unchecked _first _hidden
-    [ -f "$_plan_file" ] || { printf 'PLAN_MISSING'; return 0; }
-
-    count_phases "$_plan_file"
-    _issue=$(check_task_plan_format "$_plan_file")
-    if [ -n "$_issue" ]; then
-        printf '%s' "$_issue"
-        return 0
-    fi
-
-    _summary=$(phase_summary "$_plan_file")
-    while IFS=$'\t' read -r _num _status _unchecked _first; do
-        [ -z "${_num:-}" ] && continue
-        if [ "${_status:-}" = "complete" ] && [ "${_unchecked:-0}" -gt 0 ]; then
-            printf 'STATUS_LIES'
-            return 0
-        fi
-    done <<< "$_summary"
-
-    _hidden=$(check_non_phase_work "$_plan_file")
-    [ -n "$_hidden" ] && printf 'NON_PHASE_WORK'
-    return 0
-}
-
-# ---------------------------------------------------------------------------
 # planning_file_budget_warning PLAN_DIR
 # Warns on line, byte, or hot-plan phase-count budgets. Advisory only.
 # ---------------------------------------------------------------------------
@@ -639,16 +641,30 @@ planning_handoff_warning() {
 # planning_restore_warning PLAN_DIR
 # Emits only issue metadata and repairs; planning file bodies stay unloaded.
 # ---------------------------------------------------------------------------
+# planning_restore_warning PLAN_DIR [with-discussion]
+# Pass "with-discussion" where an unstarted plan must be reported instead of
+# treated as clean; PreTool needs it, PostTool does not.
 planning_restore_warning() {
-    local _plan_dir="${1:-}" _tool _payload
+    local _plan_dir="${1:-}" _mode="${2:-}" _tool _payload
     [ -n "$_plan_dir" ] && [ -f "$_plan_dir/tasks.md" ] || return 0
     _tool=$(planning_state_tool 2>/dev/null) || return 0
     command -v python3 >/dev/null 2>&1 || return 0
     _payload=$(python3 "$_tool" restore-check "$_plan_dir/tasks.md" 2>/dev/null) || true
     [ -n "$_payload" ] || return 0
-    printf '%s' "$_payload" | python3 -c 'import json,sys
+    printf '%s' "$_payload" | PWF_STATE_TOOL="$_tool" \
+        PWF_CHECKPOINT_TOOL="$(planning_script_path plan_checkpoint.py)" \
+        PWF_PLAN_FILE="$_plan_dir/tasks.md" PWF_RESTORE_MODE="$_mode" \
+        python3 -c 'import json,os,sys
 try: p=json.load(sys.stdin)
 except Exception: raise SystemExit(0)
+plan=os.environ["PWF_PLAN_FILE"]
+state_tool=os.environ["PWF_STATE_TOOL"]
+checkpoint_tool=os.environ["PWF_CHECKPOINT_TOOL"]
+if p.get("discussion_mode"):
+    if os.environ.get("PWF_RESTORE_MODE") != "with-discussion": raise SystemExit(0)
+    print("[plan-files] DISCUSSION ONLY. Start the user-authorized Active Item before operational work: "
+          f"python3 {checkpoint_tool} --plan {plan} start <ID>.", end="")
+    raise SystemExit(0)
 if p.get("ok", True): raise SystemExit(0)
 issues=p.get("issues", [])
 parts=[]
@@ -656,5 +672,99 @@ for issue in issues[:3]:
     parts.append("{code} in {source} ## {heading}: {repair}".format(**issue))
 more=len(issues)-len(parts)
 if more > 0: parts.append(f"{more} more issue(s)")
-print("[plan-files] RESTORE STATE ACTION REQUIRED: " + "; ".join(parts) + ". Run plan_state.py restore-check on the owned tasks.md for the bounded complete diagnosis.", end="")' 2>/dev/null || true
+print("[plan-files] RESTORE STATE ACTION REQUIRED: " + "; ".join(parts) +
+      f". For the bounded complete diagnosis run: python3 {state_tool} restore-check {plan}", end="")' 2>/dev/null || true
+}
+
+# Shared Stop-invalid state, also enforced before tools and repeated after tools.
+# Keep the same diagnostics for legacy and contracted plans. No session effects.
+planning_integrity_warning() {
+    local PLAN_FILE="$1" TOTAL COMPLETE IN_PROGRESS PENDING BLOCKED DEFERRED
+    local PHASE_NUM FORMAT_ISSUES SUMMARY LIE_PHASE LIE_COUNT LIE_FIRST
+    local CURRENT_NUM CURRENT_STATUS NEXT_INCOMPLETE NON_PHASE_HEADING
+    local _fmt_code _num _status _unchecked _first _idx _part COMBINED
+    local -a REASON_PARTS
+    count_phases "$PLAN_FILE"
+    PHASE_NUM=$(current_phase_pointer "$PLAN_FILE")
+    REASON_PARTS=()
+
+    FORMAT_ISSUES=$(check_task_plan_format "$PLAN_FILE")
+    if [ -n "$FORMAT_ISSUES" ]; then
+        while IFS= read -r _fmt_code; do
+            [ -n "$_fmt_code" ] || continue
+            REASON_PARTS+=("$(task_plan_format_message "$_fmt_code" "$PLAN_FILE" "$TOTAL") Fix the plan structure, then continue.")
+        done <<< "$FORMAT_ISSUES"
+    fi
+
+    SUMMARY=$(phase_summary "$PLAN_FILE")
+    LIE_PHASE=""
+    LIE_COUNT=0
+    LIE_FIRST=""
+    while IFS=$'\t' read -r _num _status _unchecked _first; do
+        [ -z "${_num:-}" ] && continue
+        if [ "${_status:-}" = "complete" ] && [ "${_unchecked:-0}" -gt 0 ]; then
+            LIE_PHASE="Phase ${_num}"
+            LIE_COUNT="${_unchecked}"
+            LIE_FIRST="${_first}"
+            break
+        fi
+    done <<< "$SUMMARY"
+
+    if [ -n "$LIE_PHASE" ]; then
+        REASON_PARTS+=("STATUS LIES in ${PLAN_FILE}: ${LIE_PHASE} is marked '**Status:** complete' but still has ${LIE_COUNT} unchecked '- [ ]' item(s). First: ${LIE_FIRST} | Either (a) finish the items and check the boxes, or (b) demote the phase to '**Status:** in_progress' and update '## Current Phase' to ${LIE_PHASE}, or (c) split the remaining items into a new '### Phase N+1: ...' with '**Status:** pending'. Do not stop with unchecked items inside a 'complete' phase.")
+    fi
+
+    # Stale Current Phase: pointer references a phase whose status is settled
+    # (complete, blocked, or deferred), AND a non-settled phase remains.
+    # Only fires if the user actually filled in ## Current Phase (PHASE_NUM non-empty).
+    if [ -n "${PHASE_NUM:-}" ] && [ $((COMPLETE + BLOCKED + DEFERRED)) -lt "$TOTAL" ]; then
+        CURRENT_NUM=$(printf '%s' "$PHASE_NUM" | grep -oE '[0-9]+' | head -1)
+        CURRENT_STATUS=""
+        NEXT_INCOMPLETE=""
+        while IFS=$'\t' read -r _num _status _unchecked _first; do
+            [ -z "${_num:-}" ] && continue
+            if [ "$_num" = "$CURRENT_NUM" ]; then
+                CURRENT_STATUS="${_status:-}"
+            fi
+            if [ -z "$NEXT_INCOMPLETE" ] && [ "${_status:-}" != "complete" ] && [ "${_status:-}" != "blocked" ] && [ "${_status:-}" != "deferred" ]; then
+                NEXT_INCOMPLETE="Phase ${_num}"
+            fi
+        done <<< "$SUMMARY"
+
+        if { [ "$CURRENT_STATUS" = "complete" ] || [ "$CURRENT_STATUS" = "blocked" ] || [ "$CURRENT_STATUS" = "deferred" ]; } && [ -n "$NEXT_INCOMPLETE" ]; then
+            REASON_PARTS+=("STALE '## Current Phase' in ${PLAN_FILE}: it points at ${PHASE_NUM} which is already '**Status:** ${CURRENT_STATUS}', but ${NEXT_INCOMPLETE} (and possibly later phases) are not settled. Update the '## Current Phase' section to '${NEXT_INCOMPLETE}' and set its status to 'in_progress' before continuing. The hook injects context based on Current Phase — leaving it on a settled phase makes the agent work on the wrong target.")
+        fi
+    fi
+
+    # --- Non-Phase work check (delegated to common.sh:check_non_phase_work) ----
+    # Catches the bypass pattern where the agent invents `### Step N:` /
+    # `### Task N:` / `### Stage N:` headings to hide unchecked work from the
+    # `^### Phase` scanner. Runs regardless of COMPLETE/TOTAL so it also fires
+    # when Phase 0..N are all marked complete and the remaining work was renamed
+    # to a non-Phase heading underneath. Heading-only sections (Rollback, Open
+    # question, etc.) are not flagged — only ones containing `- [ ]` items.
+    NON_PHASE_HEADING=$(check_non_phase_work "$PLAN_FILE")
+    if [ -n "$NON_PHASE_HEADING" ]; then
+        REASON_PARTS+=("FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: heading '### ${NON_PHASE_HEADING}' contains unchecked '- [ ]' work items but is NOT a recognized phase heading. The ONLY heading form recognized as work is '### Phase N: Title' (level-3, the literal word 'Phase', a number, a colon). Rename it to a valid phase and add one recognized status. Do NOT stop until every block of unchecked work lives under a '### Phase N:' heading.")
+    fi
+
+    [ "${#REASON_PARTS[@]}" -gt 0 ] || return 0
+    COMBINED=""
+    _idx=0
+    for _part in "${REASON_PARTS[@]}"; do
+        _idx=$((_idx + 1))
+        COMBINED="${COMBINED}(${_idx}/${#REASON_PARTS[@]}) ${_part}
+"
+    done
+    printf '[plan-files] %s' "$COMBINED"
+}
+
+# Repeated context stays bounded; full diagnosis remains available to Stop.
+planning_bounded_warning() {
+    local _text="$1" _limit=3000
+    if [ "${#_text}" -gt "$_limit" ]; then
+        printf '%s… [diagnosis shortened; read the owned tasks.md and %s for repair]' "${_text:0:$_limit}" "$(planning_doc_path references/format-contract.md)"
+    else
+        printf '%s' "$_text"
+    fi
 }

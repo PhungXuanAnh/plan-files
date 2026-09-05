@@ -178,104 +178,11 @@ if [ -n "${PHASE_NUM:-}" ]; then
     log "remaining: count=${REMAINING_COUNT:-?}"
 fi
 
-# --- Format / Workflow-Profile checks (delegated to common.sh), plus
-# status-integrity checks (STATUS LIES / STALE Current Phase / NON-PHASE
-# WORK) below — every applicable violation across ALL of these categories is
-# accumulated into REASON_PARTS and reported in ONE block, instead of only
-# the first one found across repeated block/fix/retry cycles. Catches two
-# classes of "the agent stopped too early" bug in the status-integrity part:
-#   (A) A phase marked **Status:** complete still has "- [ ]" items inside it.
-#       The phase counter trusts the status marker, so unchecked sub-tasks are
-#       invisible to the gate. Block until either the boxes are checked or the
-#       remaining work is split into a new ### Phase with status pending.
-#       Note: `blocked` and `deferred` phases are EXEMPT — their unchecked
-#       items are expected because no actionable work remains in this turn.
-#   (B) ## Current Phase points at a phase whose status is already complete
-#       (or blocked/deferred) while other phases are still pending/in_progress. The
-#       hook keeps injecting the wrong phase context and the agent loses
-#       track. Block until ## Current Phase is advanced to a non-settled phase.
-REASON_PARTS=()
-
-FORMAT_ISSUES=$(check_task_plan_format "$PLAN_FILE")
-if [ -n "$FORMAT_ISSUES" ]; then
-    while IFS= read -r _fmt_code; do
-        [ -n "$_fmt_code" ] || continue
-        REASON_PARTS+=("$(task_plan_format_message "$_fmt_code" "$PLAN_FILE" "$TOTAL") Fix the plan structure, then continue.")
-    done <<< "$FORMAT_ISSUES"
-fi
-
-SUMMARY=$(phase_summary "$PLAN_FILE")
-LIE_PHASE=""
-LIE_COUNT=0
-LIE_FIRST=""
-while IFS=$'\t' read -r _num _status _unchecked _first; do
-    [ -z "${_num:-}" ] && continue
-    if [ "${_status:-}" = "complete" ] && [ "${_unchecked:-0}" -gt 0 ]; then
-        LIE_PHASE="Phase ${_num}"
-        LIE_COUNT="${_unchecked}"
-        LIE_FIRST="${_first}"
-        break
-    fi
-done <<< "$SUMMARY"
-
-if [ -n "$LIE_PHASE" ]; then
-    REASON_PARTS+=("STATUS LIES in ${PLAN_FILE}: ${LIE_PHASE} is marked '**Status:** complete' but still has ${LIE_COUNT} unchecked '- [ ]' item(s). First: ${LIE_FIRST} | Either (a) finish the items and check the boxes, or (b) demote the phase to '**Status:** in_progress' and update '## Current Phase' to ${LIE_PHASE}, or (c) split the remaining items into a new '### Phase N+1: ...' with '**Status:** pending'. Do not stop with unchecked items inside a 'complete' phase.")
-    log "found: STATUS LIES — ${LIE_PHASE} complete with ${LIE_COUNT} unchecked"
-fi
-
-# Stale Current Phase: pointer references a phase whose status is settled
-# (complete, blocked, or deferred), AND a non-settled phase remains.
-# Only fires if the user actually filled in ## Current Phase (PHASE_NUM non-empty).
-if [ -n "${PHASE_NUM:-}" ] && [ $((COMPLETE + BLOCKED + DEFERRED)) -lt "$TOTAL" ]; then
-    CURRENT_NUM=$(printf '%s' "$PHASE_NUM" | grep -oE '[0-9]+' | head -1)
-    CURRENT_STATUS=""
-    NEXT_INCOMPLETE=""
-    while IFS=$'\t' read -r _num _status _unchecked _first; do
-        [ -z "${_num:-}" ] && continue
-        if [ "$_num" = "$CURRENT_NUM" ]; then
-            CURRENT_STATUS="${_status:-}"
-        fi
-        if [ -z "$NEXT_INCOMPLETE" ] && [ "${_status:-}" != "complete" ] && [ "${_status:-}" != "blocked" ] && [ "${_status:-}" != "deferred" ]; then
-            NEXT_INCOMPLETE="Phase ${_num}"
-        fi
-    done <<< "$SUMMARY"
-
-    if { [ "$CURRENT_STATUS" = "complete" ] || [ "$CURRENT_STATUS" = "blocked" ] || [ "$CURRENT_STATUS" = "deferred" ]; } && [ -n "$NEXT_INCOMPLETE" ]; then
-        REASON_PARTS+=("STALE '## Current Phase' in ${PLAN_FILE}: it points at ${PHASE_NUM} which is already '**Status:** ${CURRENT_STATUS}', but ${NEXT_INCOMPLETE} (and possibly later phases) are not settled. Update the '## Current Phase' section to '${NEXT_INCOMPLETE}' and set its status to 'in_progress' before continuing. The hook injects context based on Current Phase — leaving it on a settled phase makes the agent work on the wrong target.")
-        log "found: STALE Current Phase — points at ${CURRENT_STATUS} ${PHASE_NUM}, next incomplete is ${NEXT_INCOMPLETE}"
-    fi
-fi
-
-# --- Non-Phase work check (delegated to common.sh:check_non_phase_work) ----
-# Catches the bypass pattern where the agent invents `### Step N:` /
-# `### Task N:` / `### Stage N:` headings to hide unchecked work from the
-# `^### Phase` scanner. Runs regardless of COMPLETE/TOTAL so it also fires
-# when Phase 0..N are all marked complete and the remaining work was renamed
-# to a non-Phase heading underneath. Heading-only sections (Rollback, Open
-# question, etc.) are not flagged — only ones containing `- [ ]` items.
-NON_PHASE_HEADING=$(check_non_phase_work "$PLAN_FILE")
-if [ -n "$NON_PHASE_HEADING" ]; then
-    REASON_PARTS+=("FORMAT CONTRACT VIOLATION in ${PLAN_FILE}: heading '### ${NON_PHASE_HEADING}' contains unchecked '- [ ]' work items but is NOT a recognized phase heading. The ONLY heading form recognized as work is '### Phase N: Title' (level-3, the literal word 'Phase', a number, a colon). Rename it to a valid phase and add one recognized status. Do NOT stop until every block of unchecked work lives under a '### Phase N:' heading.")
-    log "found: NON-PHASE WORK — '${NON_PHASE_HEADING}' has unchecked items"
-fi
-
-if [ "${#REASON_PARTS[@]}" -gt 0 ]; then
-    COMBINED=""
-    if [ "${#REASON_PARTS[@]}" -gt 1 ]; then
-        _idx=0
-        for _part in "${REASON_PARTS[@]}"; do
-            _idx=$((_idx + 1))
-            COMBINED="${COMBINED}(${_idx}/${#REASON_PARTS[@]}) ${_part}
-"
-        done
-    else
-        COMBINED="${REASON_PARTS[0]}"
-    fi
-    REASON="[plan-files] ${COMBINED}"
-    log "decision: BLOCK (${#REASON_PARTS[@]} issue(s) found in one pass)"
-    OUTPUT=$(render_stop_block "$REASON")
-    log "stop continuation=true output_chars=${#OUTPUT}"
-    log "stdout: ${#OUTPUT} chars"
+# All events use the same structural and status-integrity policy.
+INTEGRITY_WARN=$(planning_integrity_warning "$PLAN_FILE")
+if [ -n "$INTEGRITY_WARN" ]; then
+    OUTPUT=$(render_stop_block "$INTEGRITY_WARN")
+    log "stop continuation=true output_chars=${#OUTPUT} reason=integrity"
     echo "$OUTPUT"
     exit 0
 fi

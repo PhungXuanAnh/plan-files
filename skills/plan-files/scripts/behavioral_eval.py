@@ -241,9 +241,10 @@ def _hook_probe(project: Path, scripts: Path) -> dict[str, object]:
     return {
         "post_calls": len(contexts),
         "injections": sum(bool(context) for context in contexts),
+        "stop_risk_advisories": sum("STOP WILL BLOCK" in context for context in contexts),
         "injected_context_chars": sum(len(context) for context in contexts),
-        "redundant_reminders": max(0, sum(bool(context) for context in read_contexts) - 1),
-        "read_only_false_reminders": sum(bool(context) for context in read_contexts[1:]),
+        "redundant_reminders": max(0, sum("## Goal" in context or "Active Item P" in context for context in read_contexts) - 1),
+        "read_only_false_reminders": sum("STALE ITEM STATE" in context or "structured checkpoint" in context for context in read_contexts[1:]),
         "legacy_read_only_false_reminders": len(read_contexts) - 1,
         "missed_checkpoint_detected": any(
             "STALE ITEM STATE" in context for context in evidence_contexts
