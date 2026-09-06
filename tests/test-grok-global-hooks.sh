@@ -153,6 +153,7 @@ REASON_CHARS=$(printf '%s' "$REASON" | python3 -c 'import sys; print(len(sys.std
 [ "$REASON_CHARS" -le 256 ] || fail "official Grok denial exceeds 256 characters"
 FEEDBACK_PATH=$(state feedback-file grok grok-one)
 assert_contains "$REASON" "$FEEDBACK_PATH" "short denial names the complete feedback file"
+assert_contains "$REASON" "Blocked (OWNERSHIP)" "capped denial keeps its gate label"
 assert_eq "$(pre_command grok-one "cat $FEEDBACK_PATH" | json_value '["decision"]')" allow "feedback read passes unresolved ownership"
 REASON=$(cat "$FEEDBACK_PATH")
 assert_contains "$REASON" '## Task Identity' "pending denial includes Task Identity"

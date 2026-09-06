@@ -268,11 +268,41 @@ def complete(plan: Path, item_id: str, evidence_value: str, requested_next: str 
     }
 
 
+def deactivate_pointer(plan: Path, project_root: Path | None) -> dict[str, object]:
+    """Clear the candidate pointer for a plan that finished without the flag.
+
+    `--deactivate-pointer` rides on the final `complete` call, so a plan whose
+    items were all checked off without it has no transition left to carry the
+    flag and stays POINTER_ACTIVE forever. Hand-editing the pointer is both
+    discouraged and, on a settled plan, refused by the reopen gate — this is the
+    planning-helper path out of that state.
+    """
+    state = parse_plan(plan)
+    blocking = [issue for issue in finalizability_issues(state, project_root)
+                if issue != "POINTER_ACTIVE"]
+    if blocking:
+        raise CheckpointError(
+            "plan is not finalizable: " + explain_issues(blocking, project_root, plan))
+    root = project_root.resolve() if project_root else _resolve_project_root(plan.parent.resolve())
+    pointer = pointer_path(root)
+    cleared = False
+    if pointer.is_file() and pointer.read_text(encoding="utf-8").strip() == plan.parent.name:
+        pointer.write_text("", encoding="utf-8")
+        cleared = True
+    return {
+        "operation": "deactivate-pointer",
+        "pointer": str(pointer),
+        "cleared": cleared,
+        **_fingerprints(state),
+    }
+
+
 def assert_finalizable(plan: Path, project_root: Path | None) -> dict[str, object]:
     state = parse_plan(plan)
     issues = finalizability_issues(state, project_root)
     if issues:
-        raise CheckpointError(f"plan is not finalizable: {explain_issues(issues)}")
+        raise CheckpointError(
+            f"plan is not finalizable: {explain_issues(issues, project_root, plan)}")
     return {"operation": "assert-finalizable", "finalizable": True, **_fingerprints(state)}
 
 
@@ -315,6 +345,12 @@ def _parser() -> argparse.ArgumentParser:
         "assert-finalizable", help="verify every phase is settled and the plan can be closed"
     )
     final_parser.add_argument("--project-root", type=Path, help="workspace root that owns .plan-files")
+
+    pointer_parser = subparsers.add_parser(
+        "deactivate-pointer",
+        help="clear the candidate pointer for a settled plan that finished without the complete-call flag",
+    )
+    pointer_parser.add_argument("--project-root", type=Path, help="workspace root that owns .plan-files")
     return parser
 
 
@@ -337,6 +373,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             payload = progress(args.plan, args.item, args.evidence)
         elif args.command == "complete":
             payload = complete(args.plan, args.item, args.evidence, args.next, args.deactivate_pointer)
+        elif args.command == "deactivate-pointer":
+            payload = deactivate_pointer(args.plan, args.project_root)
         else:
             payload = assert_finalizable(args.plan, args.project_root)
     except (CheckpointError, OSError) as error:

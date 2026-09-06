@@ -16,6 +16,7 @@
 #   planning_file_budget_warning DIR — echo line/byte/scope warning when needed
 #   planning_handoff_warning DIR     — echo warning when optional handoff.md is stale
 #   planning_restore_warning DIR     — echo bounded targeted repair guidance for incomplete restore state
+#   planning_settled_plan_warning DIR ROOT — echo reopen guidance when every phase is already complete
 
 # ---------------------------------------------------------------------------
 # resolve_plan_dir ROOT
@@ -674,6 +675,34 @@ more=len(issues)-len(parts)
 if more > 0: parts.append(f"{more} more issue(s)")
 print("[plan-files] RESTORE STATE ACTION REQUIRED: " + "; ".join(parts) +
       f". For the bounded complete diagnosis run: python3 {state_tool} restore-check {plan}", end="")' 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# planning_settled_plan_warning PLAN_DIR PROJECT_ROOT
+# A plan whose every phase is complete has nowhere to record what the current
+# prompt is doing, and Stop accepts such a plan unconditionally. So an agent
+# that binds it for further work can implement, commit, and open a PR while the
+# plan still claims to be a finished research task — every gate green, nothing
+# recorded. Fires only on COMPLETE == TOTAL: a blocked/deferred phase is a
+# paused plan with a different repair, and a finalized plan stops nominating
+# itself as a candidate, so it never reaches this gate at all.
+# ---------------------------------------------------------------------------
+planning_settled_plan_warning() {
+    local _plan_dir="${1:-}" _root="${2:-}" _plan_file _decisions _edit _checkpoint
+    local TOTAL COMPLETE IN_PROGRESS PENDING BLOCKED DEFERRED
+    [ -n "$_plan_dir" ] && [ -f "$_plan_dir/tasks.md" ] || return 0
+    _plan_file="$_plan_dir/tasks.md"
+    count_phases "$_plan_file"
+    [ "$TOTAL" -gt 0 ] && [ "$COMPLETE" -eq "$TOTAL" ] || return 0
+    _decisions="$_plan_dir/decisions.md"
+    _edit=$(planning_script_path plan_edit.py)
+    _checkpoint=$(planning_script_path plan_checkpoint.py)
+    printf '[plan-files] SETTLED PLAN REOPEN REQUIRED. All %s phases in %s are complete, so this plan has nowhere to record what you are doing now and Stop would accept the turn with the work unrecorded. A prompt that authorizes further work is a scope update within SAME, not a finished plan. Before operational mutation: (1) record the authorization as a new row in %s: python3 %s --plan %s entry-append --file decisions.md --heading "Active Decisions" --entry "<new row>", then retire what it replaces with decision-supersede <OLD-ID> --replacement <NEW-ID> --reason "<what the user authorized>" (the replacement row must already exist); (2) reconcile Goal, Task Identity (Deliverable and Non-goals), and Workflow Profile with the authorized scope; (3) open the phase that will carry the work: python3 %s --plan %s phase-add --title "<Title>", add its items with item-add, then start the first one: python3 %s --plan %s start <ID>. If this prompt only asks a question or a written report, run the discussion command instead. If nothing new was authorized and the plan really is finished, close it: python3 %s --plan %s deactivate-pointer --project-root %s, then re-run the same command with assert-finalizable.' \
+        "$TOTAL" "$_plan_file" "$_decisions" \
+        "$_edit" "$_plan_file" \
+        "$_edit" "$_plan_file" \
+        "$_checkpoint" "$_plan_file" \
+        "$_checkpoint" "$_plan_file" "$_root"
 }
 
 # Shared Stop-invalid state, also enforced before tools and repeated after tools.

@@ -1080,20 +1080,39 @@ ISSUE_EXPLANATIONS: dict[str, str] = {
     ),
     "PHASES_ACTIONABLE": "at least one phase is not yet complete, blocked, or deferred",
     "STATUS_LIES": "a phase is marked complete but still has an unchecked item beneath it",
+    # {pointer} is the pointer actually in use, which is the legacy
+    # .plan-with-files in a pre-rename workspace. Naming the current name
+    # unconditionally sends the agent to clear a file that does not exist.
     "POINTER_ACTIVE": (
-        ".plan-files still names this task — pass --deactivate-pointer on the final "
-        "`complete` call (or clear .plan-files directly) before this plan can finalize"
+        "{pointer} still names this task — pass --deactivate-pointer on the final "
+        "`complete` call, or when every item is already checked run: python3 "
+        "{checkpoint} --plan {plan} deactivate-pointer --project-root {root}"
     ),
 }
 
 
-def explain_issue(code: str) -> str:
+def explain_issue(code: str, project_root: Path | None = None,
+                  plan: Path | None = None) -> str:
     explanation = ISSUE_EXPLANATIONS.get(code)
-    return f"{code} ({explanation})" if explanation else code
+    if not explanation:
+        return code
+    if "{pointer}" in explanation:
+        # Name the pointer this workspace actually uses and an absolute,
+        # directly runnable recovery; a bare script name makes the agent guess
+        # an install location, and ".plan-files" is the wrong file in a
+        # pre-rename workspace.
+        explanation = explanation.format(
+            pointer=pointer_path(project_root).name if project_root else ".plan-files",
+            checkpoint=Path(__file__).resolve().with_name("plan_checkpoint.py"),
+            plan=plan if plan else "<tasks.md>",
+            root=project_root if project_root else "<project-root>",
+        )
+    return f"{code} ({explanation})"
 
 
-def explain_issues(codes: Iterable[str]) -> str:
-    return "; ".join(explain_issue(code) for code in codes)
+def explain_issues(codes: Iterable[str], project_root: Path | None = None,
+                   plan: Path | None = None) -> str:
+    return "; ".join(explain_issue(code, project_root, plan) for code in codes)
 
 
 def finalizability_issues(state: PlanState, project_root: Path | None = None) -> list[str]:
@@ -1228,7 +1247,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 0
     issues = finalizability_issues(state, args.project_root)
     if issues:
-        print(explain_issues(issues))
+        print(explain_issues(issues, args.project_root, state.path))
         return 2
     print("FINALIZABLE")
     return 0

@@ -26,7 +26,7 @@ The latest user request is authoritative. `.plan-files` suggests a candidate; a 
 If a denial names a feedback file, read it first. **Any tool call containing that path in its arguments is allowed in full**, including nested or additional arguments. Follow the file's recovery instructions; reading it does not bind or release. The path expires when the prompt or ownership changes.
 
 1. Classify the request as `SAME`, `DIFFERENT`, `AMBIGUOUS`, or `DISCUSSION ONLY`. An explicit request to continue/implement the named plan is `SAME`, including research → implementation after answers. A question about the plan, this workflow, or your own behavior with no implementation is `DISCUSSION ONLY`. Merely citing a plan as background is not a continuation; shared files, branch, or repo are weak evidence.
-2. For `SAME`, run the hook-supplied bind command verbatim before reading planning state. Then restore state using the work loop below. Before implementation, reconcile Goal, Task Identity, profile, and pending work with the user's new decisions. Existing non-goals apply unless the user supersedes them.
+2. For `SAME`, run the hook-supplied bind command verbatim before reading planning state. Then restore state using the work loop below. Existing non-goals apply unless the user supersedes them; when the request does supersede one, record that authorization in `decisions.md` with `plan_edit.py decision-supersede` first, then reconcile Goal, Task Identity, profile, and pending work with it. A plan whose phases are all complete has nowhere to record new work: add the phase that carries it before implementing.
 3. For `DIFFERENT`, run the supplied release command; do not bind, repair, compact, or mutate the candidate. Create a separate plan only if the new work needs one. Release rejects a candidate; it is not end-of-turn cleanup.
 4. For `AMBIGUOUS`, run the supplied `clarify` command, then ask and wait. It preserves the candidate and allows question tools or a text-only question, while blocking plan reads and work. Never release just to wait for clarification.
 5. For a new task, create the three required files. Hooks auto-claim after `tasks.md` exists; without ownership hooks, update `.plan-files` manually.
@@ -64,7 +64,7 @@ Use `blocked` only when no actionable path remains because of an external depend
 ## Work loop
 
 1. Before complex work, create a plan and choose Workflow Profile A (PR handoff), B (staging verified), or C (research/document).
-2. PreTool blocks operational work on invalid format/profile/item/status or restore state, while allowing reads and owned-plan repair. PostTool repeats unresolved diagnostics and a short warning when Stop would block; repair the named cause immediately. Before each phase or resume, refresh bounded `overview` and `restore-check`, then target-read the active phase, decisions, and relevant findings. Repair any restore issue before implementation.
+2. PreTool blocks operational work on invalid format/profile/item/status, restore state, or a fully complete plan that has not been reopened, while allowing reads and owned-plan repair. PostTool repeats unresolved diagnostics and a short warning when Stop would block; repair the named cause immediately. Before each phase or resume, refresh bounded `overview` and `restore-check`, then target-read the active phase, decisions, and relevant findings. Repair any restore issue before implementation.
 3. Work only the Active Item. When its evidence predicate becomes true, the next workflow operation must checkpoint it before any unrelated tool. Record material partial/error evidence while it remains false.
 4. Write to `findings.md` when a discovery changes what the next session would need to know, and before every checkpoint, compaction, and pause. Record durable conclusions, not a transcript of operations. Read `decisions.md` before changing it; preserve superseded choices and open questions.
 5. Log errors immediately, diagnose them, and change approach. An error is a failure that changes your approach; a retry that then succeeds is not one. Try three materially different actionable paths before treating an external dependency as a blocker.
@@ -87,7 +87,7 @@ python3 <skill-dir>/scripts/plan_checkpoint.py --plan <tasks.md> assert-finaliza
 
 Use `plan_edit.py phase-update` for blocked/deferred phases. For a user pause, update decisions/findings first, then use `pause` to settle phases, clear Active Item, sync Resume Checkpoint, and write any handoff last. Read the [phase and pause commands](references/plan-operations.md) before either operation.
 
-On the `complete` call whose JSON reports `"next_item":null`, add `--deactivate-pointer`. It clears the pointer only when this plan still owns it. Skipping this makes finalization fail with `POINTER_ACTIVE`.
+On the `complete` call whose JSON reports `"next_item":null`, add `--deactivate-pointer`. It clears the pointer only when this plan still owns it. Skipping this makes finalization fail with `POINTER_ACTIVE`; a plan whose items are all already checked has no `complete` call left, so clear it with `plan_checkpoint.py deactivate-pointer --project-root <project-root>` instead of editing the pointer by hand.
 
 ## Bounded reads and edits
 

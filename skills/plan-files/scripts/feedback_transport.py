@@ -54,14 +54,52 @@ def contains_path(value: object, path: str) -> bool:
     return False
 
 
+# The pointer replaces the whole reason on a capped host, so it must still say
+# WHICH gate fired. Without the label every denial reads as one undifferentiated
+# "Blocked", and an agent cannot tell an ownership routing action from a plan
+# repair before it opens the file. Labels are short because the pointer competes
+# with the path for a small budget; the file still carries the full text.
+REASON_LABELS = (
+    ("OWNERSHIP ACTION REQUIRED", "OWNERSHIP"),
+    ("PLAN MUTATION BLOCKED", "PLAN MUTATION"),
+    ("MAINTENANCE ACTION REQUIRED", "MAINTENANCE"),
+    ("RESTORE STATE ACTION REQUIRED", "RESTORE"),
+    ("SETTLED PLAN REOPEN REQUIRED", "REOPEN PLAN"),
+    ("SKILL NOT LOADED", "SKILL NOT LOADED"),
+    ("DISCUSSION ONLY", "DISCUSSION ONLY"),
+    ("BACKGROUND", "BACKGROUND"),
+    ("FORMAT CONTRACT VIOLATION", "PLAN FORMAT"),
+    ("MISSING SECTION", "PLAN FORMAT"),
+    ("UNFILLED SECTION", "PLAN FORMAT"),
+    ("STATUS LIES", "PLAN INTEGRITY"),
+    ("STALE '## Current Phase'", "PLAN INTEGRITY"),
+)
+
+
+def reason_label(reason: str) -> str:
+    for marker, label in REASON_LABELS:
+        if marker in reason:
+            return label
+    return ""
+
+
 def render(path: Path, reason: str, limit: int) -> dict:
     if len(reason) <= limit:
         return {"decision": "block", "reason": reason}
     if path.parent != feedback_dir() or not private_directory(create=True):
         raise ValueError("feedback directory is not private")
-    short = (f"[plan-files] Blocked. Read full instructions: `{path}`. "
-             "Any tool with this path in its arguments is allowed. "
-             "Follow the instructions, then retry.")
+
+    def pointer(tag: str) -> str:
+        return (f"[plan-files] Blocked{tag}. Read full instructions: `{path}`. "
+                "Any tool with this path in its arguments is allowed. "
+                "Follow the instructions, then retry.")
+
+    label = reason_label(reason)
+    short = pointer(f" ({label})" if label else "")
+    if len(short) > limit:
+        # A long install path can price the label out. The undifferentiated
+        # pointer is worse but still recoverable, so degrade instead of failing.
+        short = pointer("")
     if len(short) > limit:
         raise ValueError("feedback pointer exceeds host reason budget")
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".feedback-")

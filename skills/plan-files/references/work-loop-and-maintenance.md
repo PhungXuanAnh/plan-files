@@ -78,7 +78,7 @@ For a user-requested clarification or discussion-only turn, follow the `clarify`
 
 After all in-scope work settles:
 
-1. Complete the final item with current evidence and `--deactivate-pointer`.
+1. Complete the final item with current evidence and `--deactivate-pointer`. When every item is already checked — a plan that finished in an earlier turn without the flag — run `plan_checkpoint.py deactivate-pointer --project-root <root>` instead; it clears the pointer only when this plan still owns it and refuses while any other finalization issue remains.
 2. Refresh bounded overview and restore state.
 3. Re-read tasks state from disk.
 4. Run `plan_checkpoint.py assert-finalizable --project-root <root>`.

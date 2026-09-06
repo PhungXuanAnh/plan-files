@@ -110,7 +110,7 @@ Common targets:
 | `history.md` | Completed Phases, Verification History, Resolved Errors |
 | `handoff.md` | whole overwrite-only resume snapshot |
 
-Keep using `plan_checkpoint.py` for `start`, `progress`, and `complete`. Do not emulate execution transitions with generic section edits.
+Keep using `plan_checkpoint.py` for `start`, `progress`, and `complete`. Do not emulate execution transitions with generic section edits. `plan_checkpoint.py deactivate-pointer --project-root <root>` is the recovery for a settled plan that finished without `--deactivate-pointer`: it reports `{"operation":"deactivate-pointer","pointer":<path>,"cleared":<bool>}`, is idempotent, names whichever pointer file the workspace actually uses, and fails with the remaining issues when the plan is not otherwise finalizable. Reaching for a hand edit of the pointer instead is blocked on a settled plan.
 
 ## Lifecycle operations
 

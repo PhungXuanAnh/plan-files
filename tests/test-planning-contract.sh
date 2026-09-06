@@ -862,4 +862,117 @@ sed -i 's/^- \[ \] Make the change/- [x] Make the change/; s/in_progress/complet
 CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_PAYLOAD" | "$REPO_ROOT/.codex/hooks/plan-files/scripts/agent-stop.sh")
 assert_contains "$CODEX_OUTPUT" "STALE" "Codex stale Current Phase"
 
+# --- Settled-plan reopen gate -------------------------------------------------
+# A plan whose phases are all complete accepts Stop unconditionally, so without
+# this gate a bound prompt can implement, commit, and open a PR while the plan
+# still describes finished research.
+write_settled_plan() {
+    cat > "$PLAN_DIR/tasks.md" <<'EOF'
+# Tasks: Settled Fixture
+
+## Goal
+Verify the settled-plan reopen gate.
+
+## Task Identity
+- Deliverable: Verify the settled-plan reopen gate
+- Anchors: settled-fixture
+- Non-goals: unrelated hook behavior
+
+## Current Phase
+Phase 1
+
+## Active Item
+
+## Workflow Profile
+**Profile:** C
+
+## Resume Checkpoint
+- **Next action:** Nothing pending; the plan is complete.
+- **Blocker:** none
+- **Details:** none
+
+## Phases
+
+### Phase 1: Implement
+- [x] [P1.1] The change is present.
+  - Evidence: fixture diff applied
+- [x] [V1.1] The focused check passes.
+  - Evidence: fixture check passed
+- **Status:** complete
+
+## Verification
+- `make test`: passed in fixture
+EOF
+    printf '# Findings\n\n## Current Summary\n- fixture\n\n## Discoveries\n- original\n' > "$PLAN_DIR/findings.md"
+    cat > "$PLAN_DIR/decisions.md" <<'EOF'
+# Decisions
+
+## Active Decisions
+| ID | Decision | Rationale | Date |
+|----|----------|-----------|------|
+| D1 | Research only | initial | 2026-09-04 |
+
+## Superseded Decisions
+| ID | Old Decision | Replaced By | Reason |
+|----|--------------|-------------|--------|
+
+## Open Decision Questions
+- None.
+EOF
+}
+
+write_settled_plan
+rm -f "$PLAN_DIR/handoff.md"
+PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" pending codex codex-settled >/dev/null
+PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=codex PWF_SESSION_ID=codex-settled "$STATE_TOOL" bind test-task >/dev/null
+SETTLED_BLOCK=$(pre_hook codex codex-settled 'git commit -m "ship it"')
+assert_contains "$SETTLED_BLOCK" "SETTLED PLAN REOPEN REQUIRED" "settled plan blocks operational mutation"
+assert_contains "$SETTLED_BLOCK" "decision-supersede" "reopen block names the decision ledger command"
+assert_contains "$SETTLED_BLOCK" "phase-add" "reopen block names the phase command"
+assert_not_contains "$(post_hook codex codex-settled Read)" "SETTLED PLAN REOPEN REQUIRED" \
+    "reopen diagnosis stays quiet after a read"
+assert_eq "$(pre_hook codex codex-settled "python3 $EDIT_TOOL --plan $PLAN_DIR/tasks.md phase-add --title Deliver")" "{}" \
+    "reopen gate permits the repair it demands"
+SETTLED_LOG=$(cat "$PROJECT/tmp/hook-logs/plan-files/pre-tool-use.log")
+assert_contains "$SETTLED_LOG" "decision=block-settled-plan tool=Bash" "pre-tool log correlates the reopen denial"
+# PostTool repeats it only for work that reached execution, never after a read.
+SETTLED_POST=$(post_hook codex codex-settled Bash 'git commit -m "ship it"')
+assert_contains "$SETTLED_POST" "SETTLED PLAN REOPEN REQUIRED" "PostTool repeats the reopen diagnosis after a mutation"
+
+# Reopening the plan clears the gate; the ordinary integrity gate takes over.
+python3 "$EDIT_TOOL" --plan "$PLAN_DIR/tasks.md" --expected-fingerprint "$(file_sha "$PLAN_DIR/decisions.md")" \
+    entry-append --file decisions.md --heading "Active Decisions" \
+    --entry '| D2 | Implement and hand off | user authorized implementation | 2026-09-06 |' >/dev/null
+python3 "$EDIT_TOOL" --plan "$PLAN_DIR/tasks.md" --expected-fingerprint "$(file_sha "$PLAN_DIR/decisions.md")" \
+    decision-supersede D1 --replacement D2 --reason "user authorized implementation" >/dev/null
+python3 "$EDIT_TOOL" --plan "$PLAN_DIR/tasks.md" --expected-fingerprint "$(file_sha "$PLAN_DIR/tasks.md")" \
+    phase-add --title "Deliver" >/dev/null
+assert_not_contains "$(pre_hook codex codex-settled 'git commit -m "ship it"')" "SETTLED PLAN REOPEN REQUIRED" \
+    "reopened plan clears the settled gate"
+
+# The reopen gate must not trap a plan that really is finished: its only
+# remaining action is pointer cleanup, which lives outside the plan directory.
+write_settled_plan
+printf 'test-task\n' > "$PROJECT/.plan-files"
+POINTER_CMD="python3 $CHECKPOINT_TOOL --plan $PLAN_DIR/tasks.md deactivate-pointer --project-root $PROJECT"
+assert_eq "$(pre_hook codex codex-settled "$POINTER_CMD")" "{}" "reopen gate permits pointer cleanup on a finished plan"
+assert_contains "$(cd "$PROJECT" && eval "$POINTER_CMD")" '"cleared":true' "deactivate-pointer clears an owned pointer"
+assert_eq "$(cat "$PROJECT/.plan-files")" "" "finished plan stops nominating itself"
+assert_contains "$(python3 "$CHECKPOINT_TOOL" --plan "$PLAN_DIR/tasks.md" assert-finalizable --project-root "$PROJECT")" \
+    '"finalizable":true' "cleared pointer finalizes the plan"
+assert_contains "$(cd "$PROJECT" && eval "$POINTER_CMD")" '"cleared":false' "deactivate-pointer is idempotent"
+printf 'test-task\n' > "$PROJECT/.plan-files"
+
+# A finalizable plan names the pointer that actually exists, not the current
+# name, so a pre-rename workspace is not told to clear a missing file.
+LEGACY_ROOT="$TEST_DIR/legacy"
+mkdir -p "$LEGACY_ROOT/tmp/plan-with-files/legacy-task"
+printf 'legacy-task\n' > "$LEGACY_ROOT/.plan-with-files"
+write_settled_plan
+cp "$PLAN_DIR/tasks.md" "$LEGACY_ROOT/tmp/plan-with-files/legacy-task/tasks.md"
+LEGACY_ISSUES=$(python3 "$REPO_ROOT/skills/plan-files/scripts/plan_state.py" assert-finalizable \
+    "$LEGACY_ROOT/tmp/plan-with-files/legacy-task/tasks.md" --project-root "$LEGACY_ROOT" || true)
+assert_contains "$LEGACY_ISSUES" ".plan-with-files still names this task" "legacy pointer is named as it exists"
+assert_not_contains "$LEGACY_ISSUES" ".plan-files still names" "legacy workspace is not sent to the current pointer name"
+
 printf 'planning contract tests: PASS\n'

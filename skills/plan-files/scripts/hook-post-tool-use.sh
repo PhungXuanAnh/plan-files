@@ -141,6 +141,15 @@ BACKGROUND_WARN=$(printf '%s' "$INPUT" | python3 "$REPO_ROOT/skills/plan-files/s
 INTEGRITY_WARN=$(planning_integrity_warning "$PLAN_FILE")
 COMPACTION_WARN=$(planning_file_budget_warning "$PLAN_DIR")
 RESTORE_WARN=$(planning_restore_warning "$PLAN_DIR")
+# PreTool already refuses operational mutation on a settled plan, so this
+# repeats the diagnosis only for work that reached execution anyway (a provider
+# without PreTool, or a shell command whose write targets could not be parsed).
+# Zero-weight calls — read-only exploration and plan maintenance — are exactly
+# the ones that must stay quiet, or every call on a finished plan nags.
+REOPEN_WARN=""
+if [ "${TOOL_WEIGHT:-1}" -gt 0 ]; then
+    REOPEN_WARN=$(planning_settled_plan_warning "$PLAN_DIR" "$PWD")
+fi
 STOP_RISK=""
 if [ -n "$INTEGRITY_WARN" ]; then
     STOP_RISK="[plan-files] STOP WILL BLOCK: repair plan integrity now.
@@ -159,7 +168,7 @@ if [ "$TOTAL" -gt 0 ] && [ $((COMPLETE + BLOCKED + DEFERRED)) -ge "$TOTAL" ] \
             FINALIZE_WARN="[plan-files] FINALIZATION ACTION REQUIRED ($FINALIZE_ISSUE). Run: python3 $(planning_script_path plan_checkpoint.py) --plan $PLAN_FILE assert-finalizable --project-root $PWD. Finish pointer cleanup before final output."
         fi
     fi
-    if [ -z "$COMPACTION_WARN$RESTORE_WARN$FINALIZE_WARN$BACKGROUND_WARN" ]; then
+    if [ -z "$COMPACTION_WARN$RESTORE_WARN$FINALIZE_WARN$BACKGROUND_WARN$REOPEN_WARN" ]; then
         echo '{}'; exit 0
     fi
 fi
@@ -422,7 +431,7 @@ CHECKPOINT_LAG_SECS=0
 log "item_state fingerprint=${PLAN_FINGERPRINT:-unavailable} active_item=${ACTIVE_ITEM:-none} plan_changed=$PLAN_CHANGED unchanged_tools=$UNCHANGED_TOOL_COUNT risk=$UNCHANGED_RISK_SCORE tool_class=$TOOL_CLASS checkpoint_lag=${CHECKPOINT_LAG_SECS}s stale=$STALE_CHECKPOINT emit_nudge=$EMIT_NUDGE inject_full=$INJECT_FULL"
 
 EMIT_CONTEXT_NUDGE=$EMIT_NUDGE
-if [ -n "$STOP_RISK$COMPACTION_WARN$RESTORE_WARN$FINALIZE_WARN$BACKGROUND_WARN" ]; then
+if [ -n "$STOP_RISK$COMPACTION_WARN$RESTORE_WARN$FINALIZE_WARN$BACKGROUND_WARN$REOPEN_WARN" ]; then
     EMIT_NUDGE=true
 fi
 
@@ -465,7 +474,7 @@ else
     NUDGE="[plan-files] Update tasks.md with what you just did. If a phase is now complete, update ${PLAN_FILE} status. If the plan-files skill rules are no longer in your context (post-/compact, or you have forgotten them), reload them by reading $(planning_doc_path SKILL.md) before continuing."
 fi
 fi
-for WARNING in "$STOP_RISK" "$COMPACTION_WARN" "$RESTORE_WARN" "$FINALIZE_WARN" "$BACKGROUND_WARN"; do
+for WARNING in "$STOP_RISK" "$REOPEN_WARN" "$COMPACTION_WARN" "$RESTORE_WARN" "$FINALIZE_WARN" "$BACKGROUND_WARN"; do
     if [ -n "$WARNING" ]; then
         NUDGE="${NUDGE:+${NUDGE}
 }$(planning_bounded_warning "$WARNING")"

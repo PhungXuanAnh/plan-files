@@ -145,6 +145,7 @@ FEEDBACK_FILE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" feedback-file "$PROVIDER" 
 # path passes, including unfamiliar tools or calls with additional arguments.
 if [ -n "$FEEDBACK_FILE" ] && printf '%s' "$TOOL_INPUT_JSON" \
     | python3 "$SCRIPT_DIR/feedback_transport.py" allows "$FEEDBACK_FILE"; then
+    log "session=$SESSION_ID decision=allow-feedback-read tool=$TOOL_NAME"
     printf '{}'; exit 0
 fi
 
@@ -218,6 +219,11 @@ if [ -z "$PLAN_DIR" ]; then
     # or the message names an action its own gate refuses.
     EXPECTED_DISCUSS="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg discuss $task_arg"
     if [ "$TOOL_COMMAND" = "$EXPECTED_CLARIFY" ] || [ "$TOOL_COMMAND" = "$EXPECTED_DISCUSS" ]; then
+        if [ "$TOOL_COMMAND" = "$EXPECTED_CLARIFY" ]; then
+            log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-exact-clarify tool=$TOOL_NAME"
+        else
+            log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-exact-discuss tool=$TOOL_NAME"
+        fi
         printf '{}'; exit 0
     fi
     # Reading the skill is how the agent learns to classify this very prompt, so
@@ -229,6 +235,7 @@ if [ -z "$PLAN_DIR" ]; then
     fi
     if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION_ID")" = "waiting" ] \
         && printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" question-tool; then
+        log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-question-while-waiting tool=$TOOL_NAME"
         printf '{}'; exit 0
     fi
     if [ "$TOOL_COMMAND" = "$EXPECTED_BIND" ]; then
@@ -262,10 +269,12 @@ printf -v plan_arg '%q' "$PLAN_DIR/tasks.md"
 printf -v state_arg '%q' "$PLAN_STATE_TOOL"
 MAINTENANCE_ACTION="Run: python3 $state_arg budgets $plan_arg. Then archive/consolidate completed material in the owned plan; preserve unfinished work."
 if [ "$TOOL_COMMAND" = "$EXPECTED_DISCUSS" ]; then
+    log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=allow-exact-discuss tool=$TOOL_NAME"
     printf '{}'; exit 0
 fi
 if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION_ID")" = "discussing" ]; then
     if maintenance_tool_allowed "$PLAN_DIR"; then
+        log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=allow-discussion-maintenance tool=$TOOL_NAME"
         printf '{}'; exit 0
     fi
     # A discussion lease protects the plan, not the filesystem. A user who asks a
@@ -292,6 +301,7 @@ ALLOWED_HINT="Still allowed, recognized from the tool input rather than from a t
 INTEGRITY_WARN=$(planning_integrity_warning "$PLAN_DIR/tasks.md")
 if [ -n "$INTEGRITY_WARN" ]; then
     if maintenance_tool_allowed "$PLAN_DIR"; then
+        log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") integrity=required decision=allow-integrity-repair tool=$TOOL_NAME"
         printf '{}'; exit 0
     fi
     block "$INTEGRITY_WARN Operational mutation is blocked until plan integrity is repaired. $ALLOWED_HINT"
@@ -318,6 +328,17 @@ if [ -n "$RESTORE_WARN" ]; then
     fi
     REASON_TEXT="$RESTORE_WARN Operational mutation waits until restore-check passes. $ALLOWED_HINT"
     log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") restore=required decision=block-restore-state tool=$TOOL_NAME"
+    block "$REASON_TEXT"
+fi
+
+# A settled plan cannot record this prompt's work, and Stop accepts it as
+# finished, so operational mutation here is invisible to every later session.
+# Reads and owned-plan repair stay open: reopening the plan IS plan maintenance,
+# so the recovery this message asks for is always runnable from inside the gate.
+REOPEN_WARN=$(planning_settled_plan_warning "$PLAN_DIR" "$PWD")
+if [ -n "$REOPEN_WARN" ] && ! maintenance_tool_allowed "$PLAN_DIR"; then
+    REASON_TEXT="$REOPEN_WARN $DISCUSSION_HINT $ALLOWED_HINT"
+    log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") reopen=required decision=block-settled-plan tool=$TOOL_NAME"
     block "$REASON_TEXT"
 fi
 

@@ -24,7 +24,7 @@ On a new user prompt, a session-aware hook suspends its prior lease and exposes 
 
 Without an ownership hook, inspect only Task Identity and Goal first, apply the same classification, and do not claim session isolation.
 
-The new user request can supersede an earlier research-only deliverable or implementation non-goal. This is a scope update within SAME when the user explicitly continues that plan, not a reason to release it. After bind, record the authorization in `decisions.md`, reconcile Goal/Task Identity/Workflow Profile and remaining phases, then implement. Preserve all other non-goals; they are not automatically temporary research constraints.
+The new user request can supersede an earlier research-only deliverable or implementation non-goal. This is a scope update within SAME when the user explicitly continues that plan, not a reason to release it. After bind, record the authorization in `decisions.md` (`decision-supersede` retires the superseded row with its replacement and reason), reconcile Goal/Task Identity/Workflow Profile and remaining phases, then implement. When every phase is already complete, PreTool blocks operational mutation until the plan is reopened with the phase that will carry the work; reads and owned-plan repair stay available, and a plan finalized with `--deactivate-pointer` stops nominating itself instead. Preserve all other non-goals; they are not automatically temporary research constraints.
 
 Binding once per prompt is intentional: UserPromptSubmit suspends the prior lease and PreTool checks that routing has been resolved. These are not two separate binds. A matching `.plan-files` pointer does not preserve old prompt authority. A successful bind remains valid within that prompt; use `resolve`, not repeated bind calls.
 
@@ -86,7 +86,7 @@ All three events use `planning_integrity_warning` in the canonical core; adapter
 | Missing/placeholder resume state, stale handoff/external evidence | Block operational work | Repeat restore repairs each call | Explicit restore-check remains required before final output |
 | Hot-state over budget | Block outside writes/unknown calls | Repeat compaction guidance each call | Maintenance remains required by the work loop |
 | Valid actionable phases | Allow authorized work | Short Stop warning each call; no repeated full context | Continue remaining work |
-| Settled contracted plan with active candidate pointer | Allow cleanup | Repeat finalization/POINTER_ACTIVE reminder | Existing lease settlement behavior is preserved; assert-finalizable remains required |
+| Every phase complete, with no blocked/deferred work | Block operational mutation until the authorization is recorded and the phase carrying the new work exists; allow reads, owned-plan repair, and finalization | Repeat finalization/POINTER_ACTIVE reminder, and the reopen diagnosis after any call with non-zero semantic weight | Existing lease settlement behavior is preserved; assert-finalizable remains required |
 | Never-started proposal or explicit clarify/discuss lease | Preserve routing/discussion gates | No execution pressure in explicit discussion | Allow discussion without claiming completion |
 | Skill never read in this session | Block operational mutation, naming the absolute `SKILL.md` path; allow the read-only skill read in any routing state | Existing reload advisory | No separate Stop condition |
 
