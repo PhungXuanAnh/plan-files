@@ -15,6 +15,7 @@ import re
 import shlex
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 
 QUESTION_TOOLS = {"askuserquestion", "ask_user_question", "request_user_input", "request_user_input_async"}
@@ -72,7 +73,9 @@ GUARDED_READ_COMMANDS = {
 }
 # Redirections that cannot write observable state.
 DISCARD_REDIRECTS = ("2>/dev/null", "2>&1", "&>/dev/null", ">/dev/null", "2> /dev/null", "> /dev/null")
-SEGMENT_SPLIT_RE = re.compile(r"\|\||&&|;|\||\n")
+# Control operators that separate one command from the next, recognized only
+# outside quotes.
+SEGMENT_OPERATOR_CHARS = "&|;\n"
 READ_GIT_SUBCOMMANDS = {
     "diff",
     "grep",
@@ -322,7 +325,7 @@ def tool_class(payload: dict, plan_dir: Path) -> dict[str, object]:
     targets = mutation_targets(tool_input)
     plan_maintenance = mutation and (
         (bool(targets) and all(inside(path, plan_dir) for path in targets))
-        or (shell_runs_planning_helper(tool_input) if simple_name in SHELL_TOOL_NAMES
+        or (shell_runs_planning_helper(tool_input, plan_dir) if simple_name in SHELL_TOOL_NAMES
             else references_owned_plan(tool_input, plan_dir))
     )
     if plan_maintenance:
@@ -358,7 +361,13 @@ def tool_class(payload: dict, plan_dir: Path) -> dict[str, object]:
 
 
 def references_owned_plan(tool_input: object, plan_dir: Path) -> bool:
-    """Fallback for unknown schemas: require the exact owned plan directory."""
+    """Fallback for unknown schemas: an argument that IS a path in the owned plan.
+
+    A whole argument, never a path quoted inside a longer string. A tool whose
+    arguments this gate cannot parse proves nothing by mentioning the plan: an
+    unrelated call carrying `note: "see <plan>/tasks.md"` would otherwise read
+    as plan maintenance and pass a closed gate on the strength of its prose.
+    """
     roots = {str(plan_dir).replace("\\", "/")}
     try:
         relative = os.path.relpath(plan_dir, os.getcwd()).replace("\\", "/")
@@ -368,56 +377,221 @@ def references_owned_plan(tool_input: object, plan_dir: Path) -> bool:
         roots.add(relative.rstrip("/"))
 
     for value in strings(tool_input):
-        normalized = value.replace("\\", "/")
+        normalized = value.strip().replace("\\", "/")
         for root in roots:
-            if normalized == root or root + "/" in normalized:
+            if normalized == root or normalized.startswith(root + "/"):
                 return True
     return False
 
 
+def _is_redirect_ampersand(command: str, index: int) -> bool:
+    """True for the `&` of `2>&1`, `>&2`, or `&>file`, which joins no commands."""
+    previous = command[:index].rstrip()
+    return previous.endswith(">") or command[index + 1 : index + 2] == ">"
+
+
+SUBSTITUTION_MARK = "\x00substitution:%d\x00"
+SUBSTITUTION_RE = re.compile(r"\x00substitution:(\d+)\x00")
+
+
+def _strip_substitutions(command: str) -> tuple[str, list[str]] | None:
+    """Replace every command substitution with a mark and return them separately.
+
+    shlex cannot lex `"$(sha256sum 'a b' | cut -d' ' -f1)"`: quoting restarts
+    inside a substitution, so read linearly the quotes never balance and the
+    whole command looks malformed. A substitution is a command in its own right
+    anyway -- lifting it out keeps the outer command lexable and lets the inner
+    one be judged on its own terms. Nested substitutions stay inside the text
+    they are lifted with; whoever reads that text judges it, or refuses to.
+
+    Returns None when the command cannot be read at all, which callers must
+    never treat as permission.
+    """
+    outer: list[str] = []
+    inner: list[str] = []
+    commands: list[str] = []
+    quote: str | None = None
+    stack: list[str | None] = []
+    backtick = False
+    index = 0
+    while index < len(command):
+        char = command[index]
+        nested = bool(stack) or backtick
+        if quote == "'":
+            # Nothing is special inside single quotes, not even a backslash.
+            (inner if nested else outer).append(char)
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "\\" and index + 1 < len(command):
+            (inner if nested else outer).extend(command[index : index + 2])
+            index += 2
+            continue
+        if char in "\"'":
+            if quote is None:
+                quote = char
+            elif quote == char:
+                quote = None
+            (inner if nested else outer).append(char)
+            index += 1
+            continue
+        if command.startswith("$((", index):
+            return None  # arithmetic expansion, not a command this can vet
+        if command.startswith("$(", index):
+            if nested:
+                inner.append("$(")
+            else:
+                outer.append(SUBSTITUTION_MARK % len(commands))
+            stack.append(quote)
+            quote = None
+            index += 2
+            continue
+        if char == ")" and stack:
+            quote = stack.pop()
+            if stack or backtick:
+                inner.append(char)
+            else:
+                commands.append("".join(inner))
+                inner = []
+            index += 1
+            continue
+        if char == "`":
+            if backtick:
+                backtick = False
+                commands.append("".join(inner))
+                inner = []
+            elif stack:
+                inner.append(char)
+            else:
+                backtick = True
+                outer.append(SUBSTITUTION_MARK % len(commands))
+            index += 1
+            continue
+        (inner if nested else outer).append(char)
+        index += 1
+    if quote or stack or backtick:
+        return None
+    return "".join(outer), commands
+
+
+class Segment(NamedTuple):
+    """One command in a compound command, with what it substitutes lifted out."""
+
+    argv: list[str]
+    terminator: str
+    text: str
+    substitutions: list[str]
+
+
+def shell_segments(command: str) -> list[Segment] | None:
+    """Split a command into segments at the control operators that separate them.
+
+    Quote-aware, and that is the whole point. Splitting the raw text with a
+    plain regex shattered any command carrying an operator inside a quoted
+    argument -- every decisions.md table row holds three `|` -- into fragments
+    with unbalanced quotes. Every fragment then failed to lex, the command
+    matched no recognized shape, and the gate blocked the exact
+    `plan_edit.py entry-append` its own message had just prescribed.
+
+    Returns None when the command cannot be read at all.
+    """
+    stripped = _strip_substitutions(command)
+    if stripped is None:
+        return None
+    lexable, substituted = stripped
+    pieces: list[tuple[str, str]] = []
+    current: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(lexable):
+        char = lexable[index]
+        if quote == "'":
+            current.append(char)
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "\\" and index + 1 < len(lexable):
+            current.extend(lexable[index : index + 2])
+            index += 2
+            continue
+        if char in "\"'":
+            if quote is None:
+                quote = char
+            elif quote == char:
+                quote = None
+            current.append(char)
+            index += 1
+            continue
+        if (quote is None and char in SEGMENT_OPERATOR_CHARS
+                and not (char in "&|" and _is_redirect_ampersand(lexable, index))):
+            operator = char
+            while char in "&|" and index + 1 < len(lexable) and lexable[index + 1] == char:
+                index += 1
+                operator += char
+            pieces.append(("".join(current), operator))
+            current = []
+            index += 1
+            continue
+        current.append(char)
+        index += 1
+    if quote:
+        return None
+    pieces.append(("".join(current), ""))
+
+    segments: list[Segment] = []
+    for text, terminator in pieces:
+        if not text.strip():
+            continue
+        try:
+            argv = shlex.split(text)
+        except ValueError:
+            return None
+        if argv:
+            segments.append(Segment(
+                argv,
+                terminator,
+                text,
+                # A forged mark in the original text indexes nothing real, so
+                # bound the lookup rather than raising out of the gate.
+                [substituted[index] for mark in SUBSTITUTION_RE.findall(text)
+                 if (index := int(mark)) < len(substituted)],
+            ))
+    return segments
+
+
 def bash_is_read_only(tool_input: object) -> bool:
-    command = ""
-    if isinstance(tool_input, dict):
-        command = tool_input.get("command") or tool_input.get("cmd") or ""
-    elif isinstance(tool_input, str):
-        command = tool_input
-    if not isinstance(command, str):
-        return False
-    # Command substitution can hide arbitrary mutation behind a read-only shape.
-    if any(x in command for x in ("`", "$(")):
-        return False
-    # Strip redirections that only discard output, then reject any that remain:
-    # a surviving > or < can write or consume real files.
-    probe = command
-    for token in DISCARD_REDIRECTS:
-        probe = probe.replace(token, " ")
-    if ">" in probe or "<" in probe:
-        return False
     # A pipeline or a cd/echo prefix is still read-only when every segment is.
     # The previous all-or-nothing bail made ordinary exploration such as
     # `cd repo && grep -n foo bar.py` look like an operational mutation, which
     # inflated the post-tool stale-checkpoint counter with pure noise.
-    segments = [segment.strip() for segment in SEGMENT_SPLIT_RE.split(probe)]
-    segments = [segment for segment in segments if segment]
+    segments = shell_segments(shell_command_text(tool_input))
     if not segments:
         return False
     return all(_segment_is_read_only(segment) for segment in segments)
 
 
-def _segment_is_read_only(segment: str) -> bool:
-    try:
-        argv = shlex.split(segment)
-    except ValueError:
+def _segment_is_read_only(segment: Segment) -> bool:
+    if not segment.argv:
         return False
-    if not argv:
+    # Command substitution can hide arbitrary mutation behind a read-only shape.
+    if segment.substitutions:
         return False
-    executable = os.path.basename(argv[0])
+    # Strip redirections that only discard output, then reject any that remain:
+    # a surviving > or < can write or consume real files.
+    probe = segment.text
+    for token in DISCARD_REDIRECTS:
+        probe = probe.replace(token, " ")
+    if ">" in probe or "<" in probe:
+        return False
+    executable = os.path.basename(segment.argv[0])
     if executable in READ_COMMANDS:
         return True
     if executable in GUARDED_READ_COMMANDS:
         forbidden = GUARDED_READ_COMMANDS[executable]
-        return not any(arg.startswith(flag) for arg in argv[1:] for flag in forbidden)
-    if executable == "git" and len(argv) >= 2 and argv[1] in READ_GIT_SUBCOMMANDS:
+        return not any(arg.startswith(flag) for arg in segment.argv[1:] for flag in forbidden)
+    if executable == "git" and len(segment.argv) >= 2 and segment.argv[1] in READ_GIT_SUBCOMMANDS:
         return True
     return False
 
@@ -440,36 +614,100 @@ def shell_command_text(payload_or_input: object) -> str:
     return command if isinstance(command, str) else ""
 
 
-def planning_helper_segments(command: str):
-    """Yield (segment, words) for segments whose executed program is a planning helper.
+def _segment_runs_planning_helper(words: list[str]) -> bool:
+    """Inspect the program actually run, never an incidental argument.
 
-    Inspects the program actually run, never an incidental argument, so naming a
-    helper or a plan path inside some other command grants nothing.
+    Naming a helper or a plan path inside some other command grants nothing.
     """
-    for segment in SEGMENT_SPLIT_RE.split(command):
-        try:
-            words = shlex.split(segment)
-        except ValueError:
-            continue
-        start = next((i for i, word in enumerate(words) if "=" not in word
-                      and Path(word).name not in {"env", "nohup", "setsid"}), None)
-        if start is None:
-            continue
-        executable = Path(words[start]).name
-        operands = words[start + 1:]
-        planning = executable in PLANNING_HELPERS
-        if executable in {"python", "python3", "bash", "sh"}:
-            script = next((word for word in operands if not word.startswith("-")), "")
-            planning = "-c" not in operands and "-m" not in operands and Path(script).name in PLANNING_HELPERS
-        elif executable in {"find", "rg", "ls", "readlink", "realpath"}:
-            planning = any(Path(word).name in PLANNING_HELPERS for word in operands)
-        if planning:
-            yield segment, words
+    start = next((i for i, word in enumerate(words) if "=" not in word
+                  and Path(word).name not in {"env", "nohup", "setsid"}), None)
+    if start is None:
+        return False
+    executable = Path(words[start]).name
+    operands = words[start + 1:]
+    if executable in {"python", "python3", "bash", "sh"}:
+        script = next((word for word in operands if not word.startswith("-")), "")
+        return "-c" not in operands and "-m" not in operands and Path(script).name in PLANNING_HELPERS
+    if executable in {"find", "rg", "ls", "readlink", "realpath"}:
+        return any(Path(word).name in PLANNING_HELPERS for word in operands)
+    return executable in PLANNING_HELPERS
 
 
-def shell_runs_planning_helper(tool_input: object) -> bool:
-    """True when the command actually executes a planning helper."""
-    return any(True for _ in planning_helper_segments(shell_command_text(tool_input)))
+def planning_helper_segments(command: str):
+    """Yield the segments that run a planning helper.
+
+    Each carries the control operator that ended it, so a caller can tell
+    `helper &` from `helper && next` without lexing the text again.
+    """
+    for segment in shell_segments(command) or []:
+        if _segment_runs_planning_helper(segment.argv):
+            yield segment
+
+
+PLAN_ROOT_MARKERS = ("tmp/plan-files/", "tmp/plan-with-files/")
+
+
+def _plan_file_arguments(words: list[str]):
+    """Yield the arguments that name a plan Markdown file.
+
+    Tests each argument itself rather than scanning it for a path pattern: a
+    lexed argument is already exact, while the prose scanner stops at the first
+    space and would report a fragment of a path whose directory contains one.
+    """
+    for word in words:
+        normalized = word.replace("\\", "/")
+        if not normalized.endswith(".md"):
+            continue
+        if any(marker in normalized or normalized.startswith(marker) for marker in PLAN_ROOT_MARKERS):
+            yield word
+
+
+def _substitutions_are_read_only(segment: Segment) -> bool:
+    """A repair may compute an argument; the command it runs to do so may not write.
+
+    `--expected-fingerprint "$(sha256sum tasks.md | cut -d' ' -f1)"` is the
+    documented way to produce that value, so substitution cannot simply be
+    banned inside a repair. It does run a second command, which therefore faces
+    the same read-only test as any other segment.
+    """
+    for command in segment.substitutions:
+        inner = shell_segments(command)
+        if not inner or not all(_segment_is_read_only(part) for part in inner):
+            return False
+    return True
+
+
+def shell_runs_planning_helper(tool_input: object, plan_dir: Path | None = None) -> bool:
+    """True when the whole command is owned-plan maintenance and nothing else.
+
+    Every segment must run a planning helper or be demonstrably read-only. One
+    qualifying segment used to be enough, which let any command launder itself
+    through the allowance: `rm -rf src && plan_edit.py phase-add` passed a
+    closed gate, and the rm ran. Chaining unrelated work onto a repair is not a
+    capability the gate owes anyone -- send that work as its own call once the
+    gate reopens.
+
+    With a plan_dir, every plan path a helper names must also lie inside it: the
+    allowance exists for maintaining the owned plan, so a helper aimed at a
+    different task is not maintenance. A helper that names no plan path is still
+    allowed; it resolves the owned plan from the pointer itself.
+    """
+    segments = shell_segments(shell_command_text(tool_input))
+    if not segments:
+        return False
+    maintains = False
+    for segment in segments:
+        if _segment_runs_planning_helper(segment.argv):
+            if plan_dir is not None and any(
+                not inside(word, plan_dir) for word in _plan_file_arguments(segment.argv)
+            ):
+                return False
+            if not _substitutions_are_read_only(segment):
+                return False
+            maintains = True
+        elif not _segment_is_read_only(segment):
+            return False
+    return maintains
 
 
 def planning_background_warning(payload: dict) -> str:
@@ -484,11 +722,12 @@ def planning_background_warning(payload: dict) -> str:
     explicit = isinstance(args, dict) and any(
         args.get(key) is True for key in ("background", "is_background", "run_in_background")
     )
-    for segment, words in planning_helper_segments(command):
-        # Only treat an unquoted shell ampersand as explicit detachment.
-        lexer = shlex.shlex(segment, posix=False, punctuation_chars="&>")
-        lexer.whitespace_split = True
-        detached = "&" in list(lexer) or any(word in {"nohup", "setsid"} for word in words)
+    for segment in planning_helper_segments(command):
+        # Only an unquoted trailing ampersand is detachment; `&&` chains a
+        # second foreground command and must not read as one.
+        detached = segment.terminator == "&" or any(
+            word in {"nohup", "setsid"} for word in segment.argv
+        )
         if explicit or detached:
             return ("[plan-files] FOREGROUND PLANNING COMMAND REQUIRED. Run planning helpers and their "
                     "path discovery with background/is_background/run_in_background=false and without "
@@ -603,7 +842,7 @@ def main() -> int:
     # it actually runs a planning helper; otherwise `<mutation>; cat <plan>/x.md`
     # would launder any mutation through the owned-plan allowance.
     if simple_name in SHELL_TOOL_NAMES:
-        return 0 if shell_runs_planning_helper(tool_input) else 1
+        return 0 if shell_runs_planning_helper(tool_input, plan_dir) else 1
     if references_owned_plan(tool_input, plan_dir):
         return 0
     return 1

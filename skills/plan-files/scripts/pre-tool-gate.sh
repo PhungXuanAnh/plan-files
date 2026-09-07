@@ -291,11 +291,11 @@ DISCUSSION_HINT="If the user requested only discussion of this plan/workflow, ru
 
 # The gate recognizes a repair/checkpoint call from its tool input, never from
 # a script or tool name, so a block message must state that condition instead
-# of naming a category the agent cannot act on. Without it, a call that is
-# morally "plan-local repair" but names nothing -- `plan_edit.py --help`, a
-# version probe -- reads as a broken gate rather than as a call the classifier
-# simply cannot see.
-ALLOWED_HINT="Still allowed, recognized from the tool input rather than from a tool or script name: (1) calls that are demonstrably read-only; (2) calls whose write targets all lie inside the owned plan directory $PLAN_DIR; (3) shell commands that actually execute one of the planning helper scripts in $(planning_script_path '' | sed 's:/$::'), passing --plan $PLAN_DIR/tasks.md. A shell command's write targets cannot be parsed, so merely mentioning a plan path in it authorizes nothing; a bare --help or a version probe names nothing and is blocked like any other unrecognized call."
+# of naming a category the agent cannot act on. Stating it this way also keeps
+# the message honest about the boundary: a helper is recognized by the program
+# the command actually runs, so `--help` or a version probe on one passes,
+# while quoting a helper or a plan path inside some other command does not.
+ALLOWED_HINT="Still allowed, recognized from the tool input rather than from a tool or script name: (1) calls that are demonstrably read-only; (2) calls whose write targets, or whose whole arguments, are paths inside the owned plan directory $PLAN_DIR; (3) shell commands whose every segment either runs one of the planning helper scripts in $(planning_script_path '' | sed 's:/$::') or is read-only, with --plan defaulting to this plan and never naming another. A plan path quoted inside a longer argument authorizes nothing, and chaining other work onto a repair blocks the whole command -- send that work as its own call."
 
 # Invalid format/profile/status blocks execution before Stop, including legacy plans.
 INTEGRITY_WARN=$(planning_integrity_warning "$PLAN_DIR/tasks.md")

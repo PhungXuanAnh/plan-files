@@ -435,6 +435,18 @@ P1.1
                      + shlex.quote(f"from pathlib import Path; Path({str(outside)!r}).write_text('x')"))
         repair = (f"python3 {shlex.quote(str(SCRIPTS / 'plan_edit.py'))} --plan {shlex.quote(str(self.tasks))}"
                   " --expected-fingerprint x phase-update 1 --status complete")
+        # A repair is not a carrier: the chained command runs too, so the whole
+        # call must fail rather than pass on the strength of one good segment.
+        chained_after = f"{repair} && rm -rf {shlex.quote(str(outside))}"
+        chained_before = f"rm -rf {shlex.quote(str(outside))} && {repair}"
+        # A repair may compute an argument, but the substituted command runs
+        # too, so it faces the same read-only test as any other segment.
+        editor = shlex.quote(str(SCRIPTS / "plan_edit.py"))
+        tasks = shlex.quote(str(self.tasks))
+        computed = (f"python3 {editor} --plan {tasks} --expected-fingerprint "
+                    f"\"$(sha256sum {tasks} | cut -d' ' -f1)\" phase-update 1 --status complete")
+        substituted = (f"python3 {editor} --plan {tasks} --expected-fingerprint x "
+                       f"phase-update 1 --title $(rm -rf {shlex.quote(str(outside))})")
         for provider in ADAPTERS:
             with self.subTest(provider=provider):
                 self.state(provider, "pending", provider, "fixture", "task-a")
@@ -444,10 +456,21 @@ P1.1
                                  "a blocked mutation must not resolve ownership as a side effect")
                 self.own(provider)
                 self.run_command(["bash", "-c", self.action(provider, "discuss")], provider)
-                self.assertIn(self.hook(provider, "pre-tool-use.sh", laundered)["decision"],
-                              {"block", "deny"})
-                # Real repair and read-only diagnosis must stay available.
-                for allowed in (repair, "grep -n foo bar.py"):
+                for blocked in (laundered, chained_after, chained_before, substituted):
+                    self.assertIn(self.hook(provider, "pre-tool-use.sh", blocked)["decision"],
+                                  {"block", "deny"})
+                # An unparseable tool proves nothing by quoting the plan in prose,
+                # while naming it as a whole argument still reads as maintenance.
+                self.assertIn(self.hook(provider, "pre-tool-use.sh", tool="mcp__deploy__ship",
+                                        tool_input={"environment": "production",
+                                                    "note": f"see {self.tasks} for context"}
+                                        )["decision"], {"block", "deny"})
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", tool="mcp__plan__annotate",
+                                           tool_input={"note": str(self.tasks)}
+                                           ).get("decision"), {"block", "deny"})
+                # Real repair, a helper piped into a reader, and read-only
+                # diagnosis must stay available.
+                for allowed in (repair, computed, f"{repair} | head -5", "grep -n foo bar.py"):
                     self.assertNotIn(self.hook(provider, "pre-tool-use.sh", allowed).get("decision"),
                                      {"block", "deny"})
 

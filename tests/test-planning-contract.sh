@@ -684,7 +684,12 @@ if printf '%s' '{"tool_name":"apply_patch","tool_input":{"patch":"*** Update Fil
 fi
 printf '%s' "{\"tool_name\":\"apply_patch\",\"tool_input\":{\"patch\":\"*** Update File: $PLAN_DIR/tasks.md\"}}" | python3 "$REPO_ROOT/skills/plan-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR" || fail "compaction allows plan mutation"
 printf '%s' "{\"tool_name\":\"apply_patch\",\"tool_input\":{\"command\":\"*** Begin Patch\\n*** Update File: $PLAN_DIR/history.md\\n*** End Patch\"}}" | python3 "$REPO_ROOT/skills/plan-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR" || fail "compaction allows bridge apply_patch command payload"
-printf '%s' "{\"tool_name\":\"codex_apply_patch\",\"tool_input\":{\"opaque\":\"write $PLAN_DIR/history.md\"}}" | python3 "$REPO_ROOT/skills/plan-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR" || fail "compaction allows unknown mutation tool with exact owned plan reference"
+printf '%s' "{\"tool_name\":\"codex_apply_patch\",\"tool_input\":{\"opaque\":\"$PLAN_DIR/history.md\"}}" | python3 "$REPO_ROOT/skills/plan-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR" || fail "compaction allows unknown mutation tool whose argument is the owned plan path"
+# A path inside a sentence is a mention, not a target: an unparseable tool
+# cannot buy the owned-plan allowance with prose.
+if printf '%s' "{\"tool_name\":\"codex_apply_patch\",\"tool_input\":{\"opaque\":\"write $PLAN_DIR/history.md\"}}" | python3 "$REPO_ROOT/skills/plan-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR"; then
+    fail "compaction blocks unknown mutation tool that only mentions the plan"
+fi
 if printf '%s' '{"tool_name":"codex_apply_patch","tool_input":{"opaque":"write history.md"}}' | python3 "$REPO_ROOT/skills/plan-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR"; then
     fail "compaction does not trust plan basenames without owned plan path"
 fi
