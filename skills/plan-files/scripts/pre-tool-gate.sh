@@ -297,6 +297,7 @@ if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION
         log "session=$SESSION_ID decision=allow-discussion-non-plan-write tool=$TOOL_NAME"
         printf '{}'; exit 0
     fi
+    log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=block-discussion tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
     block "[plan-files] DISCUSSION ONLY. Allowed: reads, questions, owned-plan maintenance, and writes whose targets all lie outside $PWD/tmp/plan-files (a report or notes the user asked for). Blocked: writes into any plan directory, and shell commands whose write targets cannot be located — use a write tool with an explicit path for those. Advancing the plan itself requires a new user prompt and bind. The candidate and unfinished work are preserved."
 fi
 DISCUSSION_HINT="If the user requested only discussion of this plan/workflow, run exactly: $EXPECTED_DISCUSS. This permits a discussion Stop while keeping execution gated; do not use it to pause authorized implementation."

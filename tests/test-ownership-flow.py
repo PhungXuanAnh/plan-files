@@ -179,6 +179,49 @@ P1.1
                                            f'{self.action(provider, "discuss")} 2>&1 | tail -1').get("decision"),
                                  {"block", "deny"})
 
+    def discuss(self, provider):
+        """Put this provider's session into the discussing lease."""
+        self.own(provider)
+        self.run_command(["bash", "-c", self.action(provider, "discuss")], provider)
+        self.assertEqual(self.state(provider, "route-status", provider, "fixture"), "discussing")
+
+    def test_env_prefixed_reads_and_help_probes_are_recognized(self):
+        """What a gate calls read-only decides what every gated state refuses.
+
+        Reading argv[0] as the executable made `PLANE_INSECURE=1 cat file`
+        unclassifiable, and a read tool whose name carries its verb anywhere but
+        the front (`jira_search`) was refused for its name alone. Both were
+        blocked in the one lease that exists to allow reads.
+        """
+        for provider in ADAPTERS:
+            with self.subTest(provider=provider):
+                self.discuss(provider)
+                for command in (f"PLANE_INSECURE=1 cat {shlex.quote(str(self.tasks))}",
+                                f"env FOO=1 grep -c Goal {shlex.quote(str(self.tasks))}"):
+                    self.assertNotIn(self.hook(provider, "pre-tool-use.sh", command).get("decision"),
+                                     {"block", "deny"}, command)
+                # An env prefix must not launder a write into a read either.
+                self.assertIn(self.hook(provider, "pre-tool-use.sh",
+                                        f"FOO=1 rm -rf {shlex.quote(str(self.project / 'src'))}").get("decision"),
+                              {"block", "deny"})
+                for tool, allowed in (("mcp__jira__jira_search", True),
+                                      ("mcp__serena__find_symbol", True),
+                                      ("mcp__github__create_issue", False),
+                                      ("mcp__x__search_and_replace", False)):
+                    decision = self.hook(provider, "pre-tool-use.sh", tool=tool,
+                                         tool_input={"query": "x"}).get("decision")
+                    if allowed:
+                        self.assertNotIn(decision, {"block", "deny"}, tool)
+                    else:
+                        self.assertIn(decision, {"block", "deny"}, tool)
+                # A help probe on a planning helper is read-only, so it may ride
+                # along with the routing command the gate itself prescribes.
+                self.state(provider, "pending", provider, "fixture", "task-a")
+                helper = shlex.quote(str(SCRIPTS / "plan_edit.py"))
+                probe = f'{self.action(provider, "bind")}; python3 {helper} handoff-write --help'
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", probe).get("decision"),
+                                 {"block", "deny"}, probe)
+
     def test_missing_identity_still_supplies_recovery(self):
         self.tasks.write_text("# Tasks: empty identity\n")
         for provider in ADAPTERS:

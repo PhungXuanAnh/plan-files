@@ -86,6 +86,33 @@ READ_GIT_SUBCOMMANDS = {
     "show",
     "status",
 }
+# Read intent anywhere in the name, not only at its start: `jira_search` and
+# `get_pull_request` are reads that the prefix list alone classified as unknown
+# writes, so every gated state refused them.
+READ_TOOL_TOKENS = {
+    "cat",
+    "describe",
+    "diff",
+    "exists",
+    "fetch",
+    "find",
+    "get",
+    "grep",
+    "inspect",
+    "list",
+    "load",
+    "lookup",
+    "ls",
+    "peek",
+    "query",
+    "read",
+    "rg",
+    "search",
+    "show",
+    "stat",
+    "summarize",
+    "view",
+}
 MUTATION_TOOL_TOKENS = {
     "create",
     "delete",
@@ -97,6 +124,27 @@ MUTATION_TOOL_TOKENS = {
     "rename",
     "replace",
     "write",
+}
+# A write verb beside a read verb makes the call a write: `search_and_replace`
+# and `create_from_search` must not read as reads. Kept separate from
+# MUTATION_TOOL_TOKENS so widening the read veto cannot widen what the
+# PostToolUse counters call an operational mutation.
+READ_VETO_TOKENS = MUTATION_TOOL_TOKENS | {
+    "add",
+    "append",
+    "apply",
+    "close",
+    "commit",
+    "merge",
+    "modify",
+    "post",
+    "publish",
+    "push",
+    "send",
+    "set",
+    "submit",
+    "update",
+    "upload",
 }
 SHELL_TOOL_NAMES = {
     "bash",
@@ -130,6 +178,33 @@ TEXT_PLAN_PATH_RE = re.compile(
     r"[A-Za-z0-9._-]+[\\/]+[^\s\"'`<>|]*?\.md)"
     r"(?=$|[\s\"'`<>|)\]},;:])"
 )
+
+
+def name_tokens(name: str) -> set[str]:
+    """Every word in a tool name, split on separators and on camelCase."""
+    tokens: set[str] = set()
+    for part in re.split(r"[^A-Za-z0-9]+", name):
+        if not part:
+            continue
+        tokens.add(part.lower())
+        for piece in re.findall(r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+", part):
+            tokens.add(piece.lower())
+    return tokens
+
+
+def names_read_tool(simple_name: str) -> bool:
+    """True when the tool's own name states that it reads.
+
+    A read token anywhere in the name counts, not only at its start, unless a
+    write verb sits beside it. The veto also applies to the historical prefix
+    list, which read `search_and_replace` and `get_and_delete` as reads.
+    """
+    tokens = name_tokens(simple_name)
+    if tokens & READ_VETO_TOKENS:
+        return False
+    if any(simple_name.startswith(prefix) for prefix in READ_TOOL_PREFIXES):
+        return True
+    return bool(tokens & READ_TOOL_TOKENS)
 
 
 def strings(value: object):
@@ -331,7 +406,7 @@ def tool_class(payload: dict, plan_dir: Path) -> dict[str, object]:
     if plan_maintenance:
         category = "plan_maintenance"
         semantic_weight = 0
-    elif simple_name.rsplit(".", 1)[-1] in QUESTION_TOOLS or any(simple_name.startswith(prefix) for prefix in READ_TOOL_PREFIXES) or (
+    elif simple_name.rsplit(".", 1)[-1] in QUESTION_TOOLS or names_read_tool(simple_name) or (
         simple_name in SHELL_TOOL_NAMES and bash_is_read_only(tool_input)
     ):
         category = "read_only_exploration"
@@ -572,6 +647,22 @@ def bash_is_read_only(tool_input: object) -> bool:
     return all(_segment_is_read_only(segment) for segment in segments)
 
 
+ENV_WRAPPERS = {"env", "nohup", "setsid"}
+HELP_FLAGS = {"--help", "-h", "--version", "-V"}
+
+
+def _command_start(words: list[str]) -> int | None:
+    """Index of the program a segment actually runs, past env assignments.
+
+    `PLANE_INSECURE=1 cat file` runs cat. Reading argv[0] as the executable made
+    any leading assignment unclassifiable, so a read-only query carrying one
+    looked like an unknown mutation to every gate that asks -- which is how a
+    discussion turn ended up refusing the read-only API calls it exists to allow.
+    """
+    return next((index for index, word in enumerate(words)
+                 if "=" not in word and Path(word).name not in ENV_WRAPPERS), None)
+
+
 def _segment_is_read_only(segment: Segment, allow_substitutions: bool = False) -> bool:
     if not segment.argv:
         return False
@@ -588,13 +679,25 @@ def _segment_is_read_only(segment: Segment, allow_substitutions: bool = False) -
         probe = probe.replace(token, " ")
     if ">" in probe or "<" in probe:
         return False
-    executable = os.path.basename(segment.argv[0])
+    start = _command_start(segment.argv)
+    if start is None:
+        return False
+    executable = os.path.basename(segment.argv[start])
+    operands = segment.argv[start + 1:]
     if executable in READ_COMMANDS:
         return True
     if executable in GUARDED_READ_COMMANDS:
         forbidden = GUARDED_READ_COMMANDS[executable]
-        return not any(arg.startswith(flag) for arg in segment.argv[1:] for flag in forbidden)
-    if executable == "git" and len(segment.argv) >= 2 and segment.argv[1] in READ_GIT_SUBCOMMANDS:
+        return not any(arg.startswith(flag) for arg in operands for flag in forbidden)
+    if executable == "git" and operands and operands[0] in READ_GIT_SUBCOMMANDS:
+        return True
+    # A help or version probe on a planning helper writes nothing: these are the
+    # argparse programs this repo owns, and they print usage and exit. It is not
+    # generalized to any executable on purpose -- a shell script that ignores its
+    # arguments would run its real work, and reading the script is the safe way
+    # to learn an unknown program.
+    call = _planning_helper_call(segment.argv)
+    if call is not None and any(word in HELP_FLAGS for word in call[1]):
         return True
     return False
 
@@ -617,23 +720,40 @@ def shell_command_text(payload_or_input: object) -> str:
     return command if isinstance(command, str) else ""
 
 
-def _segment_runs_planning_helper(words: list[str]) -> bool:
-    """Inspect the program actually run, never an incidental argument.
+def _planning_helper_call(words: list[str]) -> tuple[str, list[str]] | None:
+    """The planning helper this segment runs and the operands it passes it.
 
-    Naming a helper or a plan path inside some other command grants nothing.
+    Inspects the program actually run, never an incidental argument: naming a
+    helper or a plan path inside some other command grants nothing.
     """
-    start = next((i for i, word in enumerate(words) if "=" not in word
-                  and Path(word).name not in {"env", "nohup", "setsid"}), None)
+    start = _command_start(words)
     if start is None:
-        return False
+        return None
     executable = Path(words[start]).name
     operands = words[start + 1:]
     if executable in {"python", "python3", "bash", "sh"}:
+        if "-c" in operands or "-m" in operands:
+            return None
         script = next((word for word in operands if not word.startswith("-")), "")
-        return "-c" not in operands and "-m" not in operands and Path(script).name in PLANNING_HELPERS
-    if executable in {"find", "rg", "ls", "readlink", "realpath"}:
-        return any(Path(word).name in PLANNING_HELPERS for word in operands)
-    return executable in PLANNING_HELPERS
+        name = Path(script).name
+        if name not in PLANNING_HELPERS:
+            return None
+        return name, operands[operands.index(script) + 1:]
+    if executable in PLANNING_HELPERS:
+        return executable, operands
+    return None
+
+
+def _segment_runs_planning_helper(words: list[str]) -> bool:
+    if _planning_helper_call(words) is not None:
+        return True
+    # Path discovery for a helper is read-only and counts as running one.
+    start = _command_start(words)
+    if start is None:
+        return False
+    if Path(words[start]).name in {"find", "rg", "ls", "readlink", "realpath"}:
+        return any(Path(word).name in PLANNING_HELPERS for word in words[start + 1:])
+    return False
 
 
 def planning_helper_segments(command: str):
@@ -851,8 +971,7 @@ def is_read_only_call(payload: dict) -> bool:
     name = str(payload.get("tool_name") or payload.get("toolName") or "").lower()
     simple = name.rsplit("__", 1)[-1]
     tool_input = payload_tool_input(payload)
-    if simple.rsplit(".", 1)[-1] in QUESTION_TOOLS or any(
-            simple.startswith(prefix) for prefix in READ_TOOL_PREFIXES):
+    if simple.rsplit(".", 1)[-1] in QUESTION_TOOLS or names_read_tool(simple):
         return True
     return simple in SHELL_TOOL_NAMES and bash_is_read_only(tool_input)
 
@@ -946,7 +1065,7 @@ def main() -> int:
     simple_name = tool_name.rsplit("__", 1)[-1]
     tool_input = payload_tool_input(payload)
 
-    if simple_name.rsplit(".", 1)[-1] in QUESTION_TOOLS or any(simple_name.startswith(prefix) for prefix in READ_TOOL_PREFIXES):
+    if simple_name.rsplit(".", 1)[-1] in QUESTION_TOOLS or names_read_tool(simple_name):
         return 0
     if simple_name in SHELL_TOOL_NAMES:
         if bash_is_read_only(tool_input):
