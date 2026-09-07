@@ -95,27 +95,27 @@ Recurring failures belong in `findings.md` as symptom/root cause/workaround; res
 For a larger plan, resume without loading every file:
 
 ```bash
-python3 <skill-dir>/scripts/plan_state.py overview <task-dir>/tasks.md
-python3 <skill-dir>/scripts/plan_state.py restore-check <task-dir>/tasks.md
-python3 <skill-dir>/scripts/plan_state.py phase <task-dir>/tasks.md 2
-python3 <skill-dir>/scripts/plan_state.py section <task-dir>/findings.md "Current Summary"
+python3 <skill-dir>/scripts/plan_state.py overview
+python3 <skill-dir>/scripts/plan_state.py restore-check
+python3 <skill-dir>/scripts/plan_state.py phase 2
+python3 <skill-dir>/scripts/plan_state.py section findings.md "Current Summary"
 ```
 
 Use the returned file fingerprint for a routine edit:
 
 ```bash
-python3 <skill-dir>/scripts/plan_edit.py --plan <task-dir>/tasks.md \
-  --expected-fingerprint <sha256> entry-append --file tasks.md \
+python3 <skill-dir>/scripts/plan_edit.py --expected-fingerprint <sha256> \
+  entry-append --file tasks.md \
   --heading "Files Touched" --entry '- src/auth/login.ts: await fix'
 ```
 
-Read `references/plan-operations.md` for structural, archival, decision, and handoff commands. Directly read or patch the Markdown when the intended repair is too unusual for those safe primitives.
+These commands resolve the plan from the workspace's `.plan-files` pointer; pass `--plan <task-dir>/tasks.md` (or the positional path for `plan_state.py`) to act on another task. Read `references/plan-operations.md` for structural, archival, decision, and handoff commands. Directly read or patch the Markdown when the intended repair is too unusual for those safe primitives.
 
 When the hot window already has 12 phase headings, add the next phase with both current fingerprints. The editor archives and evicts the oldest eligible complete phase before writing the new monotonic ID:
 
 ```bash
-python3 <skill-dir>/scripts/plan_edit.py --plan <task-dir>/tasks.md \
-  --expected-fingerprint <tasks-sha> phase-add --title "Follow-up verification" \
+python3 <skill-dir>/scripts/plan_edit.py --expected-fingerprint <tasks-sha> \
+  phase-add --title "Follow-up verification" \
   --expected-history-fingerprint <history-sha-or-missing>
 ```
 

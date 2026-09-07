@@ -4,6 +4,10 @@ Use these commands when a planning file is large enough that loading or patching
 
 Resolve all script paths relative to `SKILL.md`.
 
+## Resolving the plan
+
+`plan_state.py`, `plan_edit.py`, and `plan_checkpoint.py` all take the plan as an optional argument (`--plan` on the editor and checkpoint, positional on the reader). When it is omitted they resolve the task named by this workspace's `.plan-files` pointer, discovered upward from the working directory — the same default the hooks route on, rewritten by `session-state.sh` whenever a session claims or binds a task. A command that resolved it this way echoes the file it acted on in `plan`, and one that cannot resolve a usable pointer fails without writing, naming the pointer it read. Name the plan explicitly to act on a task other than the active one, or when running from outside the project. Examples below keep `--plan` where the path is the point; everywhere else it is optional. `plan_state.py section` accepts a bare planning filename (`decisions.md`) and resolves it inside the active task directory.
+
 ## Bounded reads
 
 `restore-check` schema 1 includes additive `discussion_mode`: true for an unstarted plan with empty Current Phase/Active Item and all phases pending. Such a plan may pass restore checks and yield for discussion, but PreTool still requires starting an item before execution. `assert-finalizable` continues to require settled phases; discussion is not completion.
@@ -58,7 +62,7 @@ python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprin
 
 Available phase operations are `phase-add`, `phase-update`, `phase-move`, and `phase-remove`. `phase-update` takes `--title`, `--status`, or both; it writes the exact `- **Status:**` grammar so a pause or block never depends on hand-editing that line. `blocked` and `deferred` require `--reason`, and `--status complete` is refused while the phase still holds unchecked items. Item operations are `item-add`, `item-update`, `item-move`, and `item-remove`. Add operations allocate the next unused ID. Reordering within a phase preserves the ID; moving across phases allocates a phase-matching ID and returns the mapping. The history fingerprint is optional while fewer than 12 phase headings remain, but required when `phase-add` must archive the oldest eligible complete phase to keep the hot window at 12.
 
-Use `--dry-run` before a consequential structural edit. A dry run validates the candidate, preflights budgets, and returns the candidate fingerprint without changing disk. `--plan`, `--expected-fingerprint`, and `--dry-run` are global flags and must appear before the subcommand.
+Use `--dry-run` before a consequential structural edit. A dry run validates the candidate, preflights budgets, and returns the candidate fingerprint without changing disk. `--plan`, `--expected-fingerprint`, and `--dry-run` are global flags and must appear before the subcommand; `--expected-history-fingerprint` belongs to the subcommand that archives.
 
 Every subcommand carries `--help`. `handoff-write --help` states the required headings, the timestamp format, and the byte/line budget, and a rejected handoff reports every violation in one response rather than one per attempt.
 
@@ -98,7 +102,7 @@ python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprin
   entry-remove --file decisions.md --heading "Open Decision Questions" --entry '- [ ] Resolved question'
 ```
 
-The expected fingerprint belongs to the file named by `--file`, not always `tasks.md`. The editor allows only known planning filenames and sections, matches replacement/removal entries exactly once, rejects entries or section bodies that escape into another `##` section, preflights that file's budget, and atomically replaces it.
+The expected fingerprint belongs to the file named by `--file`, not always `tasks.md`. The editor allows only known planning filenames and sections, matches replacement/removal entries exactly once, rejects entries or section bodies that escape into another `##` section, preflights that file's budget, and atomically replaces it. `entry-append` separates prose entries with a blank line but appends a Markdown table row directly under the row above it, because a blank line between two rows ends the table and starts a second one.
 
 Common targets:
 
@@ -115,6 +119,13 @@ Keep using `plan_checkpoint.py` for `start`, `progress`, and `complete`. Do not 
 ## Lifecycle operations
 
 ```bash
+python3 <skill-dir>/scripts/plan_edit.py --expected-fingerprint <tasks-sha> \
+  reopen --title "Vanity domain aliases" \
+  --decision '| D2 | Add vanity domain aliases | user authorized on 2026-09-07 | 2026-09-07 |' \
+  --supersede D1 \
+  --item "The alias resolver ships behind the existing redirect service." \
+  --verify "The alias e2e suite passes." \
+  --non-goals "analytics dashboards; per-user custom domains"
 python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <decisions-sha> \
   decision-supersede D1 --replacement D2 --reason "User changed the requirement"
 python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <tasks-sha> \
@@ -127,6 +138,8 @@ python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprin
 python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <handoff-sha-or-missing> \
   handoff-write --content '<complete handoff snapshot>'
 ```
+
+`reopen` is the one call that makes a settled plan able to record new work. It appends the authorizing row to Active Decisions, optionally retires what that row replaces, reconciles whichever scope fields you name, adds the phase that carries the work with its items, and starts the first one — validating everything before writing anything, and writing `decisions.md` before `tasks.md` so a crash can leave a recorded authorization with no phase, never a phase nothing authorized. Re-running it after such a crash does not duplicate the decision row. It refuses a plan that still has an actionable phase: that plan needs `phase-add`/`item-add` and `plan_checkpoint.py start` instead. Its JSON adds `phase`, `items`, `item` (the started one), `decision`, `decision_already_recorded`, `superseded`, and the `decisions_file`/`decisions_old_fingerprint`/`decisions_fingerprint`/`decisions_usage` fields, alongside the usual tasks.md fingerprints, context, and budgets. Like `phase-add`, it needs `--expected-history-fingerprint` only when the new phase pushes the hot window past 12 headings.
 
 `decision-supersede` moves one active row and records its replacement in one atomic file write. `archive-phase` evicts one named complete, non-current phase; `compact-oldest` chooses the oldest eligible phase. Rollover and entry/phase archival create a bounded `.plan-edit-transaction.json`, then commit history before hot state under a plan-directory lock. The next `plan_edit.py` call automatically reconciles a journal left after either write, validates both target fingerprints, and clears it only after the recovered plan validates. A conflicting external edit fails closed and preserves the journal for diagnosis. Repeat `compact-oldest` with refreshed task/history fingerprints while phase archival remains the right way to clear a budget warning. `handoff-write` accepts a complete snapshot and creates or replaces `handoff.md`; it requires timezone-aware ISO-8601 `Updated` and `Reverify after` fields with a positive freshness window. `handoff-clear` removes a fingerprint-matched obsolete snapshot.
 

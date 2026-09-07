@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterable
 
+import plan_checkpoint
 from plan_state import (
     CURRENT_PHASE_BYTE_LIMIT,
     CURRENT_PHASE_ITEM_LIMIT,
@@ -30,6 +31,7 @@ from plan_state import (
     file_fingerprint,
     handoff_metadata,
     parse_plan,
+    resolve_plan_argument,
 )
 
 PHASE_HIGH_WATER_RE = re.compile(r"<!-- Phase ID high-water:\s*(\d+) -->")
@@ -437,6 +439,17 @@ def _replace_section(lines: list[str], heading: str, content: str) -> list[str]:
     return result
 
 
+def _is_table_row(line: str) -> bool:
+    stripped = line.strip()
+    return stripped.startswith("|") and stripped.endswith("|")
+
+
+REOPEN_DECISION_HINT = (
+    '--decision must be one full Active Decisions row, for example '
+    '"| D9 | Add branded short URLs | user authorized on 2026-09-07 | 2026-09-07 |"'
+)
+
+
 def _find_entry(lines: list[str], heading: str, entry: str) -> tuple[int, int]:
     start, end = _section_bounds(lines, heading)
     needle = _content_lines(entry, entry=True)
@@ -461,7 +474,11 @@ def _edit_section_entry(lines: list[str], command: str, heading: str, entry: str
             raise EditError("entry must not be empty")
         while end > start + 1 and not result[end - 1].strip():
             end -= 1
-        result[end:end] = ([""] if end > start + 1 else []) + body
+        # A blank line between two table rows ends the table and starts a new
+        # one, so the ledger a decisions row was appended to stops rendering as
+        # a single table. Separate prose entries, never consecutive rows.
+        separated = end > start + 1 and not (_is_table_row(result[end - 1]) and _is_table_row(body[0]))
+        result[end:end] = ([""] if separated else []) + body
         return result
     entry_start, entry_end = _find_entry(result, heading, entry)
     if command == "entry-replace":
@@ -853,9 +870,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--plan",
-        required=True,
         type=Path,
-        help="path to the plan's tasks.md file (not the task directory)",
+        help=(
+            "path to the plan's tasks.md file (not the task directory); omit it to use "
+            "the task named by this workspace's .plan-files pointer"
+        ),
     )
     parser.add_argument(
         "--expected-fingerprint",
@@ -927,6 +946,52 @@ def _parser() -> argparse.ArgumentParser:
             section.add_argument("--entry", required=True)
             if name == "entry-replace":
                 section.add_argument("--replacement", required=True)
+
+    reopen = commands.add_parser(
+        "reopen",
+        help="reopen a settled plan for newly authorized work, in one transaction",
+        description=(
+            "A plan whose phases are all settled cannot record what a new prompt authorizes, "
+            "and Stop accepts it as finished. This does every step that fact requires, in the "
+            "one order that is safe: append the authorizing decision (retiring what it "
+            "replaces), reconcile the scope fields you name, open the phase that will carry "
+            "the work with its items, and start the first one. Nothing is written until every "
+            "step validates."
+        ),
+    )
+    reopen.add_argument("--title", required=True, help="title of the phase that carries the authorized work")
+    reopen.add_argument(
+        "--decision",
+        required=True,
+        help='the authorization as one Active Decisions row: "| D9 | <decision> | <rationale> | <date> |"',
+    )
+    reopen.add_argument(
+        "--item",
+        action="append",
+        required=True,
+        metavar="OUTCOME",
+        help="observable outcome for the new phase; repeatable, and the first one becomes the Active Item",
+    )
+    reopen.add_argument(
+        "--verify",
+        action="append",
+        metavar="ACCEPTANCE",
+        help="acceptance (V) item for the new phase; repeatable",
+    )
+    reopen.add_argument("--supersede", metavar="OLD-ID", help="retire this Active Decisions row, replaced by --decision")
+    reopen.add_argument("--supersede-reason", help="why it was replaced; defaults to the new decision text")
+    reopen.add_argument("--goal", help="rewrite ## Goal for the authorized scope")
+    reopen.add_argument("--deliverable", help="rewrite the Task Identity Deliverable")
+    reopen.add_argument("--non-goals", help="rewrite the Task Identity Non-goals")
+    reopen.add_argument("--profile", choices=("A", "B", "C"), help="reset the Workflow Profile")
+    reopen.add_argument(
+        "--expected-decisions-fingerprint",
+        help="SHA-256 of decisions.md; optional, since the append is idempotent under the plan lock",
+    )
+    reopen.add_argument(
+        "--expected-history-fingerprint",
+        help="required only when the new phase rolls the oldest complete phase into history.md",
+    )
 
     supersede = commands.add_parser("decision-supersede", help="retire a decision into Superseded Decisions with a reason")
     supersede.add_argument("decision")
@@ -1061,6 +1126,168 @@ def _set_item_evidence_lines(lines: list[str], item, evidence: str) -> list[str]
     lines = list(lines)
     lines[index] = f"{indent}- Evidence: {cleaned}"
     return lines
+
+
+def _set_prose_body(lines: list[str], heading: str, value: str) -> list[str]:
+    """Replace a section's visible prose while keeping its guidance comments.
+
+    The comments in tasks.md carry the format contract itself, so rewriting a
+    Goal must not silently delete the rules for writing the next one.
+    """
+    start, end = _section_bounds(lines, heading)
+    kept: list[str] = []
+    in_comment = False
+    for line in lines[start + 1 : end]:
+        stripped = line.strip()
+        opens = "<!--" in stripped
+        if in_comment or opens:
+            kept.append(line)
+            in_comment = (in_comment or opens) and "-->" not in stripped
+    result = list(lines)
+    result[start + 1 : end] = kept + _content_lines(value) + ([""] if end < len(lines) else [])
+    return result
+
+
+def _set_labelled_field(lines: list[str], heading: str, label: str, value: str) -> list[str]:
+    """Rewrite one '- Label:' line, in either the plain or bold spelling."""
+    start, end = _section_bounds(lines, heading)
+    prefixes = (f"- {label}:", f"- **{label}:**")
+    matches = [
+        index
+        for index in range(start + 1, end)
+        if lines[index].strip().startswith(prefixes)
+    ]
+    if len(matches) != 1:
+        raise EditError(f"{heading} must contain exactly one '- {label}:' field")
+    bold = lines[matches[0]].strip().startswith(prefixes[1])
+    result = list(lines)
+    result[matches[0]] = f"{prefixes[1] if bold else prefixes[0]} {' '.join(value.split())}"
+    return result
+
+
+def _set_workflow_profile(lines: list[str], profile: str) -> list[str]:
+    start, end = _section_bounds(lines, "Workflow Profile")
+    matches = [index for index in range(start + 1, end) if lines[index].strip().startswith("**Profile:**")]
+    if len(matches) != 1:
+        raise EditError("Workflow Profile must contain exactly one '**Profile:**' line")
+    result = list(lines)
+    result[matches[0]] = f"**Profile:** {profile}"
+    return result
+
+
+def _decision_row_cells(row: str) -> list[str]:
+    stripped = row.strip()
+    if not _is_table_row(stripped):
+        raise EditError(REOPEN_DECISION_HINT)
+    cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+    if len(cells) < 4 or not cells[0] or not cells[1]:
+        raise EditError(REOPEN_DECISION_HINT)
+    return cells
+
+
+def _reopen_decisions(args) -> tuple[Path, str, str, bool]:
+    """Record the authorization that makes reopening this plan legitimate."""
+    target = _resolve_target(args.plan, "decisions.md")
+    if not target.is_file():
+        raise EditError(f"target does not exist: {target}")
+    cells = _decision_row_cells(args.decision)
+    decision_id = cells[0]
+    row = args.decision.strip()
+    lines = target.read_text(encoding="utf-8").splitlines()
+    start, end = _section_bounds(lines, "Active Decisions")
+    # Idempotent on purpose: decisions.md is written before tasks.md, so a
+    # crash in between must leave `reopen` safe to run again rather than
+    # appending the same authorization twice.
+    already = any(lines[index].strip() == row for index in range(start + 1, end))
+    if not already:
+        lines = _edit_section_entry(lines, "entry-append", "Active Decisions", row, None)
+    if args.supersede:
+        if args.supersede == decision_id:
+            raise EditError("--supersede must name a decision other than the one --decision adds")
+        reason = args.supersede_reason or cells[1]
+        lines = _decision_supersede(lines, args.supersede, decision_id, reason)
+    return target, _text(lines), decision_id, already
+
+
+def _reopen_tasks(args, state) -> tuple[list[str], object, dict[str, object]]:
+    """Reconcile scope, open the phase that carries the work, and start it."""
+    if not state.phases:
+        raise EditError("reopen needs an existing plan with phases")
+    actionable = [phase.num for phase in state.phases if phase.status not in SETTLED]
+    if actionable:
+        raise EditError(
+            f"Phase {actionable[0]} is still actionable, so this plan is not settled; "
+            "use phase-add/item-add and plan_checkpoint.py start instead"
+        )
+    lines = list(state.lines)
+    if args.goal:
+        lines = _set_prose_body(lines, "Goal", args.goal)
+    if args.deliverable:
+        lines = _set_labelled_field(lines, "Task Identity", "Deliverable", args.deliverable)
+    if args.non_goals:
+        lines = _set_labelled_field(lines, "Task Identity", "Non-goals", args.non_goals)
+    if args.profile:
+        lines = _set_workflow_profile(lines, args.profile)
+
+    lines, phase_result, archived = _phase_add(_validated_from_lines(args.plan, lines), args.title, None, None)
+    phase_num = phase_result["phase"]
+    items: list[str] = []
+    for kind, texts in (("P", args.item), ("V", args.verify or [])):
+        # Chain each kind after its own last item only. Anchoring a V item on a
+        # P item would place it above the phase status and skip the
+        # "**Done when:**" header that acceptance items live under.
+        previous = None
+        for text in texts:
+            lines, item_result = _item_add(
+                _validated_from_lines(args.plan, lines), phase_num, kind, text, previous
+            )
+            previous = item_result["item"]
+            items.append(previous)
+    lines = plan_checkpoint.apply_start(_validated_from_lines(args.plan, lines), items[0])
+    result = {
+        "phase": phase_num,
+        "archived_phase": phase_result["archived_phase"],
+        "items": items,
+        "item": items[0],
+    }
+    return lines, archived, result
+
+
+def _reopen_command(args, state, old_fingerprint: str) -> dict[str, object]:
+    decisions, decisions_candidate, decision_id, already = _reopen_decisions(args)
+    decisions_old = (
+        _check_expected(decisions, args.expected_decisions_fingerprint)
+        if args.expected_decisions_fingerprint
+        else file_fingerprint(decisions)
+    )
+    lines, archived, result = _reopen_tasks(args, state)
+    candidate = _text(lines)
+    # Validate every file before writing any of them: a reopen that fails half
+    # way is worse than one that never started.
+    decisions_usage = _preflight_target(args.plan, decisions, decisions_candidate)
+    usage, _ = _preflight(args.plan, candidate)
+    if archived is not None:
+        _rollover_material(args, state, archived)
+    if not args.dry_run:
+        # Authorization lands first. The phase it justifies is what the Stop
+        # gate reads, so a crash may leave a recorded decision with no phase
+        # (rerunnable) but never a phase nothing authorized.
+        _atomic_write(decisions, decisions_candidate)
+    result.update(
+        {
+            "decision": decision_id,
+            "decision_already_recorded": already,
+            "superseded": args.supersede,
+            "decisions_file": str(decisions),
+            "decisions_old_fingerprint": decisions_old,
+            "decisions_fingerprint": hashlib.sha256(decisions_candidate.encode("utf-8")).hexdigest(),
+            "decisions_usage": decisions_usage,
+        }
+    )
+    payload = _phase_write(args, state, archived, candidate, usage, result, old_fingerprint)
+    if not args.dry_run:
+        payload["restore"] = restore_payload(args.plan)
+    return payload
 
 
 def _pause(args, state) -> tuple[list[str], Path | None, str | None, dict[str, object]]:
@@ -1250,6 +1477,26 @@ def _phase_add_command(args, state, old_fingerprint: str) -> dict[str, object]:
     lines, result, archived = _phase_add(state, args.title, args.before, args.after)
     candidate = _text(lines)
     usage, _ = _preflight(args.plan, candidate)
+    return _phase_write(args, state, archived, candidate, usage, result, old_fingerprint)
+
+
+def _rollover_material(args, state, archived) -> dict[str, object]:
+    """Validate the archival half of a rollover without writing anything."""
+    if args.expected_history_fingerprint is None:
+        raise EditError(
+            f"{args.command} rollover requires --expected-history-fingerprint with the "
+            "current history.md SHA-256 or 'missing'"
+        )
+    return _phase_history_material(args.plan, state, archived, args.expected_history_fingerprint)
+
+
+def _phase_write(args, state, archived, candidate: str, usage: dict[str, int],
+                 result: dict[str, object], old_fingerprint: str) -> dict[str, object]:
+    """Commit a tasks.md candidate, rolling the evicted phase into history.md.
+
+    Shared by phase-add and reopen: both can push the hot window past its
+    12-heading limit, and the archive must stay one transaction either way.
+    """
     if archived is None:
         return _candidate_payload(
             args.plan,
@@ -1261,11 +1508,7 @@ def _phase_add_command(args, state, old_fingerprint: str) -> dict[str, object]:
             result,
             args.dry_run,
         )
-    if args.expected_history_fingerprint is None:
-        raise EditError(
-            "phase-add rollover requires --expected-history-fingerprint with the current history.md SHA-256 or 'missing'"
-        )
-    history = _phase_history_material(args.plan, state, archived, args.expected_history_fingerprint)
+    history = _rollover_material(args, state, archived)
     new_fingerprint = hashlib.sha256(candidate.encode("utf-8")).hexdigest()
     transaction_id = None
     if not args.dry_run:
@@ -1431,6 +1674,9 @@ def _main_locked(args) -> int:
         if args.command == "phase-add":
             old_fingerprint = _check_expected(args.plan, args.expected_fingerprint)
             payload = _phase_add_command(args, _validated_state(args.plan), old_fingerprint)
+        elif args.command == "reopen":
+            old_fingerprint = _check_expected(args.plan, args.expected_fingerprint)
+            payload = _reopen_command(args, _validated_state(args.plan), old_fingerprint)
         elif args.command in STRUCTURAL_COMMANDS:
             old_fingerprint = _check_expected(args.plan, args.expected_fingerprint)
             state = _validated_state(args.plan)
@@ -1526,6 +1772,7 @@ def _main_locked(args) -> int:
                 "context": context_payload(parse_plan(args.plan)),
                 "budgets": budget_payload(args.plan),
             }
+        payload["plan"] = str(args.plan)
         print(json.dumps(payload, separators=(",", ":")))
         return 0
     except (EditError, OSError, ValueError) as error:
@@ -1536,6 +1783,7 @@ def _main_locked(args) -> int:
 def main(argv: Iterable[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        args.plan = resolve_plan_argument(args.plan)
         with _plan_lock(args.plan):
             _recover_transaction(args.plan)
             return _main_locked(args)

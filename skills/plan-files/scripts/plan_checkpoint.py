@@ -7,7 +7,6 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Iterable
@@ -15,6 +14,8 @@ from typing import Iterable
 from plan_state import (
     file_fingerprint,
     pointer_path,
+    resolve_plan_argument,
+    resolve_project_root,
     ITEM_ID_RE,
     PHASE_RE,
     PLACEHOLDER_EVIDENCE,
@@ -29,25 +30,6 @@ from plan_state import (
 
 class CheckpointError(RuntimeError):
     pass
-
-
-def _resolve_project_root(start: Path) -> Path:
-    """Resolve the true project root from a directory, via the shared resolver.
-
-    A fixed parent-count (e.g. `plan.parents[3]`) breaks the moment a plan
-    lives somewhere the storage model's usual depth doesn't hold — a
-    submodule, a non-git multi-repo workspace, or any other layout the
-    shared resolver already handles. Delegate to it instead of assuming.
-    """
-    resolver = Path(__file__).resolve().parent / "resolve-project-root.sh"
-    result = subprocess.run(
-        ["bash", str(resolver), str(start)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    output = result.stdout.strip()
-    return Path(output) if output else start
 
 
 def _clean_evidence(value: str) -> str:
@@ -160,8 +142,14 @@ def _next_unchecked(state, completed_id: str):
     return None, None
 
 
-def start(plan: Path, item_id: str) -> dict[str, object]:
-    state = _validate_for_transition(plan, {"ACTIVE_ITEM_REQUIRED"})
+def apply_start(state, item_id: str):
+    """Validate and return the lines that make item_id the Active Item.
+
+    plan_edit's `reopen` performs the same transition on a plan it is still
+    assembling in memory. Sharing this keeps one authority for what "started"
+    means -- Current Phase, Active Item, phase status, and Resume Checkpoint
+    move together or not at all.
+    """
     item = state.item(item_id)
     if not item or item.checked:
         raise CheckpointError(f"{item_id} is not an unchecked contracted item")
@@ -180,8 +168,15 @@ def start(plan: Path, item_id: str) -> dict[str, object]:
     phase = state.phase(item.phase_num)
     if phase and phase.status == "pending":
         _set_phase_status(lines, item.phase_num, "in_progress")
+    return lines
+
+
+def start(plan: Path, item_id: str) -> dict[str, object]:
+    state = _validate_for_transition(plan, {"ACTIVE_ITEM_REQUIRED"})
+    lines = apply_start(state, item_id)
     _atomic_write(plan, lines)
     new_state = _validate_for_transition(plan)
+    item = state.item(item_id)
     return {"operation": "start", "item": item_id, "phase": item.phase_num, **_fingerprints(new_state)}
 
 
@@ -254,7 +249,7 @@ def complete(plan: Path, item_id: str, evidence_value: str, requested_next: str 
     new_state = _validate_for_transition(plan)
     all_settled = all(phase.status in SETTLED for phase in new_state.phases)
     if deactivate:
-        project_root = _resolve_project_root(plan.parent.resolve())
+        project_root = resolve_project_root(plan.parent.resolve())
         pointer = pointer_path(project_root)
         if pointer.is_file() and pointer.read_text(encoding="utf-8").strip() == plan.parent.name:
             pointer.write_text("", encoding="utf-8")
@@ -283,7 +278,7 @@ def deactivate_pointer(plan: Path, project_root: Path | None) -> dict[str, objec
     if blocking:
         raise CheckpointError(
             "plan is not finalizable: " + explain_issues(blocking, project_root, plan))
-    root = project_root.resolve() if project_root else _resolve_project_root(plan.parent.resolve())
+    root = project_root.resolve() if project_root else resolve_project_root(plan.parent.resolve())
     pointer = pointer_path(root)
     cleared = False
     if pointer.is_file() and pointer.read_text(encoding="utf-8").strip() == plan.parent.name:
@@ -314,7 +309,12 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--plan", required=True, type=Path, help="path to the plan's tasks.md file (not the task directory)"
+        "--plan",
+        type=Path,
+        help=(
+            "path to the plan's tasks.md file (not the task directory); omit it to use "
+            "the task named by this workspace's .plan-files pointer"
+        ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -357,6 +357,10 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Iterable[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        try:
+            args.plan = resolve_plan_argument(args.plan, getattr(args, "project_root", None))
+        except ValueError as error:
+            raise CheckpointError(str(error)) from error
         if args.plan.is_dir():
             candidate = args.plan / "tasks.md"
             hint = (
@@ -380,7 +384,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     except (CheckpointError, OSError) as error:
         print(json.dumps({"ok": False, "error": str(error)}, separators=(",", ":")))
         return 2
-    print(json.dumps({"ok": True, **payload}, separators=(",", ":")))
+    print(json.dumps({"ok": True, "plan": str(args.plan), **payload}, separators=(",", ":")))
     return 0
 
 

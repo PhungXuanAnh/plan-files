@@ -664,7 +664,7 @@ checkpoint_tool=os.environ["PWF_CHECKPOINT_TOOL"]
 if p.get("discussion_mode"):
     if os.environ.get("PWF_RESTORE_MODE") != "with-discussion": raise SystemExit(0)
     print("[plan-files] DISCUSSION ONLY. Start the user-authorized Active Item before operational work: "
-          f"python3 {checkpoint_tool} --plan {plan} start <ID>.", end="")
+          f"python3 {checkpoint_tool} start <ID>.", end="")
     raise SystemExit(0)
 if p.get("ok", True): raise SystemExit(0)
 issues=p.get("issues", [])
@@ -688,21 +688,18 @@ print("[plan-files] RESTORE STATE ACTION REQUIRED: " + "; ".join(parts) +
 # itself as a candidate, so it never reaches this gate at all.
 # ---------------------------------------------------------------------------
 planning_settled_plan_warning() {
-    local _plan_dir="${1:-}" _root="${2:-}" _plan_file _decisions _edit _checkpoint
+    local _plan_dir="${1:-}" _root="${2:-}" _plan_file _edit _checkpoint
     local TOTAL COMPLETE IN_PROGRESS PENDING BLOCKED DEFERRED
     [ -n "$_plan_dir" ] && [ -f "$_plan_dir/tasks.md" ] || return 0
     _plan_file="$_plan_dir/tasks.md"
     count_phases "$_plan_file"
     [ "$TOTAL" -gt 0 ] && [ "$COMPLETE" -eq "$TOTAL" ] || return 0
-    _decisions="$_plan_dir/decisions.md"
     _edit=$(planning_script_path plan_edit.py)
     _checkpoint=$(planning_script_path plan_checkpoint.py)
-    printf '[plan-files] SETTLED PLAN REOPEN REQUIRED. All %s phases in %s are complete, so this plan has nowhere to record what you are doing now and Stop would accept the turn with the work unrecorded. A prompt that authorizes further work is a scope update within SAME, not a finished plan. Before operational mutation: (1) record the authorization as a new row in %s: python3 %s --plan %s entry-append --file decisions.md --heading "Active Decisions" --entry "<new row>", then retire what it replaces with decision-supersede <OLD-ID> --replacement <NEW-ID> --reason "<what the user authorized>" (the replacement row must already exist); (2) reconcile Goal, Task Identity (Deliverable and Non-goals), and Workflow Profile with the authorized scope; (3) open the phase that will carry the work: python3 %s --plan %s phase-add --title "<Title>", add its items with item-add, then start the first one: python3 %s --plan %s start <ID>. If this prompt only asks a question or a written report, run the discussion command instead. If nothing new was authorized and the plan really is finished, close it: python3 %s --plan %s deactivate-pointer --project-root %s, then re-run the same command with assert-finalizable.' \
-        "$TOTAL" "$_plan_file" "$_decisions" \
-        "$_edit" "$_plan_file" \
-        "$_edit" "$_plan_file" \
-        "$_checkpoint" "$_plan_file" \
-        "$_checkpoint" "$_plan_file" "$_root"
+    printf '[plan-files] SETTLED PLAN REOPEN REQUIRED. All %s phases in %s are complete, so this plan has nowhere to record what you are doing now and Stop would accept the turn with the work unrecorded. A prompt that authorizes further work is a scope update within SAME, not a finished plan. Reopen it in one call, run from %s (planning commands default --plan to this project pointer): python3 %s reopen --title "<phase title>" --decision "| <ID> | <what the user authorized> | <why> | <date> |" --item "<first outcome>" --expected-fingerprint <tasks.md SHA-256>. Add --supersede <OLD-ID> for the decision it replaces, more --item/--verify for the rest of the phase, and --goal/--deliverable/--non-goals/--profile for scope that moved. If this prompt only asks a question or a written report, run the discussion command instead. If nothing new was authorized and the plan really is finished, close it: python3 %s deactivate-pointer --project-root %s, then re-run the same command with assert-finalizable.' \
+        "$TOTAL" "$_plan_file" "$_root" \
+        "$_edit" \
+        "$_checkpoint" "$_root"
 }
 
 # Shared Stop-invalid state, also enforced before tools and repeated after tools.

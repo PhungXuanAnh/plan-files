@@ -26,7 +26,7 @@ The latest user request is authoritative. `.plan-files` suggests a candidate; a 
 If a denial names a feedback file, read it first. **Any tool call containing that path in its arguments is allowed in full**, including nested or additional arguments. Follow the file's recovery instructions; reading it does not bind or release. The path expires when the prompt or ownership changes.
 
 1. Classify the request as `SAME`, `DIFFERENT`, `AMBIGUOUS`, or `DISCUSSION ONLY`. An explicit request to continue/implement the named plan is `SAME`, including research → implementation after answers. A question about the plan, this workflow, or your own behavior with no implementation is `DISCUSSION ONLY`. Merely citing a plan as background is not a continuation; shared files, branch, or repo are weak evidence.
-2. For `SAME`, run the hook-supplied bind command verbatim before reading planning state. Then restore state using the work loop below. Existing non-goals apply unless the user supersedes them; when the request does supersede one, record that authorization in `decisions.md` with `plan_edit.py decision-supersede` first, then reconcile Goal, Task Identity, profile, and pending work with it. A plan whose phases are all complete has nowhere to record new work: add the phase that carries it before implementing.
+2. For `SAME`, run the hook-supplied bind command verbatim before reading planning state. Then restore state using the work loop below. Existing non-goals apply unless the user supersedes them; when the request does supersede one, record that authorization in `decisions.md` before acting on it, then reconcile Goal, Task Identity, profile, and pending work with it. A plan whose phases are all settled has nowhere to record new work: `plan_edit.py reopen` records the authorization, opens the phase that carries it, and starts its first item in one call.
 3. For `DIFFERENT`, run the supplied release command; do not bind, repair, compact, or mutate the candidate. Create a separate plan only if the new work needs one. Release rejects a candidate; it is not end-of-turn cleanup.
 4. For `AMBIGUOUS`, run the supplied `clarify` command, then ask and wait. It preserves the candidate and allows question tools or a text-only question, while blocking plan reads and work. Never release just to wait for clarification.
 5. For a new task, create the three required files. Hooks auto-claim after `tasks.md` exists; without ownership hooks, update `.plan-files` manually.
@@ -79,10 +79,10 @@ Read [work-loop and maintenance details](references/work-loop-and-maintenance.md
 Resolve scripts relative to this `SKILL.md`. Run short planning reads/edits/checkpoints and script discovery in the foreground, without background flags or shell detachment; use the known skill path instead of searching the home directory. If the harness returns a running task, wait for its result before dependent work (see [async waits](references/work-loop-and-maintenance.md#async-waits)).
 
 ```bash
-python3 <skill-dir>/scripts/plan_checkpoint.py --plan <tasks.md> start P2.1
-python3 <skill-dir>/scripts/plan_checkpoint.py --plan <tasks.md> progress P2.1 --evidence "partial observable state"
-python3 <skill-dir>/scripts/plan_checkpoint.py --plan <tasks.md> complete P2.1 --evidence "completion evidence"
-python3 <skill-dir>/scripts/plan_checkpoint.py --plan <tasks.md> assert-finalizable --project-root <project-root>
+python3 <skill-dir>/scripts/plan_checkpoint.py start P2.1
+python3 <skill-dir>/scripts/plan_checkpoint.py progress P2.1 --evidence "partial observable state"
+python3 <skill-dir>/scripts/plan_checkpoint.py complete P2.1 --evidence "completion evidence"
+python3 <skill-dir>/scripts/plan_checkpoint.py assert-finalizable --project-root <project-root>
 ```
 
 Use `plan_edit.py phase-update` for blocked/deferred phases. For a user pause, update decisions/findings first, then use `pause` to settle phases, clear Active Item, sync Resume Checkpoint, and write any handoff last. Read the [phase and pause commands](references/plan-operations.md) before either operation.
@@ -94,15 +94,15 @@ On the `complete` call whose JSON reports `"next_item":null`, add `--deactivate-
 Prefer deterministic operations when they avoid loading or patching a whole file:
 
 ```bash
-python3 <skill-dir>/scripts/plan_state.py overview <tasks.md>
-python3 <skill-dir>/scripts/plan_state.py restore-check <tasks.md>
-python3 <skill-dir>/scripts/plan_state.py phase <tasks.md> 2
-python3 <skill-dir>/scripts/plan_state.py item <tasks.md> P2.1
-python3 <skill-dir>/scripts/plan_state.py section <decisions.md> "Active Decisions"
-python3 <skill-dir>/scripts/plan_state.py budgets <tasks.md>
+python3 <skill-dir>/scripts/plan_state.py overview
+python3 <skill-dir>/scripts/plan_state.py restore-check
+python3 <skill-dir>/scripts/plan_state.py phase 2
+python3 <skill-dir>/scripts/plan_state.py item P2.1
+python3 <skill-dir>/scripts/plan_state.py section decisions.md "Active Decisions"
+python3 <skill-dir>/scripts/plan_state.py budgets
 ```
 
-For `plan_edit.py --expected-fingerprint`, use `file_fingerprint` (full SHA-256), never the 16-hex progress `fingerprint`. Stale, invalid, unsafe, or budget-worsening edits are rejected. Put global flags (`--plan`, `--expected-fingerprint`, `--dry-run`) before the subcommand; use `--dry-run` for consequential structure changes and `--help` for exact syntax. Direct Markdown access remains allowed for broad judgment or repair; execution transitions still use `plan_checkpoint.py`.
+For `plan_edit.py --expected-fingerprint`, use `file_fingerprint` (full SHA-256), never the 16-hex progress `fingerprint`. Stale, invalid, unsafe, or budget-worsening edits are rejected. Put global flags (`--plan`, `--expected-fingerprint`, `--dry-run`) before the subcommand; use `--dry-run` for consequential structure changes and `--help` for exact syntax. Every script resolves the plan from this workspace's `.plan-files` pointer, so name the plan only to override that default or when running from outside the project. Direct Markdown access remains allowed for broad judgment or repair; execution transitions still use `plan_checkpoint.py`.
 
 Read [targeted plan operations](references/plan-operations.md) before structural, section, archive, or handoff commands, including recovery after interrupted archival.
 

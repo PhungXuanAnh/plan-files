@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,6 +45,62 @@ def plan_root(project_root: Path) -> Path:
         if legacy.is_dir():
             return legacy
     return current
+
+
+POINTER_TASK_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def resolve_project_root(start: Path | None = None) -> Path:
+    """Resolve the true project root from a directory, via the shared resolver.
+
+    A fixed parent-count (e.g. `plan.parents[3]`) breaks the moment a plan
+    lives somewhere the storage model's usual depth doesn't hold — a
+    submodule, a non-git multi-repo workspace, or any other layout the
+    shared resolver already handles. Delegate to it instead of assuming.
+    """
+    origin = start or Path.cwd()
+    resolver = Path(__file__).resolve().parent / "resolve-project-root.sh"
+    result = subprocess.run(
+        ["bash", str(resolver), str(origin)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = result.stdout.strip()
+    return Path(output) if output else origin
+
+
+def active_plan_path(project_root: Path | None = None) -> Path:
+    """The plan an omitted --plan means: whatever this workspace points at.
+
+    The pointer is the same default the hooks resolve a candidate from, and
+    session-state.sh rewrites it on every claim/bind, so it names the plan this
+    session actually owns. Repeating that path in each command bought no extra
+    safety — the gate never parsed it — while making every prescribed recovery
+    long enough to be retyped by hand, and mistyped.
+    """
+    root = project_root or resolve_project_root()
+    pointer = pointer_path(root)
+    task_id = ""
+    if pointer.is_file():
+        first_line = pointer.read_text(encoding="utf-8").strip().splitlines()
+        task_id = first_line[0].strip() if first_line else ""
+    if not task_id or task_id in {".", ".."} or not POINTER_TASK_ID_RE.fullmatch(task_id):
+        raise ValueError(
+            f"no --plan given and {pointer} names no active task; pass --plan <path to tasks.md>"
+        )
+    plan = plan_root(root) / task_id / "tasks.md"
+    if not plan.is_file():
+        raise ValueError(
+            f"no --plan given and the active task '{task_id}' has no {plan}; "
+            "pass --plan <path to tasks.md>"
+        )
+    return plan
+
+
+def resolve_plan_argument(explicit: Path | None, project_root: Path | None = None) -> Path:
+    """Use the explicit plan when given, else the workspace's active plan."""
+    return explicit if explicit is not None else active_plan_path(project_root)
 
 
 FILE_BUDGETS: dict[str, tuple[int, int]] = {
@@ -1086,7 +1143,7 @@ ISSUE_EXPLANATIONS: dict[str, str] = {
     "POINTER_ACTIVE": (
         "{pointer} still names this task — pass --deactivate-pointer on the final "
         "`complete` call, or when every item is already checked run: python3 "
-        "{checkpoint} --plan {plan} deactivate-pointer --project-root {root}"
+        "{checkpoint} deactivate-pointer --project-root {root}"
     ),
 }
 
@@ -1144,7 +1201,8 @@ COMMAND_HELP = {
     "budgets": "report line/byte usage against every file and structural limit",
     "budget-warning": "print the single-line budget warning the hooks inject, or nothing",
 }
-PLAN_ARG_HELP = "path to the plan's tasks.md file (not the task directory)"
+PLAN_ARG_HELP = ("path to the plan's tasks.md file (not the task directory); "
+                 "omit it to use the task named by this workspace's .plan-files pointer")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1158,13 +1216,13 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("validate", "fingerprint", "context", "restore-check", "assert-finalizable"):
         subparser = subparsers.add_parser(command, help=COMMAND_HELP[command])
-        subparser.add_argument("plan", type=Path, help=PLAN_ARG_HELP)
+        subparser.add_argument("plan", type=Path, nargs="?", help=PLAN_ARG_HELP)
         if command == "assert-finalizable":
             subparser.add_argument("--project-root", type=Path, help="workspace root that owns .plan-files")
 
     for command in ("overview", "resume-pack"):
         overview = subparsers.add_parser(command, help=COMMAND_HELP[command])
-        overview.add_argument("plan", type=Path, help=PLAN_ARG_HELP)
+        overview.add_argument("plan", type=Path, nargs="?", help=PLAN_ARG_HELP)
         overview.add_argument("--max-chars", type=int, default=2 * 1024, help="per-section cap; 0 means unbounded")
         overview.add_argument(
             "--total-max-chars",
@@ -1182,28 +1240,35 @@ def _parser() -> argparse.ArgumentParser:
     section.add_argument("--max-chars", type=int, default=DEFAULT_VIEW_CHARS, help="cap; 0 means unbounded")
 
     phase = subparsers.add_parser("phase", help=COMMAND_HELP["phase"])
-    phase.add_argument("plan", type=Path, help=PLAN_ARG_HELP)
+    phase.add_argument("plan", type=Path, nargs="?", help=PLAN_ARG_HELP)
     phase.add_argument("number", type=int, help="phase number, e.g. 2")
     phase.add_argument("--max-chars", type=int, default=DEFAULT_VIEW_CHARS, help="cap; 0 means unbounded")
 
     item = subparsers.add_parser("item", help=COMMAND_HELP["item"])
-    item.add_argument("plan", type=Path, help=PLAN_ARG_HELP)
+    item.add_argument("plan", type=Path, nargs="?", help=PLAN_ARG_HELP)
     item.add_argument("item_id", help="item id, e.g. P2.1 or V2.1")
     item.add_argument("--max-chars", type=int, default=2 * 1024, help="cap; 0 means unbounded")
 
     budgets = subparsers.add_parser("budgets", help=COMMAND_HELP["budgets"])
-    budgets.add_argument("plan", type=Path, help=PLAN_ARG_HELP)
+    budgets.add_argument("plan", type=Path, nargs="?", help=PLAN_ARG_HELP)
     budget_message = subparsers.add_parser("budget-warning", help=COMMAND_HELP["budget-warning"])
-    budget_message.add_argument("plan", type=Path, help=PLAN_ARG_HELP)
+    budget_message.add_argument("plan", type=Path, nargs="?", help=PLAN_ARG_HELP)
     return parser
 
 
 def main(argv: Iterable[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if hasattr(args, "plan"):
+            args.plan = resolve_plan_argument(args.plan, getattr(args, "project_root", None))
         if args.command == "section":
-            text = section_text(args.file, args.heading)
-            print(json.dumps(_view_payload(args.file, {"heading": args.heading}, text, args.max_chars), separators=(",", ":")))
+            target = args.file
+            if not target.is_file() and target.parent == Path("."):
+                # A bare planning filename belongs to the active plan; reading
+                # decisions.md should not require retyping its directory.
+                target = active_plan_path().parent / target.name
+            text = section_text(target, args.heading)
+            print(json.dumps(_view_payload(target, {"heading": args.heading}, text, args.max_chars), separators=(",", ":")))
             return 0
         if args.command == "budgets":
             print(json.dumps(budget_payload(args.plan), separators=(",", ":")))

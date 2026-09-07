@@ -770,7 +770,7 @@ for SPEC in 'codex codex-contract' 'claude claude-contract' 'copilot copilot-con
     sed -i 's/^unchanged_risk_score=.*/unchanged_risk_score=2/; s/^last_item_nudge_ts=.*/last_item_nudge_ts=0/; s/^last_stale_ts=.*/last_stale_ts=0/; s/^item_nudge_streak=.*/item_nudge_streak=0/' "$POST_STATE"
     STALE_FIRST=$(post_hook "$1" "$2" Bash "pytest -q")
     assert_contains "$STALE_FIRST" "STALE ITEM STATE: no plan change for" "$1 PostTool risk-aware stale item detection"
-    assert_contains "$STALE_FIRST" "$CHECKPOINT_TOOL --plan $PLAN_DIR/tasks.md progress P1.1" "$1 PostTool stale line offers a runnable partial-evidence command"
+    assert_contains "$STALE_FIRST" "$CHECKPOINT_TOOL progress P1.1" "$1 PostTool stale line offers a runnable partial-evidence command"
     # The line must not restate itself on every later call: repeating a growing
     # counter is what drowned real signal during long browser/E2E journeys.
     sed -i 's/^last_item_nudge_ts=.*/last_item_nudge_ts=0/' "$POST_STATE"
@@ -932,12 +932,23 @@ PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" pending codex codex-settled >/dev/null
 PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=codex PWF_SESSION_ID=codex-settled "$STATE_TOOL" bind test-task >/dev/null
 SETTLED_BLOCK=$(pre_hook codex codex-settled 'git commit -m "ship it"')
 assert_contains "$SETTLED_BLOCK" "SETTLED PLAN REOPEN REQUIRED" "settled plan blocks operational mutation"
-assert_contains "$SETTLED_BLOCK" "decision-supersede" "reopen block names the decision ledger command"
-assert_contains "$SETTLED_BLOCK" "phase-add" "reopen block names the phase command"
+assert_contains "$SETTLED_BLOCK" "reopen --title" "reopen block names the one-call repair"
+assert_contains "$SETTLED_BLOCK" "--supersede <OLD-ID>" "reopen block names the decision it retires"
+assert_not_contains "$SETTLED_BLOCK" "--plan $PLAN_DIR/tasks.md" "reopen block stops repeating the plan path"
 assert_not_contains "$(post_hook codex codex-settled Read)" "SETTLED PLAN REOPEN REQUIRED" \
     "reopen diagnosis stays quiet after a read"
-assert_eq "$(pre_hook codex codex-settled "python3 $EDIT_TOOL --plan $PLAN_DIR/tasks.md phase-add --title Deliver")" "{}" \
-    "reopen gate permits the repair it demands"
+REOPEN_CMD="python3 $EDIT_TOOL reopen --title Deliver --decision \"| D2 | Implement and hand off | user authorized implementation | 2026-09-06 |\" --supersede D1 --item \"Implementation lands.\""
+# The prescribed repair carries a decisions table row, so its pipes must read as
+# data. Splitting the command text before lexing it blocked exactly this call.
+assert_eq "$(pre_hook codex codex-settled "$REOPEN_CMD")" "{}" \
+    "reopen gate permits the repair it demands, table row and all"
+assert_eq "$(pre_hook codex codex-settled "python3 $EDIT_TOOL phase-add --title Deliver")" "{}" \
+    "gate permits a helper that resolves the plan from the pointer"
+# Redirection and a reader are part of running the repair, not other work.
+assert_eq "$(pre_hook codex codex-settled "python3 $EDIT_TOOL phase-add --title Deliver 2>&1 | head -5")" "{}" \
+    "gate permits a helper whose output is merged and paged"
+assert_contains "$(pre_hook codex codex-settled "python3 $EDIT_TOOL --plan $PROJECT/tmp/plan-files/other-task/tasks.md phase-add --title Deliver")" \
+    "SETTLED PLAN REOPEN REQUIRED" "a helper aimed at another plan is not owned-plan maintenance"
 SETTLED_LOG=$(cat "$PROJECT/tmp/hook-logs/plan-files/pre-tool-use.log")
 assert_contains "$SETTLED_LOG" "decision=block-settled-plan tool=Bash" "pre-tool log correlates the reopen denial"
 # PostTool repeats it only for work that reached execution, never after a read.
@@ -945,15 +956,26 @@ SETTLED_POST=$(post_hook codex codex-settled Bash 'git commit -m "ship it"')
 assert_contains "$SETTLED_POST" "SETTLED PLAN REOPEN REQUIRED" "PostTool repeats the reopen diagnosis after a mutation"
 
 # Reopening the plan clears the gate; the ordinary integrity gate takes over.
-python3 "$EDIT_TOOL" --plan "$PLAN_DIR/tasks.md" --expected-fingerprint "$(file_sha "$PLAN_DIR/decisions.md")" \
-    entry-append --file decisions.md --heading "Active Decisions" \
-    --entry '| D2 | Implement and hand off | user authorized implementation | 2026-09-06 |' >/dev/null
-python3 "$EDIT_TOOL" --plan "$PLAN_DIR/tasks.md" --expected-fingerprint "$(file_sha "$PLAN_DIR/decisions.md")" \
-    decision-supersede D1 --replacement D2 --reason "user authorized implementation" >/dev/null
-python3 "$EDIT_TOOL" --plan "$PLAN_DIR/tasks.md" --expected-fingerprint "$(file_sha "$PLAN_DIR/tasks.md")" \
-    phase-add --title "Deliver" >/dev/null
+REOPEN_OUT=$(cd "$PROJECT" && python3 "$EDIT_TOOL" --expected-fingerprint "$(file_sha "$PLAN_DIR/tasks.md")" \
+    reopen --title "Deliver" \
+    --decision '| D2 | Implement and hand off | user authorized implementation | 2026-09-06 |' \
+    --supersede D1 \
+    --item "Implementation lands and the handoff is ready." \
+    --verify "The delivery check passes.")
+assert_contains "$REOPEN_OUT" '"ok":true' "reopen records, opens, and starts in one call"
+assert_contains "$REOPEN_OUT" '"item":"P' "reopen starts the first item it added"
+assert_contains "$(sed -n '/## Active Decisions/,/## Superseded/p' "$PLAN_DIR/decisions.md")" "| D2 |" \
+    "reopen appends the authorizing decision"
+assert_not_contains "$(sed -n '/## Active Decisions/,/## Superseded/p' "$PLAN_DIR/decisions.md")" "| D1 |" \
+    "reopen retires what the authorization replaced"
+assert_eq "$(sed -n '/## Active Decisions/,/## Superseded/p' "$PLAN_DIR/decisions.md" | grep -c '^$')" "1" \
+    "the decisions ledger stays one table, not two"
 assert_not_contains "$(pre_hook codex codex-settled 'git commit -m "ship it"')" "SETTLED PLAN REOPEN REQUIRED" \
     "reopened plan clears the settled gate"
+# reopen is for settled plans only; an actionable one already has somewhere to record work.
+assert_contains "$(cd "$PROJECT" && python3 "$EDIT_TOOL" --expected-fingerprint "$(file_sha "$PLAN_DIR/tasks.md")" \
+    reopen --title "Again" --decision '| D3 | Second scope | user asked | 2026-09-06 |' --item "More work.")" \
+    "is still actionable" "reopen refuses a plan that can already record work"
 
 # The reopen gate must not trap a plan that really is finished: its only
 # remaining action is pointer cleanup, which lives outside the plan directory.
