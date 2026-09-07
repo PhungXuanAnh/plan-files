@@ -572,11 +572,14 @@ def bash_is_read_only(tool_input: object) -> bool:
     return all(_segment_is_read_only(segment) for segment in segments)
 
 
-def _segment_is_read_only(segment: Segment) -> bool:
+def _segment_is_read_only(segment: Segment, allow_substitutions: bool = False) -> bool:
     if not segment.argv:
         return False
     # Command substitution can hide arbitrary mutation behind a read-only shape.
-    if segment.substitutions:
+    # A caller with a reason to accept one -- `echo "pointer=$(cat .plan-files)"`
+    # appended to a routing command -- still holds it to the same read-only test
+    # as any other command, which is what allow_substitutions asks for.
+    if segment.substitutions and not (allow_substitutions and _substitutions_are_read_only(segment)):
         return False
     # Strip redirections that only discard output, then reject any that remain:
     # a surviving > or < can write or consume real files.
@@ -710,6 +713,112 @@ def shell_runs_planning_helper(tool_input: object, plan_dir: Path | None = None)
     return maintains
 
 
+ROUTING_VERBS = {"bind", "release", "clarify", "discuss"}
+# PWF_SESSION_ID would rewrite another session's lease and a foreign
+# PWF_PROJECT_ROOT would route a different project, so the routing command
+# carries at most the one assignment the gate's own message prescribes.
+ROUTING_ENV_NAMES = {"PWF_PROJECT_ROOT"}
+DETACH_COMMANDS = {"nohup", "setsid"}
+
+
+def _routing_words(segment: Segment) -> list[str] | None:
+    """Lex one segment with output-discarding redirections removed.
+
+    `bind task-a 2>&1 | tail -3` runs the same routing action as the bare
+    command: the redirection writes nothing, so it must not defeat recognition.
+    A surviving > or < can write a real file, and a substitution can hide any
+    command at all, so both refuse the segment instead.
+    """
+    if segment.substitutions:
+        return None
+    probe = segment.text
+    for token in DISCARD_REDIRECTS:
+        probe = probe.replace(token, " ")
+    if ">" in probe or "<" in probe:
+        return None
+    try:
+        return shlex.split(probe)
+    except ValueError:
+        return None
+
+
+def _segment_routing_verb(segment: Segment, bind_tool: Path, project_root: Path,
+                          task_id: str) -> str | None:
+    """The routing verb this segment runs, or None for anything else.
+
+    Recognized from the program the segment actually runs -- the bind adapter
+    resolved through symlinks, so the same script reached through
+    ~/.claude/hooks counts -- followed by exactly the verb and task id the
+    gate's message prescribes. Naming the adapter inside some other command,
+    detaching it, or aiming it at another task authorizes nothing.
+    """
+    words = _routing_words(segment)
+    if not words or segment.terminator == "&":
+        return None
+    if any(Path(word).name in DETACH_COMMANDS for word in words):
+        return None
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if Path(word).name == "env":
+            index += 1
+            continue
+        if "=" not in word or word.startswith("="):
+            break
+        name, _, value = word.partition("=")
+        if name not in ROUTING_ENV_NAMES or os.path.realpath(value) != str(project_root):
+            return None
+        index += 1
+    else:
+        return None
+    operands = words[index + 1:]
+    if any(word.startswith("-") for word in operands):
+        return None
+    executable = Path(words[index]).name
+    if executable in {"bash", "sh"}:
+        if not operands:
+            return None
+        script, operands = operands[0], operands[1:]
+    elif executable == bind_tool.name:
+        script = words[index]
+    else:
+        return None
+    if os.path.realpath(script) != str(bind_tool):
+        return None
+    if len(operands) != 2 or operands[0] not in ROUTING_VERBS or operands[1] != task_id:
+        return None
+    return operands[0]
+
+
+def routing_verb(tool_input: object, bind_tool: Path, project_root: Path, task_id: str) -> str:
+    """The routing verb a whole command runs, or "" when it runs anything else.
+
+    Read-only decoration around the routing command has to pass. The gate
+    prescribes one command, and an agent that pipes it to `tail -3` or appends
+    `; echo "pointer=$(cat .plan-files)"` to read the result is running that
+    same command -- byte-exact comparison refused every such variant and
+    re-emitted the identical instruction, a loop with no exit the agent could
+    find. Chaining anything that is not read-only still refuses the whole
+    command, so `rm -rf src && bind task-a` cannot launder itself through this
+    allowance, and two routing segments are ambiguous rather than permitted.
+    """
+    if not TASK_ID_RE.match(task_id or ""):
+        return ""
+    segments = shell_segments(shell_command_text(tool_input))
+    if not segments:
+        return ""
+    verb = ""
+    for segment in segments:
+        found = _segment_routing_verb(segment, bind_tool, project_root, task_id)
+        if found:
+            if verb:
+                return ""
+            verb = found
+        elif not _segment_is_read_only(segment, allow_substitutions=True):
+            return ""
+    return verb
+
+
 def planning_background_warning(payload: dict) -> str:
     """Recognize explicit detachment of short planning helpers, not arbitrary jobs."""
     name = str(payload.get("tool_name") or payload.get("toolName") or "")
@@ -809,6 +918,15 @@ def main() -> int:
         plan_dir = Path(os.path.realpath(sys.argv[2]))
         print(json.dumps(tool_class(payload, plan_dir), separators=(",", ":")))
         return 0
+    if len(sys.argv) == 5 and sys.argv[1] == "routing-verb":
+        payload = load_payload()
+        if payload is None:
+            return 1
+        verb = routing_verb(payload_tool_input(payload),
+                            Path(os.path.realpath(sys.argv[2])),
+                            Path(os.path.realpath(sys.argv[3])), sys.argv[4])
+        print(verb, end="")
+        return 0 if verb else 1
     if len(sys.argv) == 3 and sys.argv[1] in {"prompt-plan-id", "mutation-plan-id"}:
         payload = load_payload()
         if payload is None:

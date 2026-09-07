@@ -34,7 +34,7 @@ For a new task, create `tasks.md`, `findings.md`, and `decisions.md` from the te
 
 When no hook supplies a bind command, update `.plan-files` manually. Preserve old task directories when switching.
 
-Stable session identity and binding fail closed. A PreTool ownership response is a required routing action, not an external blocker. Run its exact bind/release command and retry the original tool call. Do not inspect or alter private `.sessions` files to bypass it.
+Stable session identity and binding fail closed. A PreTool ownership response is a required routing action, not an external blocker. Run its exact bind/release command and retry the original tool call. The gate recognizes that command from the tool input rather than by string equality, so `2>&1 | tail -3`, an appended read-only `echo`, a dropped `PWF_PROJECT_ROOT=` prefix, or the adapter reached through a symlink still count as the same routing action; chaining anything that is not read-only, aiming a verb at another task, spoofing `PWF_SESSION_ID`, or hiding it in `bash -c` does not. A repeated ownership block therefore means the routing action has not run, not that its formatting was rejected. Do not inspect or alter private `.sessions` files to bypass it.
 
 `release` rejects a pending candidate and may clear its root pointer. It is not ordinary end-of-turn cleanup. Stop automatically calls `finish` for fully complete owned plans; blocked/deferred plans retain their resume lease. Pending candidates must be bound, released for DIFFERENT, or explicitly put into clarification wait. PreTool and Stop render the same canonical action-first contract for all four providers.
 

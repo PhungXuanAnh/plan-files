@@ -136,6 +136,49 @@ P1.1
                 self.assertEqual(self.state(provider, "resolve", provider, "fixture"), str(self.plan))
                 self.assertNotIn(self.hook(provider, "pre-tool-use.sh").get("decision"), {"block", "deny"})
 
+    def test_routing_command_survives_read_only_decoration(self):
+        """The prescribed command plus a pipe or an appended read is the same action.
+
+        Byte-exact comparison refused `bind task-a 2>&1 | tail -3`, the dropped
+        env prefix, and the adapter reached through a symlink, then answered
+        every retry with the identical instruction -- a loop the agent left only
+        by accident. Chaining real work onto the routing command stays refused.
+        """
+        alias = self.project / "alias-scripts"
+        for provider in ADAPTERS:
+            with self.subTest(provider=provider):
+                self.state(provider, "pending", provider, "fixture", "task-a")
+                command = self.action(provider, "bind")
+                script = str(ADAPTERS[provider] / "bind-session.sh")
+                alias.unlink(missing_ok=True)
+                alias.symlink_to(ADAPTERS[provider])
+                accepted = (
+                    f"{command} 2>&1 | head -3",
+                    f'{command} 2>&1 | tail -2; echo "pointer=$(cat {shlex.quote(str(self.project / ".plan-files"))})"',
+                    "bash " + command.split(" bash ", 1)[1],
+                    command.replace(script, shlex.quote(str(alias / "bind-session.sh"))) + " 2>&1 | tail -2",
+                )
+                for variant in accepted:
+                    self.assertNotIn(self.hook(provider, "pre-tool-use.sh", variant).get("decision"),
+                                     {"block", "deny"}, variant)
+                refused = (
+                    f"rm -rf {shlex.quote(str(self.project / 'src'))} && {command}",
+                    command.replace("task-a", "task-b"),
+                    f"{command} > {shlex.quote(str(self.project / 'out.txt'))}",
+                )
+                for variant in refused:
+                    self.assertIn(self.hook(provider, "pre-tool-use.sh", variant).get("decision"),
+                                  {"block", "deny"}, variant)
+                # Recognition is worth nothing unless the decorated command it
+                # admits also resolves ownership when the agent runs it.
+                self.run_command(["bash", "-c", accepted[0]], provider)
+                self.assertEqual(self.state(provider, "resolve", provider, "fixture"), str(self.plan))
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh").get("decision"), {"block", "deny"})
+                # The owned-plan discussion check reads the same recognizer.
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh",
+                                           f'{self.action(provider, "discuss")} 2>&1 | tail -1').get("decision"),
+                                 {"block", "deny"})
+
     def test_missing_identity_still_supplies_recovery(self):
         self.tasks.write_text("# Tasks: empty identity\n")
         for provider in ADAPTERS:

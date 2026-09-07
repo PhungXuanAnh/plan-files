@@ -117,6 +117,26 @@ mutation_plan_id() {
         | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" mutation-plan-id "$PWD"
 }
 
+BIND_TOOL_NAME=$(basename "$BIND_TOOL")
+
+# Recognize a routing command from the tool input instead of comparing it to
+# the prescribed string. An agent that appends `2>&1 | tail -3`, drops the env
+# prefix, or reaches the adapter through the ~/.claude symlink is running the
+# same action; byte-exact comparison refused all three and answered every retry
+# with the identical instruction, a loop with no exit the agent could find. The
+# basename pre-filter keeps the common call free of another interpreter start;
+# an alias whose final component is renamed goes unrecognized, as it did before.
+routing_verb() {
+    local task=$1
+    command -v python3 >/dev/null 2>&1 || return 0
+    case "$TOOL_COMMAND" in
+        *"$BIND_TOOL_NAME"*) ;;
+        *) return 0 ;;
+    esac
+    printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" \
+        routing-verb "$BIND_TOOL" "$PWD" "$task" 2>/dev/null || true
+}
+
 block() {
     local reason=$1
     if [ "$REASON_LIMIT" -gt 0 ] && [ -n "${FEEDBACK_FILE:-}" ]; then
@@ -214,16 +234,11 @@ if [ -z "$PLAN_DIR" ]; then
     printf -v task_arg '%q' "$CANDIDATE"
     EXPECTED_BIND="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg bind $task_arg"
     EXPECTED_RELEASE="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg release $task_arg"
-    EXPECTED_CLARIFY="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg clarify $task_arg"
     # Every routing verb the candidate message offers must be runnable here,
     # or the message names an action its own gate refuses.
-    EXPECTED_DISCUSS="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg discuss $task_arg"
-    if [ "$TOOL_COMMAND" = "$EXPECTED_CLARIFY" ] || [ "$TOOL_COMMAND" = "$EXPECTED_DISCUSS" ]; then
-        if [ "$TOOL_COMMAND" = "$EXPECTED_CLARIFY" ]; then
-            log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-exact-clarify tool=$TOOL_NAME"
-        else
-            log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-exact-discuss tool=$TOOL_NAME"
-        fi
+    ROUTING_VERB=$(routing_verb "$CANDIDATE")
+    if [ "$ROUTING_VERB" = "clarify" ] || [ "$ROUTING_VERB" = "discuss" ]; then
+        log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-routing-$ROUTING_VERB tool=$TOOL_NAME"
         printf '{}'; exit 0
     fi
     # Reading the skill is how the agent learns to classify this very prompt, so
@@ -238,12 +253,8 @@ if [ -z "$PLAN_DIR" ]; then
         log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-question-while-waiting tool=$TOOL_NAME"
         printf '{}'; exit 0
     fi
-    if [ "$TOOL_COMMAND" = "$EXPECTED_BIND" ]; then
-        log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-exact-bind tool=$TOOL_NAME"
-        printf '{}'; exit 0
-    fi
-    if [ "$TOOL_COMMAND" = "$EXPECTED_RELEASE" ]; then
-        log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-exact-release tool=$TOOL_NAME"
+    if [ "$ROUTING_VERB" = "bind" ] || [ "$ROUTING_VERB" = "release" ]; then
+        log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-routing-$ROUTING_VERB tool=$TOOL_NAME"
         printf '{}'; exit 0
     fi
     CANDIDATE_CONTEXT=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" candidate-context \
@@ -262,14 +273,15 @@ printf -v project_root_arg '%q' "$PWD"
 printf -v bind_tool_arg '%q' "$BIND_TOOL"
 printf -v task_arg '%q' "$(basename "$PLAN_DIR")"
 EXPECTED_DISCUSS="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg discuss $task_arg"
+OWNED_ROUTING=$(routing_verb "$(basename "$PLAN_DIR")")
 BACKGROUND_WARN=$(printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" planning-background-warning)
 [ -z "$BACKGROUND_WARN" ] || block "$BACKGROUND_WARN"
 
 printf -v plan_arg '%q' "$PLAN_DIR/tasks.md"
 printf -v state_arg '%q' "$PLAN_STATE_TOOL"
 MAINTENANCE_ACTION="Run: python3 $state_arg budgets $plan_arg. Then archive/consolidate completed material in the owned plan; preserve unfinished work."
-if [ "$TOOL_COMMAND" = "$EXPECTED_DISCUSS" ]; then
-    log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=allow-exact-discuss tool=$TOOL_NAME"
+if [ "$OWNED_ROUTING" = "discuss" ]; then
+    log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=allow-routing-discuss tool=$TOOL_NAME"
     printf '{}'; exit 0
 fi
 if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION_ID")" = "discussing" ]; then
