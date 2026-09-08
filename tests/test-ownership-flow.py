@@ -222,6 +222,65 @@ P1.1
                 self.assertNotIn(self.hook(provider, "pre-tool-use.sh", probe).get("decision"),
                                  {"block", "deny"}, probe)
 
+    def test_discussion_records_but_does_not_advance(self):
+        """The discussing lease protects execution state, not the filesystem.
+
+        It used to be the reverse of that: a checkbox tick, a checkpoint and a
+        full tasks.md rewrite all passed, while the read-only API query needed to
+        answer the very question under discussion was refused. Recording is the
+        product of a discussion turn and must pass; advancing waits for a bind.
+        """
+        edit = shlex.quote(str(SCRIPTS / "plan_edit.py"))
+        state = shlex.quote(str(SCRIPTS / "plan_state.py"))
+        checkpoint = shlex.quote(str(SCRIPTS / "plan_checkpoint.py"))
+        plan = shlex.quote(str(self.tasks))
+        for provider in ADAPTERS:
+            with self.subTest(provider=provider):
+                self.discuss(provider)
+                recorded = [
+                    ("Write", {"file_path": str(self.plan / "decisions.md"), "content": "- decided\n"}),
+                    ("Write", {"file_path": str(self.plan / "findings.md"), "content": "- found\n"}),
+                    ("Write", {"file_path": str(self.project / "report.md"), "content": "answer\n"}),
+                    ("Bash", {"command": f"python3 {state} overview {plan}"}),
+                    ("Bash", {"command": f"python3 {edit} --plan {plan} --expected-fingerprint abc "
+                                         f"entry-append --file decisions.md --heading 'Active Decisions' --entry 'x'"}),
+                    ("Bash", {"command": f"python3 {edit} --plan {plan} --expected-fingerprint abc "
+                                         f"--dry-run phase-update 1 --status complete"}),
+                    ("Bash", {"command": 'curl -sS "https://example.com/api/tasks"'}),
+                    ("Bash", {"command": f"PLANE_INSECURE=1 {shlex.quote(str(self.project / 'get-task.sh'))} 'per_page=100'"}),
+                    ("mcp__plane__plane_search", {"query": "rds"}),
+                ]
+                for tool, tool_input in recorded:
+                    self.assertNotIn(self.hook(provider, "pre-tool-use.sh", tool=tool,
+                                               tool_input=tool_input).get("decision"),
+                                     {"block", "deny"}, tool_input)
+                advanced = [
+                    ("Write", {"file_path": str(self.tasks), "content": "# rewritten\n"}),
+                    ("Edit", {"file_path": str(self.tasks), "old_string": "- [ ] [P1.1]",
+                              "new_string": "- [x] [P1.1]"}),
+                    ("Write", {"file_path": str(self.plan / "handoff.md"), "content": "paused\n"}),
+                    ("Bash", {"command": f"python3 {checkpoint} --plan {plan} complete P1.1 --evidence x"}),
+                    ("Bash", {"command": f"python3 {edit} --plan {plan} --expected-fingerprint abc "
+                                         f"phase-update 1 --status complete"}),
+                    ("Bash", {"command": f"python3 {edit} --plan {plan} --expected-fingerprint abc "
+                                         f"entry-append --file tasks.md --heading Verification --entry 'x'"}),
+                    ("Bash", {"command": f"sed -i s/a/b/ {plan}"}),
+                ]
+                for tool, tool_input in advanced:
+                    result = self.hook(provider, "pre-tool-use.sh", tool=tool, tool_input=tool_input)
+                    self.assertIn(result.get("decision"), {"block", "deny"}, tool_input)
+                    # The denial has to name the recording it wants instead.
+                    self.assertIn("entry-append", result.get("reason", ""), tool_input)
+                # Destructive and unlocatable writes stay refused as before.
+                for tool, tool_input in (
+                    ("Bash", {"command": f"rm -rf {shlex.quote(str(self.project / 'src'))}"}),
+                    ("Bash", {"command": f"curl -sS https://example.com > {shlex.quote(str(self.project / 'out.json'))}"}),
+                    ("mcp__plane__create_issue", {"title": "x"}),
+                ):
+                    self.assertIn(self.hook(provider, "pre-tool-use.sh", tool=tool,
+                                            tool_input=tool_input).get("decision"),
+                                  {"block", "deny"}, tool_input)
+
     def test_missing_identity_still_supplies_recovery(self):
         self.tasks.write_text("# Tasks: empty identity\n")
         for provider in ADAPTERS:
@@ -487,13 +546,19 @@ P1.1
                 self.assertNotIn(self.hook(provider, "pre-tool-use.sh", tool="Write",
                                            tool_input={"file_path": str(report), "content": "x"}
                                            ).get("decision"), {"block", "deny"})
-                # The plan itself, and anything whose targets cannot be located,
-                # stay gated.
+                # The plan stays gated. A write outside every plan does not,
+                # whether or not the gate can locate it: refusing the shell form
+                # of a write the Write tool may perform is the asymmetry this
+                # lease carried, and it cost read-only diagnosis. Recognizable
+                # destruction is still refused.
                 self.assertIn(self.hook(provider, "pre-tool-use.sh", tool="Write",
                                         tool_input={"file_path": str(other / "tasks.md"), "content": "x"}
                                         )["decision"], {"block", "deny"})
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh",
+                                           "python3 -c 'open(\"/tmp/x\",\"w\")'").get("decision"),
+                                 {"block", "deny"})
                 self.assertIn(self.hook(provider, "pre-tool-use.sh",
-                                        "python3 -c 'open(\"/tmp/x\",\"w\")'")["decision"],
+                                        f"rm -rf {shlex.quote(str(self.project / 'src'))}")["decision"],
                               {"block", "deny"})
 
     def test_posttool_reminds_unresolved_ownership(self):
@@ -542,9 +607,19 @@ P1.1
                                  "a blocked mutation must not resolve ownership as a side effect")
                 self.own(provider)
                 self.run_command(["bash", "-c", self.action(provider, "discuss")], provider)
-                for blocked in (laundered, chained_after, chained_before, substituted):
+                for blocked in (chained_after, chained_before, substituted):
                     self.assertIn(self.hook(provider, "pre-tool-use.sh", blocked)["decision"],
                                   {"block", "deny"})
+                # Under a discussion lease `laundered` writes outside every plan,
+                # so it is no longer refused for being unparseable; the pending
+                # assertion above is what keeps ownership from being bypassed.
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", laundered).get("decision"),
+                                 {"block", "deny"})
+                # Reaching into the plan from inside inline code still blocks.
+                inline_plan_write = "python3 -c " + shlex.quote(
+                    f"from pathlib import Path; Path({str(self.tasks)!r}).write_text('x')")
+                self.assertIn(self.hook(provider, "pre-tool-use.sh", inline_plan_write)["decision"],
+                              {"block", "deny"})
                 # An unparseable tool proves nothing by quoting the plan in prose,
                 # while naming it as a whole argument still reads as maintenance.
                 self.assertIn(self.hook(provider, "pre-tool-use.sh", tool="mcp__deploy__ship",
@@ -554,11 +629,18 @@ P1.1
                 self.assertNotIn(self.hook(provider, "pre-tool-use.sh", tool="mcp__plan__annotate",
                                            tool_input={"note": str(self.tasks)}
                                            ).get("decision"), {"block", "deny"})
-                # Real repair, a helper piped into a reader, and read-only
-                # diagnosis must stay available.
-                for allowed in (repair, computed, f"{repair} | head -5", "grep -n foo bar.py"):
-                    self.assertNotIn(self.hook(provider, "pre-tool-use.sh", allowed).get("decision"),
-                                     {"block", "deny"})
+                # Read-only diagnosis stays available under the lease.
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh",
+                                           "grep -n foo bar.py").get("decision"), {"block", "deny"})
+        # A genuine repair, and one that computes an argument, must still be
+        # recognized as owned-plan maintenance. That is a property of the shared
+        # allowance, not of a lease: under a discussion lease these same commands
+        # are gated for advancing the plan, which is a different refusal.
+        for allowed in (repair, computed, f"{repair} | head -5"):
+            self.assertEqual(self.run_command(
+                ["python3", str(SCRIPTS / "maintenance-tool-allowed.py"), str(self.plan)],
+                "claude", {"tool_name": "Bash", "tool_input": {"command": allowed}},
+                check=False).returncode, 0, allowed)
 
     def test_skill_read_before_routing_is_allowed_and_counts(self):
         """Loading the rules first is the correct order and must not be penalized."""

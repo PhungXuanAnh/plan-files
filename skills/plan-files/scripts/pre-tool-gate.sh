@@ -137,6 +137,20 @@ routing_verb() {
         routing-verb "$BIND_TOOL" "$PWD" "$task" 2>/dev/null || true
 }
 
+# Which class of plan operation a call belongs to: read, record, advance, or
+# unknown. Only meaningful against the owned plan, so it takes that directory.
+plan_op_class() {
+    local plan_dir=$1
+    command -v python3 >/dev/null 2>&1 || return 0
+    printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" \
+        plan-op-class "$plan_dir" 2>/dev/null || true
+}
+
+non_mutating_shell() {
+    command -v python3 >/dev/null 2>&1 || return 1
+    printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" non-mutating-shell
+}
+
 block() {
     local reason=$1
     if [ "$REASON_LIMIT" -gt 0 ] && [ -n "${FEEDBACK_FILE:-}" ]; then
@@ -285,20 +299,39 @@ if [ "$OWNED_ROUTING" = "discuss" ]; then
     printf '{}'; exit 0
 fi
 if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION_ID")" = "discussing" ]; then
+    # A discussion turn records; it does not advance. The lease protects the
+    # plan's execution state, not the filesystem, so the decision or finding the
+    # turn produces must be writable or the answer is lost -- while checking an
+    # item off, moving a phase, writing a checkpoint or handoff, or writing
+    # tasks.md directly is work that Stop and PostTool deliberately stop
+    # accounting for under this lease, and would land unrecorded.
+    printf -v edit_arg '%q' "$SCRIPT_DIR/plan_edit.py"
+    printf -v decisions_arg '%q' "$PLAN_DIR/decisions.md"
+    if [ "$(plan_op_class "$PLAN_DIR")" = "advance" ]; then
+        log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=block-discussion-advance tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
+        block "[plan-files] DISCUSSION ONLY — RECORD IT, DO NOT ADVANCE IT. This call changes execution state: an item checkbox, a phase status, Current Phase/Active Item, a checkpoint, handoff.md, or a direct write inside the plan directory other than decisions.md/findings.md/history.md. Record what this discussion settled instead: read the fingerprint with python3 $state_arg fingerprint $decisions_arg, then run python3 $edit_arg --plan $plan_arg --expected-fingerprint <that sha256> entry-append --file decisions.md --heading 'Active Decisions' --entry '<decision>' (use findings.md for an observation). Advancing waits for the next user prompt and its bind. The candidate and unfinished work are preserved."
+    fi
     if maintenance_tool_allowed "$PLAN_DIR"; then
         log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=allow-discussion-maintenance tool=$TOOL_NAME"
         printf '{}'; exit 0
     fi
-    # A discussion lease protects the plan, not the filesystem. A user who asks a
-    # question and asks for it written down must still get the file, so a write
-    # whose targets all sit outside the plan root is allowed; the plan itself,
-    # and any command whose targets cannot be located, is not.
+    # A user who asks a question and asks for it written down must still get the
+    # file, so a write whose targets all sit outside the plan root is allowed.
     if printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" outside-every-plan "$PWD"; then
         log "session=$SESSION_ID decision=allow-discussion-non-plan-write tool=$TOOL_NAME"
         printf '{}'; exit 0
     fi
+    # A shell command with no recognizable write cannot disturb the plan,
+    # whatever it runs. Read-only diagnosis through an unfamiliar wrapper or a
+    # network query is the ordinary way to answer a question about a plan, and
+    # refusing it for being unrecognizable is what left a discussion turn unable
+    # to answer at all. A tool with a schema is judged by its name instead.
+    if non_mutating_shell; then
+        log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=allow-discussion-non-mutating tool=$TOOL_NAME"
+        printf '{}'; exit 0
+    fi
     log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=block-discussion tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
-    block "[plan-files] DISCUSSION ONLY. Allowed: reads, questions, owned-plan maintenance, and writes whose targets all lie outside $PWD/tmp/plan-files (a report or notes the user asked for). Blocked: writes into any plan directory, and shell commands whose write targets cannot be located — use a write tool with an explicit path for those. Advancing the plan itself requires a new user prompt and bind. The candidate and unfinished work are preserved."
+    block "[plan-files] DISCUSSION ONLY. This call writes and its targets cannot be located, so it cannot be shown to leave the plan alone. Allowed: reads and questions, recording into decisions.md/findings.md/history.md, owned-plan maintenance, shell commands with no recognizable write, and writes whose targets all lie outside $PWD/tmp/plan-files. Use a write tool with an explicit path for a file you mean to write. Advancing the plan waits for the next user prompt and its bind. The candidate and unfinished work are preserved."
 fi
 DISCUSSION_HINT="If the user requested only discussion of this plan/workflow, run exactly: $EXPECTED_DISCUSS. This permits a discussion Stop while keeping execution gated; do not use it to pause authorized implementation."
 

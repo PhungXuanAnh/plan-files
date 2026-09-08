@@ -341,9 +341,13 @@ def shell_has_mutation_intent(tool_input: object) -> bool:
         return False
     if patch_paths(tool_input):
         return True
+    # `FOO=1 rm -rf x` runs rm. Anchoring the verb to the start of a segment
+    # without stepping over assignments let an env prefix hide it, the same
+    # blind spot _command_start closes for the read-only test.
+    prefix = r"(^|[;&|]\s*)(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*"
     mutation_command = re.compile(
-        r"(^|[;&|]\s*)(apply_patch|cp|install|mv|rm|touch|truncate|tee|chmod|chown)\b"
-        r"|(^|[;&|]\s*)(sed|perl)\b[^\n;&|]*\s-[A-Za-z]*i[A-Za-z]*\b"
+        prefix + r"(apply_patch|cp|install|mv|rm|touch|truncate|tee|chmod|chown)\b"
+        r"|" + prefix + r"(sed|perl)\b[^\n;&|]*\s-[A-Za-z]*i[A-Za-z]*\b"
         r"|(^|[^<>])>{1,2}(?!=)",
         re.IGNORECASE,
     )
@@ -939,6 +943,149 @@ def routing_verb(tool_input: object, bind_tool: Path, project_root: Path, task_i
     return verb
 
 
+# The plan's execution state lives in tasks.md and handoff.md; a discussion turn
+# may record into the other planning files. Subcommand names come from the
+# helpers' own --help surfaces, so the classification follows the tools rather
+# than a guess about what a call writes.
+PLAN_RECORD_FILES = {"decisions.md", "findings.md", "history.md"}
+PLAN_LEASE_HELPERS = {"session-state.sh", "bind-session.sh", "resolve-project-root.sh"}
+CHECKPOINT_READ_OPS = {"assert-finalizable"}
+EDIT_RECORD_OPS = {"decision-supersede", "archive-phase", "compact-oldest", "archive-entry"}
+EDIT_FILE_OPS = {"entry-append", "entry-replace", "entry-remove", "section-replace"}
+EDIT_ADVANCE_OPS = {"phase-add", "phase-update", "phase-move", "phase-remove",
+                    "item-add", "item-update", "item-move", "item-remove",
+                    "reopen", "pause", "handoff-write", "handoff-clear"}
+# Most restrictive first: one advance anywhere in a command decides it.
+OP_CLASS_ORDER = ("advance", "record", "unknown", "read")
+
+
+def _named_file_operand(operands: list[str]) -> str:
+    for index, word in enumerate(operands):
+        if word == "--file" and index + 1 < len(operands):
+            return operands[index + 1]
+        if word.startswith("--file="):
+            return word.split("=", 1)[1]
+    return ""
+
+
+def _plan_file_op_class(path: str, plan_dir: Path) -> str:
+    """Which class a write to this path belongs to, by planning file."""
+    if not inside(path, plan_dir):
+        return "unknown"
+    if Path(path.replace("\\", "/")).name in PLAN_RECORD_FILES:
+        return "record"
+    return "advance"
+
+
+def _plan_mention_op_class(path: str, plan_dir: Path) -> str:
+    """Classify a plan file named in text, by task id and planning filename.
+
+    The absolute path cannot always be recovered from prose: a project root
+    holding a space or a quote truncates the match, and a mention may be
+    relative. The task id and the file are exactly what the classification
+    needs, and both survive that truncation.
+    """
+    normalized = path.replace("\\", "/")
+    for marker in PLAN_ROOT_MARKERS:
+        _, separator, tail = normalized.partition(marker)
+        if not separator:
+            continue
+        parts = [part for part in tail.split("/") if part]
+        if len(parts) >= 2 and parts[0] == plan_dir.name:
+            return "record" if parts[-1] in PLAN_RECORD_FILES else "advance"
+    return "unknown"
+
+
+def _helper_op_class(script: str, operands: list[str]) -> str:
+    """Classify a planning helper call from the subcommand it actually runs."""
+    if any(word in HELP_FLAGS for word in operands):
+        return "read"
+    if script == "plan_state.py" or script in PLAN_LEASE_HELPERS:
+        return "read"
+    if script == "plan_checkpoint.py":
+        return "read" if any(word in CHECKPOINT_READ_OPS for word in operands) else "advance"
+    if script == "plan_edit.py":
+        if "--dry-run" in operands:
+            return "read"
+        if any(word in EDIT_ADVANCE_OPS for word in operands):
+            return "advance"
+        if any(word in EDIT_RECORD_OPS for word in operands):
+            return "record"
+        if any(word in EDIT_FILE_OPS for word in operands):
+            return "record" if _named_file_operand(operands) in PLAN_RECORD_FILES else "advance"
+        return "advance"
+    return "unknown"
+
+
+def _resolve_op_class(classes: set[str]) -> str:
+    for level in OP_CLASS_ORDER:
+        if level in classes:
+            return level
+    return "unknown"
+
+
+def _shell_plan_op_class(command: str, plan_dir: Path) -> str:
+    segments = shell_segments(command)
+    if segments is None:
+        return "unknown"
+    classes: set[str] = set()
+    for segment in segments:
+        call = _planning_helper_call(segment.argv)
+        if call is not None:
+            classes.add(_helper_op_class(*call))
+        elif _segment_is_read_only(segment):
+            classes.add("read")
+        else:
+            # A command whose targets cannot be parsed still declares one when it
+            # names a planning file -- as a whole argument (`sed -i … tasks.md`)
+            # or inside inline code (`python3 -c "…tasks.md…"`). Naming the plan
+            # cannot grant this call anything, so reading a mention as a reason
+            # to refuse is the safe direction and the only one taken here.
+            named = {_plan_file_op_class(word, plan_dir)
+                     for word in _plan_file_arguments(segment.argv)}
+            named |= {_plan_mention_op_class(path, plan_dir)
+                      for path in text_plan_paths(segment.text)}
+            classes.update(named or {"unknown"})
+    return _resolve_op_class(classes)
+
+
+def plan_op_class(payload: dict, plan_dir: Path) -> str:
+    """read | record | advance | unknown for one call against the owned plan.
+
+    The axis a discussion lease needs is not read versus write and not inside
+    versus outside the plan directory. It is whether the call *records* -- a
+    decision, a finding, a report, which is what a discussion turn produces --
+    or *advances* execution state, which the lease defers to the next prompt's
+    bind. That axis is decidable because the planning helpers are named by
+    intent and the format contract fixes which file carries which state.
+    """
+    tool_input = payload_tool_input(payload)
+    name = str(payload.get("tool_name") or payload.get("toolName") or "").lower()
+    simple = name.rsplit("__", 1)[-1]
+    if simple in SHELL_TOOL_NAMES:
+        return _shell_plan_op_class(shell_command_text(tool_input), plan_dir)
+    if simple.rsplit(".", 1)[-1] in QUESTION_TOOLS or names_read_tool(simple):
+        return "read"
+    return _resolve_op_class({_plan_file_op_class(path, plan_dir)
+                              for path in mutation_targets(tool_input)})
+
+
+def non_mutating_shell(payload: dict) -> bool:
+    """A shell command with no recognizable write, judged from its text.
+
+    Shell only. A tool with a schema states what it is in its own name, so an
+    unfamiliar name is not evidence of harmlessness: `mcp__deploy__ship` carries
+    no write token and ships production. A command is different -- it names the
+    programs it runs -- and refusing every command whose writes cannot be
+    located is what left a discussion turn unable to read an API to answer the
+    question it was asked.
+    """
+    name = str(payload.get("tool_name") or payload.get("toolName") or "").lower()
+    if name.rsplit("__", 1)[-1] not in SHELL_TOOL_NAMES:
+        return False
+    return not shell_has_mutation_intent(payload_tool_input(payload))
+
+
 def planning_background_warning(payload: dict) -> str:
     """Recognize explicit detachment of short planning helpers, not arbitrary jobs."""
     name = str(payload.get("tool_name") or payload.get("toolName") or "")
@@ -1037,6 +1184,17 @@ def main() -> int:
         plan_dir = Path(os.path.realpath(sys.argv[2]))
         print(json.dumps(tool_class(payload, plan_dir), separators=(",", ":")))
         return 0
+    if len(sys.argv) == 3 and sys.argv[1] == "plan-op-class":
+        payload = load_payload()
+        if payload is None:
+            return 1
+        print(plan_op_class(payload, Path(os.path.realpath(sys.argv[2]))), end="")
+        return 0
+    if len(sys.argv) == 2 and sys.argv[1] == "non-mutating-shell":
+        payload = load_payload()
+        if payload is None:
+            return 1
+        return 0 if non_mutating_shell(payload) else 1
     if len(sys.argv) == 5 and sys.argv[1] == "routing-verb":
         payload = load_payload()
         if payload is None:
