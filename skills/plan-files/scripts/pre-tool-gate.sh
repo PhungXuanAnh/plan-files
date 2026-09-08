@@ -309,7 +309,7 @@ if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION
     printf -v decisions_arg '%q' "$PLAN_DIR/decisions.md"
     if [ "$(plan_op_class "$PLAN_DIR")" = "advance" ]; then
         log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=block-discussion-advance tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
-        block "[plan-files] DISCUSSION ONLY — RECORD IT, DO NOT ADVANCE IT. This call changes execution state: an item checkbox, a phase status, Current Phase/Active Item, a checkpoint, handoff.md, or a direct write inside the plan directory other than decisions.md/findings.md/history.md. Record what this discussion settled instead: read the fingerprint with python3 $state_arg fingerprint $decisions_arg, then run python3 $edit_arg --plan $plan_arg --expected-fingerprint <that sha256> entry-append --file decisions.md --heading 'Active Decisions' --entry '<decision>' (use findings.md for an observation). Advancing waits for the next user prompt and its bind. The candidate and unfinished work are preserved."
+        block "[plan-files] DISCUSSION ONLY — RECORD IT, DO NOT ADVANCE IT. This call changes execution state: an item checkbox, a phase status, Current Phase/Active Item, a checkpoint, handoff.md, or a direct write inside the plan directory other than decisions.md/findings.md/history.md. Record what this discussion settled instead: read the fingerprint with python3 $state_arg fingerprint --file $decisions_arg, then run python3 $edit_arg --plan $plan_arg --expected-fingerprint <that sha256> entry-append --file decisions.md --heading 'Active Decisions' --entry '<decision>' (use findings.md for an observation). Advancing waits for the next user prompt and its bind. The candidate and unfinished work are preserved."
     fi
     if maintenance_tool_allowed "$PLAN_DIR"; then
         log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=allow-discussion-maintenance tool=$TOOL_NAME"
@@ -341,7 +341,7 @@ DISCUSSION_HINT="If the user requested only discussion of this plan/workflow, ru
 # the message honest about the boundary: a helper is recognized by the program
 # the command actually runs, so `--help` or a version probe on one passes,
 # while quoting a helper or a plan path inside some other command does not.
-ALLOWED_HINT="Still allowed, recognized from the tool input rather than from a tool or script name: (1) calls that are demonstrably read-only; (2) calls whose write targets, or whose whole arguments, are paths inside the owned plan directory $PLAN_DIR; (3) shell commands whose every segment either runs one of the planning helper scripts in $(planning_script_path '' | sed 's:/$::') or is read-only, with --plan defaulting to this plan and never naming another. A plan path quoted inside a longer argument authorizes nothing, and chaining other work onto a repair blocks the whole command -- send that work as its own call."
+ALLOWED_HINT="Still allowed: read-only diagnosis; native Edit/Write with an explicit file_path inside $PLAN_DIR; and scoped helpers in $(planning_script_path '' | sed 's:/$::'). For direct Markdown shell writes, a cat heredoc with a quoted delimiter and one literal .md target inside the plan is recognized; any trailing commands must be read-only. Inline Python/custom shell cannot prove its write scope merely by including plan paths, even as arguments: switch to native Edit/Write or a supported helper. Chaining unrelated work onto a repair blocks the whole command."
 
 # Invalid format/profile/status blocks execution before Stop, including legacy plans.
 INTEGRITY_WARN=$(planning_integrity_warning "$PLAN_DIR/tasks.md")
@@ -360,7 +360,7 @@ if [ -n "$COMPACTION_WARN" ]; then
         printf '{}'
         exit 0
     fi
-    REASON_TEXT="[plan-files] MAINTENANCE ACTION REQUIRED. $MAINTENANCE_ACTION Allowed: read-only diagnosis, questions, and owned-plan maintenance. Blocked: outside writes and unknown calls. Include the owned plan path in repair commands; every recognized write target must remain inside it. Budgets are rechecked each call. $COMPACTION_WARN $DISCUSSION_HINT"
+    REASON_TEXT="[plan-files] MAINTENANCE ACTION REQUIRED. $MAINTENANCE_ACTION $ALLOWED_HINT Questions remain allowed. Budgets are rechecked each call. $COMPACTION_WARN $DISCUSSION_HINT"
     log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") maintenance=required decision=block-compaction tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
     block "$REASON_TEXT"
 fi

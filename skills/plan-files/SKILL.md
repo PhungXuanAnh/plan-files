@@ -1,6 +1,6 @@
 ---
 name: plan-files
-description: Uses persistent Markdown planning files to organize and resume complex work. Use when asked to plan or break down a multi-step project, for long-running research, or whenever work will require more than five tool calls.
+description: Uses bounded persistent Markdown plans to organize complex multi-step work, long-running research, and tasks resumed across sessions or context compaction.
 ---
 
 # Planning with Files
@@ -63,14 +63,14 @@ Use `blocked` only when no actionable path remains because of an external depend
 
 ## Work loop
 
-1. Before complex work, create a plan and choose Workflow Profile A (PR handoff), B (staging verified), or C (research/document).
-2. PreTool blocks operational work on invalid format/profile/item/status, restore state, or a fully complete plan that has not been reopened, while allowing reads and owned-plan repair. PostTool repeats unresolved diagnostics and a short warning when Stop would block; repair the named cause immediately. Before each phase or resume, refresh bounded `overview` and `restore-check`, then target-read the active phase, decisions, and relevant findings. Repair any restore issue before implementation.
+1. Before complex work, create a plan and choose Workflow Profile A (PR handoff), B (staging verified), or C (research/document). Start with the smallest useful phase and observable outcomes; add phases for real work boundaries, not a fixed ceremony.
+2. Before a phase or resume, read bounded `overview`, then only missing/relevant phase, decision, or finding sections. Its `restore.ok: true` already confirms restore checks; run `restore-check` for complete diagnostics when false. Repair issues before implementation. PreTool allows reads and owned-plan repair while gating invalid work; PostTool repeats unresolved faults but debounces ordinary progress/finalization reminders.
 3. Work only the Active Item. When its evidence predicate becomes true, the next workflow operation must checkpoint it before any unrelated tool. Record material partial/error evidence while it remains false.
-4. Write to `findings.md` when a discovery changes what the next session would need to know, and before every checkpoint, compaction, and pause. Record durable conclusions, not a transcript of operations. Read `decisions.md` before changing it; preserve superseded choices and open questions.
+4. Write `findings.md` when a discovery changes what the next session needs to know; save any such unwritten discovery before checkpointing, compaction, or pause. Evidence already recorded on an item need not be copied there. Read `decisions.md` before changing it; preserve superseded choices and open questions.
 5. Log errors immediately, diagnose them, and change approach. An error is a failure that changes your approach; a retry that then succeeds is not one. Try three materially different actionable paths before treating an external dependency as a blocker.
 6. Keep exact requested verification and executable acceptance checks. Do not substitute a cheaper check for a requested E2E or observable result.
 7. Progress belongs in commentary. Continue every actionable item and phase in the same turn; an item/phase checkpoint is not a stopping boundary.
-8. During execution, stop only when every phase is complete or validly blocked/deferred. Re-read disk state and run `assert-finalizable` before final output; Stop-hook feedback means continue/repair, not summarize again. Clarification/discussion may yield as described above without claiming finalization.
+8. During execution, stop only when every phase is complete or validly blocked/deferred. Run `restore-check <known-tasks.md>` and `plan_checkpoint.py --plan <known-tasks.md> assert-finalizable` before final output to verify final freshness and settlement. Stop feedback means continue/repair. Clarification/discussion may yield as above without claiming finalization.
 
 Read [work-loop and maintenance details](references/work-loop-and-maintenance.md) for async waits, error retention, phase continuation, pause handling, and compaction order.
 
@@ -82,12 +82,12 @@ Resolve scripts relative to this `SKILL.md`. Run short planning reads/edits/chec
 python3 <skill-dir>/scripts/plan_checkpoint.py start P2.1
 python3 <skill-dir>/scripts/plan_checkpoint.py progress P2.1 --evidence "partial observable state"
 python3 <skill-dir>/scripts/plan_checkpoint.py complete P2.1 --evidence "completion evidence"
-python3 <skill-dir>/scripts/plan_checkpoint.py assert-finalizable --project-root <project-root>
+python3 <skill-dir>/scripts/plan_checkpoint.py --plan <task-dir>/tasks.md assert-finalizable --project-root <project-root>
 ```
 
-Use `plan_edit.py phase-update` for blocked/deferred phases. For a user pause, update decisions/findings first, then use `pause` to settle phases, clear Active Item, sync Resume Checkpoint, and write any handoff last. Read the [phase and pause commands](references/plan-operations.md) before either operation.
+Use `plan_edit.py pause` to block/defer active work: save new decisions/findings, then settle phases, clear Active Item, sync Resume Checkpoint, and write any handoff last in one call. Read the [phase and pause commands](references/plan-operations.md) when needed.
 
-On the `complete` call whose JSON reports `"next_item":null`, add `--deactivate-pointer`. It clears the pointer only when this plan still owns it. Skipping this makes finalization fail with `POINTER_ACTIVE`; a plan whose items are all already checked has no `complete` call left, so clear it with `plan_checkpoint.py deactivate-pointer --project-root <project-root>` instead of editing the pointer by hand.
+On the completion that settles the final actionable item, pass `--deactivate-pointer`. If it was omitted, use `plan_checkpoint.py deactivate-pointer --project-root <project-root>` instead of repeating `complete`. After clearing the pointer, retain the known `--plan <task-dir>/tasks.md` for final reads/checks; an empty pointer cannot resolve the plan.
 
 ## Bounded reads and edits
 
@@ -102,7 +102,9 @@ python3 <skill-dir>/scripts/plan_state.py section decisions.md "Active Decisions
 python3 <skill-dir>/scripts/plan_state.py budgets
 ```
 
-For `plan_edit.py --expected-fingerprint`, use `file_fingerprint` (full SHA-256), never the 16-hex progress `fingerprint`. Stale, invalid, unsafe, or budget-worsening edits are rejected. Put global flags (`--plan`, `--expected-fingerprint`, `--dry-run`) before the subcommand; use `--dry-run` for consequential structure changes and `--help` for exact syntax. Every script resolves the plan from this workspace's `.plan-files` pointer, so name the plan only to override that default or when running from outside the project. Direct Markdown access remains allowed for broad judgment or repair; execution transitions still use `plan_checkpoint.py`.
+For `plan_edit.py --expected-fingerprint`, reuse `file_fingerprint` from a read/previous result, or request `plan_state.py fingerprint --file`. Bare `fingerprint` is a 16-hex progress hash, not an edit token; `fingerprint --json` returns both. Put global flags (`--plan`, `--expected-fingerprint`, `--dry-run`, `--compact`) before the subcommand. Use `--compact` for short editor output instead of piping away errors; use `--dry-run` for consequential structure changes.
+
+Use native Edit/Write for short prose; a literal `cat` heredoc with a quoted delimiter and one Markdown target inside the plan is also recognized. Inline Python does not prove write scope merely by naming plan paths. Findings section edits support existing legacy headings. Use structural helpers when they preserve invariants: `phase-add` accepts repeated `--item`/`--verify` and `--start` in one call; newly authorized work on a settled plan uses `reopen`. Keep execution transitions in `plan_checkpoint.py`. Stale or budget-worsening structural edits are rejected. Scripts default to this workspace's pointer while it names a plan.
 
 Read [targeted plan operations](references/plan-operations.md) before structural, section, archive, or handoff commands, including recovery after interrupted archival.
 

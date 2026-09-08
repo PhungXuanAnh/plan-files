@@ -165,7 +165,9 @@ if [ "$TOTAL" -gt 0 ] && [ $((COMPLETE + BLOCKED + DEFERRED)) -ge "$TOTAL" ] \
     if grep -qE '^## Active Item[[:space:]]*$' "$PLAN_FILE"; then
         FINALIZE_ISSUE=$(planning_assert_finalizable "$PLAN_FILE" "$PWD")
         if [ "$FINALIZE_ISSUE" != "FINALIZABLE" ]; then
-            FINALIZE_WARN="[plan-files] FINALIZATION ACTION REQUIRED ($FINALIZE_ISSUE). Run: python3 $(planning_script_path plan_checkpoint.py) assert-finalizable --project-root $PWD. Finish pointer cleanup before final output."
+            printf -v FINAL_PLAN_ARG '%q' "$PLAN_FILE"
+            printf -v FINAL_ROOT_ARG '%q' "$PWD"
+            FINALIZE_WARN="[plan-files] FINALIZATION ACTION REQUIRED ($FINALIZE_ISSUE). After pointer cleanup, verify with: python3 $(planning_script_path plan_checkpoint.py) --plan $FINAL_PLAN_ARG assert-finalizable --project-root $FINAL_ROOT_ARG."
         fi
     fi
     if [ -z "$COMPACTION_WARN$RESTORE_WARN$FINALIZE_WARN$BACKGROUND_WARN$REOPEN_WARN" ]; then
@@ -289,9 +291,11 @@ LAST_NUDGE_TS=0
 LAST_PLAN_FINGERPRINT=""
 UNCHANGED_TOOL_COUNT=0
 UNCHANGED_RISK_SCORE=0
+UNCHANGED_UNKNOWN_COUNT=0
 LAST_CHECKPOINT_TS=0
 LAST_ITEM_NUDGE_TS=0
 LAST_STALE_TS=0
+LAST_REVIEW_TS=0
 ITEM_NUDGE_STREAK=0
 if [ -f "$STATE_FILE" ]; then
     LAST_PHASE_NUM=$(grep -E '^last_phase_num='        "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
@@ -322,6 +326,7 @@ EMIT_NUDGE=false
 INJECT_FULL=false
 PLAN_CHANGED=false
 STALE_CHECKPOINT=false
+CHECKPOINT_REVIEW=false
 CHECKPOINT_LAG_SECS=0
 {
     flock -x 8 || true
@@ -333,17 +338,30 @@ CHECKPOINT_LAG_SECS=0
     _st_fingerprint=$(grep -E '^last_plan_fingerprint=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
     _st_unchanged=$(grep -E '^unchanged_tool_count=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
     _st_risk=$(grep -E '^unchanged_risk_score=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
+    _st_unknown=$(grep -E '^unchanged_unknown_count=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
+    _st_risk_schema=$(grep -E '^risk_schema=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
     _st_checkpoint_ts=$(grep -E '^last_checkpoint_ts=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
     _st_item_nudge_ts=$(grep -E '^last_item_nudge_ts=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
     _st_stale_ts=$(grep -E '^last_stale_ts=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
+    _st_review_ts=$(grep -E '^last_review_ts=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
     _st_item_streak=$(grep -E '^item_nudge_streak=' "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo 0)
     _st_nudge_ts=${_st_nudge_ts:-0}
     _st_unchanged=${_st_unchanged:-0}
     _st_risk=${_st_risk:-0}
+    _st_unknown=${_st_unknown:-0}
     _st_checkpoint_ts=${_st_checkpoint_ts:-0}
     _st_item_nudge_ts=${_st_item_nudge_ts:-0}
     _st_stale_ts=${_st_stale_ts:-0}
+    _st_review_ts=${_st_review_ts:-0}
     _st_item_streak=${_st_item_streak:-0}
+    # Older caches mixed opaque activity into evidence risk. That sum cannot
+    # be separated retrospectively; restart the counters, preserving plan age.
+    if [ "$_st_risk_schema" != "2" ]; then
+        _st_risk=0
+        _st_unknown=0
+        _st_stale_ts=0
+        _st_review_ts=0
+    fi
     _time_since=$(( NOW_TS - _st_nudge_ts ))
 
     _delta=false
@@ -362,23 +380,35 @@ CHECKPOINT_LAG_SECS=0
         INJECT_FULL=true
         _st_unchanged=0
         _st_risk=0
+        _st_unknown=0
         _st_checkpoint_ts=$NOW_TS
         _st_item_nudge_ts=0
         _st_stale_ts=0
+        _st_review_ts=0
         _st_item_streak=0
     else
         _st_unchanged=$((_st_unchanged + 1))
-        _st_risk=$((_st_risk + TOOL_WEIGHT))
+        case "$TOOL_CLASS" in
+            unknown) _st_unknown=$((_st_unknown + 1)) ;;
+            evidence_likely|operational_mutation) _st_risk=$((_st_risk + TOOL_WEIGHT)) ;;
+        esac
         if [ "$CONTRACTED" = "true" ] && [ -n "$ACTIVE_ITEM" ]; then
             CHECKPOINT_LAG_SECS=$(( _st_checkpoint_ts > 0 ? NOW_TS - _st_checkpoint_ts : 0 ))
             if [ "$_st_risk" -ge "$STALE_RISK_THRESHOLD" ] \
-                || { [ "$_st_risk" -gt 0 ] && [ "$CHECKPOINT_LAG_SECS" -ge "$STALE_MAX_AGE_SECS" ]; }; then
+                || { [ $((_st_risk + _st_unknown)) -gt 0 ] && [ "$CHECKPOINT_LAG_SECS" -ge "$STALE_MAX_AGE_SECS" ]; }; then
                 # Re-arm on an interval instead of restating it every window.
                 # Once the threshold is crossed the counter carries no new
                 # information, so repeating it with a larger number is pure noise.
-                if [ "$_st_stale_ts" -eq 0 ] || [ $((NOW_TS - _st_stale_ts)) -ge "$STALE_REPEAT_SECS" ]; then
-                    STALE_CHECKPOINT=true
-                    _st_stale_ts=$NOW_TS
+                if [ "$_st_risk" -gt 0 ]; then
+                    if [ "$_st_stale_ts" -eq 0 ] || [ $((NOW_TS - _st_stale_ts)) -ge "$STALE_REPEAT_SECS" ]; then
+                        STALE_CHECKPOINT=true
+                        _st_stale_ts=$NOW_TS
+                    fi
+                elif [ "$_st_review_ts" -eq 0 ] || [ $((NOW_TS - _st_review_ts)) -ge "$STALE_REPEAT_SECS" ]; then
+                    # An unknown-only review must not suppress a subsequent
+                    # evidence-risk warning during the repeat window.
+                    CHECKPOINT_REVIEW=true
+                    _st_review_ts=$NOW_TS
                 fi
             fi
             # Back the unchanged-item reminder off geometrically. A multi-step
@@ -406,9 +436,11 @@ CHECKPOINT_LAG_SECS=0
 
     UNCHANGED_TOOL_COUNT=$_st_unchanged
     UNCHANGED_RISK_SCORE=$_st_risk
+    UNCHANGED_UNKNOWN_COUNT=$_st_unknown
     LAST_CHECKPOINT_TS=$_st_checkpoint_ts
     LAST_ITEM_NUDGE_TS=$_st_item_nudge_ts
     LAST_STALE_TS=$_st_stale_ts
+    LAST_REVIEW_TS=$_st_review_ts
     ITEM_NUDGE_STREAK=$_st_item_streak
     [ "$EMIT_NUDGE" = "true" ] && LAST_NUDGE_TS=$NOW_TS
     {
@@ -420,17 +452,31 @@ CHECKPOINT_LAG_SECS=0
         printf 'last_plan_fingerprint=%s\n' "$PLAN_FINGERPRINT"
         printf 'unchanged_tool_count=%s\n' "$UNCHANGED_TOOL_COUNT"
         printf 'unchanged_risk_score=%s\n' "$UNCHANGED_RISK_SCORE"
+        printf 'unchanged_unknown_count=%s\n' "$UNCHANGED_UNKNOWN_COUNT"
+        printf 'risk_schema=2\n'
         printf 'last_checkpoint_ts=%s\n'   "$LAST_CHECKPOINT_TS"
         printf 'last_item_nudge_ts=%s\n'   "$LAST_ITEM_NUDGE_TS"
         printf 'last_stale_ts=%s\n'        "$LAST_STALE_TS"
+        printf 'last_review_ts=%s\n'       "$LAST_REVIEW_TS"
         printf 'item_nudge_streak=%s\n'    "$ITEM_NUDGE_STREAK"
     } > "$STATE_FILE.tmp" 2>/dev/null \
         && mv "$STATE_FILE.tmp" "$STATE_FILE" 2>/dev/null || true
 } 8>>"$STATE_LOCK" 2>/dev/null || true
 
-log "item_state fingerprint=${PLAN_FINGERPRINT:-unavailable} active_item=${ACTIVE_ITEM:-none} plan_changed=$PLAN_CHANGED unchanged_tools=$UNCHANGED_TOOL_COUNT risk=$UNCHANGED_RISK_SCORE tool_class=$TOOL_CLASS checkpoint_lag=${CHECKPOINT_LAG_SECS}s stale=$STALE_CHECKPOINT emit_nudge=$EMIT_NUDGE inject_full=$INJECT_FULL"
+log "item_state fingerprint=${PLAN_FINGERPRINT:-unavailable} active_item=${ACTIVE_ITEM:-none} plan_changed=$PLAN_CHANGED unchanged_tools=$UNCHANGED_TOOL_COUNT risk=$UNCHANGED_RISK_SCORE tool_class=$TOOL_CLASS checkpoint_lag=${CHECKPOINT_LAG_SECS}s stale=$STALE_CHECKPOINT emit_nudge=$EMIT_NUDGE inject_full=$INJECT_FULL unknown_count=$UNCHANGED_UNKNOWN_COUNT checkpoint_review=$CHECKPOINT_REVIEW"
 
 EMIT_CONTEXT_NUDGE=$EMIT_NUDGE
+# A healthy actionable/settled state is an advisory, not an integrity fault.
+# Share the existing semantic/time debounce instead of forcing context after
+# every read or maintenance call. Persistent faults still bypass debounce.
+if [ "$STALE_CHECKPOINT" = "true" ] || [ "$CHECKPOINT_REVIEW" = "true" ]; then
+    EMIT_CONTEXT_NUDGE=true
+    EMIT_NUDGE=true
+fi
+if [ "$EMIT_CONTEXT_NUDGE" != "true" ]; then
+    [ -n "$INTEGRITY_WARN" ] || STOP_RISK=""
+    FINALIZE_WARN=""
+fi
 if [ -n "$STOP_RISK$COMPACTION_WARN$RESTORE_WARN$FINALIZE_WARN$BACKGROUND_WARN$REOPEN_WARN" ]; then
     EMIT_NUDGE=true
 fi
@@ -469,6 +515,9 @@ if [ "$CONTRACTED" = "true" ] && [ -n "$ACTIVE_ITEM" ]; then
     if [ "$STALE_CHECKPOINT" = "true" ]; then
         NUDGE="${NUDGE}
 [plan-files] STALE ITEM STATE: no plan change for ${CHECKPOINT_LAG_SECS}s across ${UNCHANGED_TOOL_COUNT} tool result(s) (latest class ${TOOL_CLASS}). Checkpoint ${ACTIVE_ITEM} now if its evidence predicate is true. If it is legitimately a long multi-step item, record what you have with 'python3 $(planning_script_path plan_checkpoint.py) progress ${ACTIVE_ITEM} --evidence ...' and keep going. This line repeats at most every ${STALE_REPEAT_SECS}s until the plan changes."
+    elif [ "$CHECKPOINT_REVIEW" = "true" ]; then
+        NUDGE="${NUDGE}
+[plan-files] CHECKPOINT REVIEW: no plan change for ${CHECKPOINT_LAG_SECS}s with ${UNCHANGED_UNKNOWN_COUNT} unclassified tool result(s). Their effect is unknown. Check whether ${ACTIVE_ITEM} has new evidence; if so, record it with 'python3 $(planning_script_path plan_checkpoint.py) progress ${ACTIVE_ITEM} --evidence ...' or complete the item when its predicate is true. Otherwise continue the same item. This review repeats at most every ${STALE_REPEAT_SECS}s until the plan changes."
     fi
 else
     NUDGE="[plan-files] Update tasks.md with what you just did. If a phase is now complete, update ${PLAN_FILE} status. If the plan-files skill rules are no longer in your context (post-/compact, or you have forgotten them), reload them by reading $(planning_doc_path SKILL.md) before continuing."

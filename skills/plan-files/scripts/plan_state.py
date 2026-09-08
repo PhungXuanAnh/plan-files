@@ -431,7 +431,7 @@ def budget_warning(plan: Path) -> str:
         "Keep hot current state; use targeted plan operations to archive completed phases, completed "
         "verification, and resolved errors to history.md; consolidate findings/decisions by lifecycle; "
         "overwrite handoff.md instead of appending. Split independent follow-up work into another task. "
-        "Never raw-truncate."
+        "Leave room for the next update while preserving material findings. Never raw-truncate."
     )
 
 
@@ -1189,7 +1189,7 @@ def finalizability_issues(state: PlanState, project_root: Path | None = None) ->
 
 COMMAND_HELP = {
     "validate": "check the plan against the format contract and print its issues",
-    "fingerprint": "print the file_fingerprint (full SHA-256) and the progress fingerprint",
+    "fingerprint": "print the progress hash; --file prints SHA-256, --json prints both",
     "context": "print the compact active-item context the hooks use",
     "restore-check": "verify the plan carries everything needed to resume; lists repairs",
     "assert-finalizable": "verify every phase is settled and the plan can be closed",
@@ -1209,14 +1209,21 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Bounded, read-only inspection of a planning task folder.",
         epilog=(
-            "Reads print a 'file_fingerprint' (full SHA-256, what plan_edit.py "
-            "--expected-fingerprint wants) and a 16-hex 'fingerprint' (semantic progress hash)."
+            "Use overview/context for state plus 'file_fingerprint' (full SHA-256). "
+            "For an edit token alone use fingerprint --file; the default fingerprint "
+            "output is the legacy 16-hex progress hash, not an edit token."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("validate", "fingerprint", "context", "restore-check", "assert-finalizable"):
         subparser = subparsers.add_parser(command, help=COMMAND_HELP[command])
         subparser.add_argument("plan", type=Path, nargs="?", help=PLAN_ARG_HELP)
+        if command == "fingerprint":
+            formats = subparser.add_mutually_exclusive_group()
+            formats.add_argument("--file", dest="file_hash", action="store_true",
+                                 help="print only the full file SHA-256 used by plan_edit.py")
+            formats.add_argument("--json", action="store_true",
+                                 help="print file_fingerprint and progress fingerprint as JSON")
         if command == "assert-finalizable":
             subparser.add_argument("--project-root", type=Path, help="workspace root that owns .plan-files")
 
@@ -1305,7 +1312,13 @@ def main(argv: Iterable[str] | None = None) -> int:
             return 2
         return 0
     if args.command == "fingerprint":
-        print(progress_fingerprint(state))
+        if args.file_hash:
+            print(file_fingerprint(state.path))
+        elif args.json:
+            print(json.dumps({"file": str(state.path), "file_fingerprint": file_fingerprint(state.path),
+                              "fingerprint": progress_fingerprint(state)}, separators=(",", ":")))
+        else:
+            print(progress_fingerprint(state))
         return 0
     if args.command == "context":
         print(json.dumps(context_payload(state), separators=(",", ":")))

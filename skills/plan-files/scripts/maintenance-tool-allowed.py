@@ -390,7 +390,10 @@ def extract_mutation_plan_id(payload: dict, project_root: Path) -> int:
     tool_input = payload_tool_input(payload)
     if not is_mutation_tool(tool_name, tool_input):
         return 1
-    targets = mutation_targets(tool_input)
+    shell = tool_name.lower().rsplit("__", 1)[-1] in SHELL_TOOL_NAMES
+    targets = shell_write_targets(tool_input) if shell else mutation_targets(tool_input)
+    if shell and _cat_heredoc_header(tool_input):
+        return print_single_plan_id(plan_ids(targets, project_root))
     if not targets:
         targets = text_plan_paths(tool_input)
     return print_single_plan_id(plan_ids(targets, project_root))
@@ -401,12 +404,15 @@ def tool_class(payload: dict, plan_dir: Path) -> dict[str, object]:
     simple_name = tool_name.lower().rsplit("__", 1)[-1]
     tool_input = payload_tool_input(payload)
     mutation = is_mutation_tool(tool_name, tool_input)
-    targets = mutation_targets(tool_input)
-    plan_maintenance = mutation and (
+    targets = shell_write_targets(tool_input) if simple_name in SHELL_TOOL_NAMES else mutation_targets(tool_input)
+    # Python planning helpers need no shell write verb or redirection. Classify
+    # their scoped maintenance independently of the shell-mutation heuristic,
+    # or even overview/final checks accrue risk and demand reopening a done plan.
+    scoped_helper = not targets and simple_name in SHELL_TOOL_NAMES and shell_runs_planning_helper(tool_input, plan_dir)
+    plan_maintenance = scoped_helper or (mutation and (
         (bool(targets) and all(inside(path, plan_dir) for path in targets))
-        or (shell_runs_planning_helper(tool_input, plan_dir) if simple_name in SHELL_TOOL_NAMES
-            else references_owned_plan(tool_input, plan_dir))
-    )
+        or (simple_name not in SHELL_TOOL_NAMES and references_owned_plan(tool_input, plan_dir))
+    ))
     if plan_maintenance:
         category = "plan_maintenance"
         semantic_weight = 0
@@ -688,6 +694,12 @@ def _segment_is_read_only(segment: Segment, allow_substitutions: bool = False) -
         return False
     executable = os.path.basename(segment.argv[start])
     operands = segment.argv[start + 1:]
+    # The documented telemetry reporter only reads local state. Match the
+    # canonical file (including installation symlinks), not an arbitrary
+    # project script with the same basename or inline Python mentioning it.
+    if executable in {"python", "python3"} and operands and not operands[0].startswith("-"):
+        if Path(operands[0]).resolve() == Path(__file__).resolve().with_name("observe.py"):
+            return True
     if executable in READ_COMMANDS:
         return True
     if executable in GUARDED_READ_COMMANDS:
@@ -722,6 +734,58 @@ def shell_command_text(payload_or_input: object) -> str:
     args = payload_or_input
     command = (args.get("command") or args.get("cmd") or "") if isinstance(args, dict) else args
     return command if isinstance(command, str) else ""
+
+
+def _cat_heredoc_header(tool_input: object) -> bool:
+    return re.match(r"^\s*(?:/bin/|/usr/bin/)?cat\s+[^\n]*<<", shell_command_text(tool_input)) is not None
+
+
+def shell_write_targets(tool_input: object) -> list[str]:
+    target = literal_heredoc_target(tool_input)
+    if target is not None:
+        return [target]
+    # Even a rejected heredoc may contain patch markers as literal prose.
+    # They cannot grant an invalid/mixed command the native-patch allowance.
+    return [] if _cat_heredoc_header(tool_input) else mutation_targets(tool_input)
+
+
+def literal_heredoc_target(tool_input: object) -> str | None:
+    """Recognize one literal cat write, followed only by read-only commands.
+
+    Quoting the delimiter makes the entire body data. Do not interpret its
+    contents as commands or targets, and never grant arbitrary Python/shell
+    code the same allowance merely because it names a plan path.
+    """
+    header, newline, rest = shell_command_text(tool_input).partition("\n")
+    delimiter = re.search(r"(?<!<)<<\s*(['\"])([A-Za-z_][A-Za-z0-9_]*)\1(?=\s|$)", header)
+    if not newline or not delimiter or "\r" in header:
+        return None
+    try:
+        lexer = shlex.shlex(header, posix=True, punctuation_chars=";&|()<>")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        words = list(lexer)
+    except ValueError:
+        return None
+    if len(words) != 5 or words[0] not in {"cat", "/bin/cat", "/usr/bin/cat"}:
+        return None
+    if words[1] == "<<":
+        words = [words[0], words[3], words[4], words[1], words[2]]
+    if words[1] not in {">", ">>"} or words[3:] != ["<<", delimiter[2]]:
+        return None
+    target = words[2]
+    if not target.endswith(".md") or any(c in target for c in "$`*?[{}\r\n"):
+        return None
+    lines = rest.splitlines(keepends=True)
+    end = next((i for i, line in enumerate(lines) if line in {delimiter[2], delimiter[2] + "\n"}), None)
+    if end is None:
+        return None
+    tail = "".join(lines[end + 1:])
+    if tail.strip() and not bash_is_read_only(tail):
+        return None
+    if any(segment.terminator == "&" for segment in shell_segments(tail) or []):
+        return None
+    return target
 
 
 def _planning_helper_call(words: list[str]) -> tuple[str, list[str]] | None:
@@ -1025,6 +1089,9 @@ def _resolve_op_class(classes: set[str]) -> str:
 
 
 def _shell_plan_op_class(command: str, plan_dir: Path) -> str:
+    target = literal_heredoc_target(command)
+    if target is not None:
+        return _plan_file_op_class(target, plan_dir)
     segments = shell_segments(command)
     if segments is None:
         return "unknown"
@@ -1092,6 +1159,8 @@ def planning_background_warning(payload: dict) -> str:
     if name.lower().rsplit("__", 1)[-1].rsplit(".", 1)[-1] not in SHELL_TOOL_NAMES:
         return ""
     args = payload_tool_input(payload)
+    if literal_heredoc_target(args) is not None:
+        return ""  # Helper-looking text in a quoted body is data, not a launch.
     command = shell_command_text(args)
     if not command:
         return ""
@@ -1229,10 +1298,10 @@ def main() -> int:
         if bash_is_read_only(tool_input):
             return 0
 
-    targets = mutation_targets(tool_input)
+    targets = shell_write_targets(tool_input) if simple_name in SHELL_TOOL_NAMES else mutation_targets(tool_input)
     if targets:
         return 0 if all(inside(path, plan_dir) for path in targets) else 1
-    # A shell command's write targets are not parseable, so a plan path appearing
+    # Other shell commands' write targets are not parseable, so a plan path appearing
     # somewhere in it proves nothing about what it writes. Authorize it only when
     # it actually runs a planning helper; otherwise `<mutation>; cat <plan>/x.md`
     # would launder any mutation through the owned-plan allowance.

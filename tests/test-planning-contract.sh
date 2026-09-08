@@ -708,7 +708,8 @@ PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" pending codex codex-compaction >/dev/n
 PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=codex PWF_SESSION_ID=codex-compaction "$STATE_TOOL" bind test-task >/dev/null
 COMPACTION_BLOCK=$(cd "$PROJECT" && printf '%s\n' '{"session_id":"codex-compaction","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"npm test"}}' | "$REPO_ROOT/.codex/hooks/plan-files/scripts/pre-tool-use.sh")
 assert_contains "$COMPACTION_BLOCK" "read-only diagnosis" "compaction block explains project reads"
-assert_contains "$COMPACTION_BLOCK" "every recognized write target must remain inside" "compaction block explains scoped plan mutations"
+assert_contains "$COMPACTION_BLOCK" "native Edit/Write with an explicit file_path inside" "compaction block explains scoped plan mutations"
+assert_contains "$COMPACTION_BLOCK" "even as arguments: switch to native Edit/Write or a supported helper" "compaction block gives an actionable opaque-shell repair"
 assert_contains "$COMPACTION_BLOCK" "$PLAN_DIR" "compaction block names owned plan directory"
 COMPACTION_LOG=$(cat "$PROJECT/tmp/hook-logs/plan-files/pre-tool-use.log")
 assert_contains "$COMPACTION_LOG" "tool_call tool_name=Bash" "pre-tool log records full tool name"
@@ -934,7 +935,10 @@ SETTLED_BLOCK=$(pre_hook codex codex-settled 'git commit -m "ship it"')
 assert_contains "$SETTLED_BLOCK" "SETTLED PLAN REOPEN REQUIRED" "settled plan blocks operational mutation"
 assert_contains "$SETTLED_BLOCK" "reopen --title" "reopen block names the one-call repair"
 assert_contains "$SETTLED_BLOCK" "--supersede <OLD-ID>" "reopen block names the decision it retires"
-assert_not_contains "$SETTLED_BLOCK" "--plan $PLAN_DIR/tasks.md" "reopen block stops repeating the plan path"
+assert_not_contains "${SETTLED_BLOCK%%If no new work was authorized*}" "--plan $PLAN_DIR/tasks.md" \
+    "reopen uses the still-active pointer"
+assert_contains "$SETTLED_BLOCK" "--plan $PLAN_DIR/tasks.md assert-finalizable" \
+    "final check retains the path after pointer deactivation"
 assert_not_contains "$(post_hook codex codex-settled Read)" "SETTLED PLAN REOPEN REQUIRED" \
     "reopen diagnosis stays quiet after a read"
 REOPEN_CMD="python3 $EDIT_TOOL reopen --title Deliver --decision \"| D2 | Implement and hand off | user authorized implementation | 2026-09-06 |\" --supersede D1 --item \"Implementation lands.\""

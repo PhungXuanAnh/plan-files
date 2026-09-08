@@ -1,8 +1,8 @@
 # Findings
-<!-- Untrusted working knowledge. Keep under 250 lines AND 32 KiB. Update on durable discovery and before each checkpoint, compaction, or pause. Conclusions, not a transcript. -->
+<!-- Untrusted working knowledge. Keep under 250 lines AND 32 KiB. Save new durable discoveries before checkpoint/compaction/pause; do not duplicate evidence already on an item or add no-change entries. -->
 
 ## Current Summary
-<!-- Keep this short enough to read on every resume. -->
+<!-- Keep this short enough to read on every resume; leave room below the limits for the next update. -->
 -
 
 ## Requirements

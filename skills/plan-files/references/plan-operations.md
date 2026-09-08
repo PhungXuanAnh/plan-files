@@ -1,6 +1,6 @@
 # Targeted Plan Operations
 
-Use these commands when a planning file is large enough that loading or patching the whole file would waste context. Direct Markdown reads and edits remain valid for unusual repairs or judgment-heavy rewrites.
+Use structural commands to preserve phase/item/archive invariants and bounded reads to avoid loading irrelevant state. Direct Markdown edits are also appropriate for short prose in findings, decisions, or narrative task sections; a small edit does not need a fingerprint round trip. Execution transitions still use checkpoints.
 
 Resolve all script paths relative to `SKILL.md`.
 
@@ -28,6 +28,8 @@ python3 <skill-dir>/scripts/plan_state.py restore-check <task-dir>/tasks.md
 
 `restore-check` emits bounded issue metadata rather than section bodies. It validates semantic resume fields and freshness, exits 2 while repair is required, and names the source, heading, and targeted repair for every issue. `overview.restore` carries at most the first three issues plus `issue_count`; use `restore-check` for the complete diagnosis.
 
+If `overview.restore.ok` is true, do not run a second restore check immediately. Follow targeted reads only for the state the next action needs. The hooks still recheck disk state before operational tools.
+
 Schema-version migration notes:
 
 - `phases` contains the current/actionable frontier; use `phase_counts` for the full status summary and `phase` for completed detail.
@@ -42,11 +44,16 @@ Two different hashes appear in output, and only one is an edit token:
 - `file_fingerprint` — full SHA-256 of the file. This is the only value `plan_edit.py --expected-fingerprint` accepts. `plan_checkpoint.py` returns it on every transition, as does `sha256sum <file>`.
 - `fingerprint` — 16-hex semantic progress hash. Hooks use it to detect that the plan advanced. It is never a valid `--expected-fingerprint`.
 
+The bare `fingerprint` CLI retains its legacy plain 16-hex output. `fingerprint --json [FILE]` returns `{file, file_fingerprint, fingerprint}`; `fingerprint --file [FILE]` prints only the full SHA-256, including for companion files such as `decisions.md`. Prefer reusing the full hash from the state you just read or the previous successful edit. A freshly computed hash is not proof that an old replacement body is still current.
+
 Passing the 16-hex value to an edit is rejected with a message naming the mistake and the correct value; a genuinely stale file fingerprint fails without writing.
 
 ## Structural edits
 
 ```bash
+python3 <skill-dir>/scripts/plan_edit.py --compact --expected-fingerprint <sha> \
+  phase-add --title "Verify migration" --item "The migration result is present." \
+  --verify "The requested smoke check passes." --start
 python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <sha> \
   phase-add --title "Verify migration" --after 2 \
   --expected-history-fingerprint <history-sha-or-missing>
@@ -61,6 +68,10 @@ python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprin
 ```
 
 Available phase operations are `phase-add`, `phase-update`, `phase-move`, and `phase-remove`. `phase-update` takes `--title`, `--status`, or both; it writes the exact `- **Status:**` grammar so a pause or block never depends on hand-editing that line. `blocked` and `deferred` require `--reason`, and `--status complete` is refused while the phase still holds unchecked items. Item operations are `item-add`, `item-update`, `item-move`, and `item-remove`. Add operations allocate the next unused ID. Reordering within a phase preserves the ID; moving across phases allocates a phase-matching ID and returns the mapping. The history fingerprint is optional while fewer than 12 phase headings remain, but required when `phase-add` must archive the oldest eligible complete phase to keep the hot window at 12.
+
+`phase-add` accepts repeated `--item`/`--verify` values and optional `--start`. It assembles the phase and its outcomes in memory, then starts the first item in the same write. `--start` requires at least one item and cannot displace active work. Without `--start`, the populated phase stays pending. For newly authorized work when all old phases are settled (including blocked/deferred), prefer `reopen` so the decision is recorded too. For an existing pending phase, add its items before `plan_checkpoint.py start <item>`; do not first change an empty phase to `in_progress` or try to edit Current Phase through `section-replace`.
+
+Successful editor JSON adds `file_fingerprint` as an unambiguous alias for the target file's full hash; older fields remain. Global `--compact` omits repeated context, budgets, usage, and old hashes, retaining operation results and current edit tokens. Errors remain complete with a nonzero exit. Use this mode instead of `head`/`tail`/`sed` filters that can hide failures or truncate JSON. Global flags go before the subcommand; subcommand help also states the required global options.
 
 Use `--dry-run` before a consequential structural edit. A dry run validates the candidate, preflights budgets, and returns the candidate fingerprint without changing disk. `--plan`, `--expected-fingerprint`, and `--dry-run` are global flags and must appear before the subcommand; `--expected-history-fingerprint` belongs to the subcommand that archives.
 
@@ -87,9 +98,13 @@ The response reports `paused_phases`, `next_item`, `still_actionable`, and a `re
 
 `pause` deliberately does not write `decisions.md` or `findings.md`. Their content needs judgment, so write them yourself before calling it.
 
+Use `pause` for the active phase even when no handoff is needed. `phase-update --status` only changes the phase status; it cannot clear or advance Active Item and synchronize Resume Checkpoint for that transition.
+
 ## Section and entry edits
 
 Use semantic section names, not line numbers:
+
+`findings.md` accepts any existing, uniquely named level-2 section, including legacy names such as `Phase 5 Evidence`. Missing or duplicate headings fail without writing. Task, decision, history, and handoff fields retain their explicit section allowlists. Preserve detailed external evidence in a linked findings file before replacing its hot section with a summary; external content must not move into trusted history.
 
 ```bash
 python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <sha> \
@@ -115,6 +130,8 @@ Common targets:
 | `handoff.md` | whole overwrite-only resume snapshot |
 
 Keep using `plan_checkpoint.py` for `start`, `progress`, and `complete`. Do not emulate execution transitions with generic section edits. `plan_checkpoint.py deactivate-pointer --project-root <root>` is the recovery for a settled plan that finished without `--deactivate-pointer`: it reports `{"operation":"deactivate-pointer","pointer":<path>,"cleared":<bool>}`, is idempotent, names whichever pointer file the workspace actually uses, and fails with the remaining issues when the plan is not otherwise finalizable. Reaching for a hand edit of the pointer instead is blocked on a settled plan.
+
+After deactivation, the default pointer no longer resolves a plan. Keep its known path for subsequent reads and `python3 <skill-dir>/scripts/plan_checkpoint.py --plan <tasks.md> assert-finalizable --project-root <root>`.
 
 ## Lifecycle operations
 
@@ -151,4 +168,4 @@ The maintenance ceilings are 300 lines, 24 KiB, 12 hot phase headings, about 100
 
 Compact in this order: old Progress Notes, completed verification, resolved errors, and completed phase detail. Archived phase headings leave the hot window; a single high-water marker prevents ID reuse. If neither `phase-add` rollover nor `compact-oldest` finds a non-current complete phase, it fails without writing. Split a new task only when the remaining work has an independent goal or ownership boundary.
 
-If a structured command cannot express the intended repair, read the necessary full section or file, edit it directly, then run `plan_state.py validate`, `plan_state.py budgets`, and the appropriate finalizability check.
+If a structured command cannot express the repair, read the relevant section and use native Edit/Write with its explicit file path. A shell alternative is `cat > '<absolute-plan-dir>/findings-detail.md' <<'MD'` with a matching `MD` line: the delimiter must be quoted, the single `.md` target literal and inside the owned plan, and any following commands read-only and foreground. Arbitrary Python, unquoted heredocs, expanded targets, and mixed unrelated writes do not qualify merely by naming the plan. Validate/budget-check the repaired state; consolidate with room for the next update instead of trimming exactly to the ceiling.

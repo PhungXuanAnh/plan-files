@@ -245,6 +245,7 @@ def _hook_probe(project: Path, scripts: Path) -> dict[str, object]:
         "injected_context_chars": sum(len(context) for context in contexts),
         "redundant_reminders": max(0, sum("## Goal" in context or "Active Item P" in context for context in read_contexts) - 1),
         "read_only_false_reminders": sum("STALE ITEM STATE" in context or "structured checkpoint" in context for context in read_contexts[1:]),
+        "read_only_silent_after_first": all(not context for context in read_contexts[1:]),
         "legacy_read_only_false_reminders": len(read_contexts) - 1,
         "missed_checkpoint_detected": any(
             "STALE ITEM STATE" in context for context in evidence_contexts
@@ -436,6 +437,7 @@ def evaluate() -> dict[str, object]:
                 ),
                 "actionable_finalization_blocked": hook_probe["actionable_finalization_blocked"],
                 "debounce_avoids_redundant_reminder": hook_probe["redundant_reminders"] == 0,
+                "healthy_reads_are_silent": hook_probe["read_only_silent_after_first"],
                 "read_only_noise_reduced": hook_probe["read_only_false_reminders"]
                 < hook_probe["legacy_read_only_false_reminders"],
                 "missed_checkpoint_detected": hook_probe["missed_checkpoint_detected"],

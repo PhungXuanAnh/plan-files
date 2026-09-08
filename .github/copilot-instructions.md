@@ -46,7 +46,7 @@ Planning state is private and project-local:
 - `overview`/`resume-pack` schema 2 has a strict 4 KiB serialized cap and names targeted follow-up reads for shortened sections.
 - `restore-check` schema 1 validates non-placeholder identity/resume fields, Active Item, verification, decisions/findings, and handoff/external-evidence freshness without returning complete file bodies.
 - Use `plan_checkpoint.py` immediately when an Active Item's evidence becomes true. Do not independently edit checkbox, phase status, Current Phase, and Active Item.
-- Use `plan_edit.py` for routine phase/item/section/archive mutations. Direct Markdown access remains an allowed fallback for unusual repair or narrative judgment.
+- Use `plan_edit.py` for phase/item/archive mutations; `phase-add --item ... --start` assembles execution state atomically. Direct Markdown edits are appropriate for short narrative sections. Keep execution transitions in `plan_checkpoint.py`.
 
 ## Limits and lifecycle
 
@@ -80,7 +80,7 @@ Provider adapters live under:
 Codex, Claude Code, GitHub Copilot, and Grok Build must preserve the same behavioral contract:
 
 - PreTool: resolve session ownership, block invalid restore/item state and over-budget unrelated mutation, but allow read-only diagnosis and owned-plan maintenance.
-- PostTool: inject bounded context, targeted restore/compaction guidance, and risk-aware checkpoint reminders. Read-only exploration and plan maintenance have zero semantic risk; likely evidence and operational mutations raise risk.
+- PostTool: inject bounded context, targeted restore/compaction guidance, and risk-aware checkpoint reminders. Read-only exploration and plan maintenance have zero semantic risk; likely evidence and operational mutations raise risk. Count unknown activity separately: it cannot trigger the early risk threshold, but prolonged unknown-only activity gets a conditional checkpoint review. Keep execution gating conservative and migrate older mixed-risk caches under the shared lock.
 - Stop: continue actionable/invalid work until every phase is settled and finalization succeeds.
 - Telemetry: log provider plus hashed task/session scope, injection sizes, semantic class/risk, and Stop continuations; never log raw session ids or raw hook input previews.
 

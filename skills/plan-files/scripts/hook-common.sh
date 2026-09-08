@@ -683,23 +683,26 @@ print("[plan-files] RESTORE STATE ACTION REQUIRED: " + "; ".join(parts) +
 # prompt is doing, and Stop accepts such a plan unconditionally. So an agent
 # that binds it for further work can implement, commit, and open a PR while the
 # plan still claims to be a finished research task — every gate green, nothing
-# recorded. Fires only on COMPLETE == TOTAL: a blocked/deferred phase is a
-# paused plan with a different repair, and a finalized plan stops nominating
-# itself as a candidate, so it never reaches this gate at all.
+# recorded. A plan with only complete/blocked/deferred phases also has no
+# active slot for newly authorized work. Reopen adds that work while retaining
+# the old blocked/deferred phases; it never resumes them implicitly.
 # ---------------------------------------------------------------------------
 planning_settled_plan_warning() {
-    local _plan_dir="${1:-}" _root="${2:-}" _plan_file _edit _checkpoint
+    local _plan_dir="${1:-}" _root="${2:-}" _plan_file _edit _checkpoint _sha _plan_arg _root_arg
     local TOTAL COMPLETE IN_PROGRESS PENDING BLOCKED DEFERRED
     [ -n "$_plan_dir" ] && [ -f "$_plan_dir/tasks.md" ] || return 0
     _plan_file="$_plan_dir/tasks.md"
     count_phases "$_plan_file"
-    [ "$TOTAL" -gt 0 ] && [ "$COMPLETE" -eq "$TOTAL" ] || return 0
-    _edit=$(planning_script_path plan_edit.py)
-    _checkpoint=$(planning_script_path plan_checkpoint.py)
-    printf '[plan-files] SETTLED PLAN REOPEN REQUIRED. All %s phases in %s are complete, so this plan has nowhere to record what you are doing now and Stop would accept the turn with the work unrecorded. A prompt that authorizes further work is a scope update within SAME, not a finished plan. Reopen it in one call, run from %s (planning commands default --plan to this project pointer): python3 %s reopen --title "<phase title>" --decision "| <ID> | <what the user authorized> | <why> | <date> |" --item "<first outcome>" --expected-fingerprint <tasks.md SHA-256>. Add --supersede <OLD-ID> for the decision it replaces, more --item/--verify for the rest of the phase, and --goal/--deliverable/--non-goals/--profile for scope that moved. If this prompt only asks a question or a written report, run the discussion command instead. If nothing new was authorized and the plan really is finished, close it: python3 %s deactivate-pointer --project-root %s, then re-run the same command with assert-finalizable.' \
+    [ "$TOTAL" -gt 0 ] && [ $((COMPLETE + BLOCKED + DEFERRED)) -eq "$TOTAL" ] || return 0
+    printf -v _edit '%q' "$(planning_script_path plan_edit.py)"
+    printf -v _checkpoint '%q' "$(planning_script_path plan_checkpoint.py)"
+    printf -v _plan_arg '%q' "$_plan_file"
+    printf -v _root_arg '%q' "$_root"
+    _sha=$(sha256sum "$_plan_file" | cut -d' ' -f1)
+    printf '[plan-files] SETTLED PLAN REOPEN REQUIRED. All %s phases in %s are settled (complete, blocked, or deferred). Newly authorized work needs its own phase; keep earlier blocked/deferred work as it is. Reopen in one call, run from %s (planning commands default --plan to this project pointer): python3 %s --compact --expected-fingerprint %s reopen --title "<phase title>" --decision "| <ID> | <what the user authorized> | <why> | <date> |" --item "<first outcome>". Add --supersede <OLD-ID> for the decision it replaces, more --item/--verify for the rest of the phase, and --goal/--deliverable/--non-goals/--profile for scope that moved. If the prompt only discusses this plan or workflow without executing its deliverable, run the discussion command instead. If no new work was authorized, finalize with python3 %s --plan %s deactivate-pointer --project-root %s, then python3 %s --plan %s assert-finalizable --project-root %s.' \
         "$TOTAL" "$_plan_file" "$_root" \
-        "$_edit" \
-        "$_checkpoint" "$_root"
+        "$_edit" "$_sha" \
+        "$_checkpoint" "$_plan_arg" "$_root_arg" "$_checkpoint" "$_plan_arg" "$_root_arg"
 }
 
 # Shared Stop-invalid state, also enforced before tools and repeated after tools.
@@ -758,7 +761,7 @@ planning_integrity_warning() {
         done <<< "$SUMMARY"
 
         if { [ "$CURRENT_STATUS" = "complete" ] || [ "$CURRENT_STATUS" = "blocked" ] || [ "$CURRENT_STATUS" = "deferred" ]; } && [ -n "$NEXT_INCOMPLETE" ]; then
-            REASON_PARTS+=("STALE '## Current Phase' in ${PLAN_FILE}: it points at ${PHASE_NUM} which is already '**Status:** ${CURRENT_STATUS}', but ${NEXT_INCOMPLETE} (and possibly later phases) are not settled. Update the '## Current Phase' section to '${NEXT_INCOMPLETE}' and set its status to 'in_progress' before continuing. The hook injects context based on Current Phase — leaving it on a settled phase makes the agent work on the wrong target.")
+            REASON_PARTS+=("STALE '## Current Phase' in ${PLAN_FILE}: it points at settled ${PHASE_NUM}, but ${NEXT_INCOMPLETE} is actionable. Add its outcome items while it is pending, then run python3 $(planning_script_path plan_checkpoint.py) start <first-item-id>; this moves Current Phase, Active Item, status, and Resume Checkpoint together. For a new phase use python3 $(planning_script_path plan_edit.py) --expected-fingerprint <file-sha256> phase-add --title '<title>' --item '<outcome>' --start. Do not set an empty phase to in_progress or edit the execution fields separately.")
         fi
     fi
 

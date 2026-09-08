@@ -21,6 +21,7 @@ POST_RE = re.compile(
     r"item_state fingerprint=(\S+) active_item=(\S+) plan_changed=(\S+) unchanged_tools=(\d+)"
     r"(?: risk=(\d+) tool_class=(\S+))? checkpoint_lag=(\d+)s stale=(\S+)"
 )
+UNKNOWN_ACTIVITY_RE = re.compile(r"unknown_count=(\d+) checkpoint_review=(\S+)")
 SCOPE_RE = re.compile(r"scope provider=(\S+) task=(\S+) session=(\S+)")
 INJECTION_RE = re.compile(
     r"injection emitted=(\S+) chars=(\d+) bytes=(\d+) full=(\S+) stale=(\S+) reason=(\S+)"
@@ -89,6 +90,11 @@ def _hook_metrics(project_root: Path, plan: Path | None) -> dict[str, object]:
                 "full_injection": injection.group(4) == "true" if injection else False,
                 "injection_reason": injection.group(6) if injection else "unknown",
             }
+            unknown_activity = UNKNOWN_ACTIVITY_RE.search(block)
+            record.update({
+                "unknown_count": int(unknown_activity.group(1)) if unknown_activity else 0,
+                "checkpoint_review": unknown_activity.group(2) == "true" if unknown_activity else False,
+            })
             if match:
                 fingerprint, active, changed, unchanged, risk, tool_class, lag, stale = match.groups()
                 record.update(
@@ -130,6 +136,7 @@ def _hook_metrics(project_root: Path, plan: Path | None) -> dict[str, object]:
             "events": len(post_records),
             "plan_changes": sum(bool(record["plan_changed"]) for record in post_records),
             "stale_events": sum(bool(record["stale"]) for record in post_records),
+            "checkpoint_review_events": sum(bool(record["checkpoint_review"]) for record in post_records),
             "injections": sum(bool(record["injection_emitted"]) for record in post_records),
             "injected_chars": sum(int(record["injected_chars"]) for record in post_records),
             "injected_bytes": sum(int(record["injected_bytes"]) for record in post_records),
@@ -139,6 +146,7 @@ def _hook_metrics(project_root: Path, plan: Path | None) -> dict[str, object]:
                 for category in sorted({str(record["tool_class"]) for record in post_records})
             },
             "max_risk_score": max((int(record["risk_score"]) for record in post_records), default=0),
+            "max_unknown_count": max((int(record["unknown_count"]) for record in post_records), default=0),
             "max_unchanged_tools": max((int(record["unchanged_tools"]) for record in post_records), default=0),
             "max_checkpoint_lag_seconds": max(
                 (int(record["checkpoint_lag_seconds"]) for record in post_records), default=0
@@ -309,6 +317,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     print(
         "PostTool: {events} event(s), {plan_changes} plan change(s), {stale_events} stale, "
+        "{checkpoint_review_events} unknown-activity review(s), "
         "{injections} injection(s)/{injected_chars} chars, {debounced_events} debounced, "
         "max unchanged {max_unchanged_tools}, max checkpoint lag {max_checkpoint_lag_seconds}s".format(**post)
     )

@@ -417,7 +417,19 @@ def _section_name(name: str) -> str:
 
 def _validate_section_target(file_name: str, heading: str) -> str:
     normalized = _section_name(heading)
+    # Findings are untrusted narrative, including existing legacy headings.
+    # Exact-one-section lookup still rejects missing/ambiguous targets; trusted
+    # task/decision/history fields retain their explicit allowlists.
+    if file_name == "findings.md" and normalized.strip() and not any(c in normalized for c in "\r\n"):
+        return normalized
     if normalized not in ALLOWED_SECTIONS[file_name]:
+        if file_name == "tasks.md" and normalized in {"Current Phase", "Active Item"}:
+            checkpoint = Path(__file__).resolve().with_name("plan_checkpoint.py")
+            raise EditError(
+                f"{normalized} is an execution field: use python3 {checkpoint} start <item-id> "
+                "to synchronize phase, item, and resume state. For a new phase, add its --item "
+                "values and --start in the same phase-add call, or use reopen for newly authorized work."
+            )
         raise EditError(f"section is not editable through the structured interface: {file_name} / {normalized}")
     return normalized
 
@@ -889,6 +901,8 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="validate and report without writing (must appear before the subcommand)",
     )
+    parser.add_argument("--compact", action="store_true",
+                        help="omit repeated context/budgets from successful JSON; preserve errors and edit tokens")
     commands = parser.add_subparsers(dest="command", required=True)
 
     phase_add = commands.add_parser("phase-add", help="append a phase for the same goal; history-first rollover past the hot window")
@@ -896,6 +910,9 @@ def _parser() -> argparse.ArgumentParser:
     phase_add.add_argument("--before", type=int)
     phase_add.add_argument("--after", type=int)
     phase_add.add_argument("--expected-history-fingerprint")
+    phase_add.add_argument("--item", action="append", default=[], help="outcome text; repeat for each work item")
+    phase_add.add_argument("--verify", action="append", default=[], help="acceptance text; repeat for each verification item")
+    phase_add.add_argument("--start", action="store_true", help="start the first added item atomically with the phase")
     phase_update = commands.add_parser(
         "phase-update", help="retitle a phase and/or set its status atomically"
     )
@@ -1062,6 +1079,11 @@ def _parser() -> argparse.ArgumentParser:
         help="full handoff.md body; see 'handoff-write --help' for the required shape",
     )
     commands.add_parser("handoff-clear", help="delete handoff.md")
+    for command_parser in commands.choices.values():
+        command_parser.epilog = (
+            "Required global option: --expected-fingerprint <full SHA-256>, before the subcommand. "
+            "Use --compact before the subcommand for short JSON; do not truncate errors with head/tail."
+        )
     return parser
 
 
@@ -1209,6 +1231,18 @@ def _reopen_decisions(args) -> tuple[Path, str, str, bool]:
     return target, _text(lines), decision_id, already
 
 
+def _populate_phase(plan: Path, lines: list[str], phase_num: int, work, verification) -> tuple[list[str], list[str]]:
+    """Assemble a complete phase in memory before publishing its execution state."""
+    items = []
+    for kind, texts in (("P", work), ("V", verification)):
+        previous = None
+        for text in texts:
+            lines, result = _item_add(_validated_from_lines(plan, lines), phase_num, kind, text, previous)
+            previous = result["item"]
+            items.append(previous)
+    return lines, items
+
+
 def _reopen_tasks(args, state) -> tuple[list[str], object, dict[str, object]]:
     """Reconcile scope, open the phase that carries the work, and start it."""
     if not state.phases:
@@ -1231,18 +1265,7 @@ def _reopen_tasks(args, state) -> tuple[list[str], object, dict[str, object]]:
 
     lines, phase_result, archived = _phase_add(_validated_from_lines(args.plan, lines), args.title, None, None)
     phase_num = phase_result["phase"]
-    items: list[str] = []
-    for kind, texts in (("P", args.item), ("V", args.verify or [])):
-        # Chain each kind after its own last item only. Anchoring a V item on a
-        # P item would place it above the phase status and skip the
-        # "**Done when:**" header that acceptance items live under.
-        previous = None
-        for text in texts:
-            lines, item_result = _item_add(
-                _validated_from_lines(args.plan, lines), phase_num, kind, text, previous
-            )
-            previous = item_result["item"]
-            items.append(previous)
+    lines, items = _populate_phase(args.plan, lines, phase_num, args.item, args.verify or [])
     lines = plan_checkpoint.apply_start(_validated_from_lines(args.plan, lines), items[0])
     result = {
         "phase": phase_num,
@@ -1474,7 +1497,17 @@ def _phase_history_material(plan: Path, state, phase, expected: str) -> dict[str
 
 
 def _phase_add_command(args, state, old_fingerprint: str) -> dict[str, object]:
+    if args.start and not (args.item or args.verify):
+        raise EditError("phase-add --start requires --item or --verify; add the outcomes in the same call")
     lines, result, archived = _phase_add(state, args.title, args.before, args.after)
+    lines, items = _populate_phase(args.plan, lines, result["phase"], args.item, args.verify)
+    result["items"] = items
+    if args.start:
+        try:
+            lines = plan_checkpoint.apply_start(_validated_from_lines(args.plan, lines), items[0])
+        except plan_checkpoint.CheckpointError as error:
+            raise EditError(str(error)) from error
+        result["item"] = items[0]
     candidate = _text(lines)
     usage, _ = _preflight(args.plan, candidate)
     return _phase_write(args, state, archived, candidate, usage, result, old_fingerprint)
@@ -1773,6 +1806,14 @@ def _main_locked(args) -> int:
                 "budgets": budget_payload(args.plan),
             }
         payload["plan"] = str(args.plan)
+        # The old root-level fingerprint remains for callers; the explicit
+        # alias uses the same name as bounded reads and checkpoints.
+        payload["file_fingerprint"] = payload["fingerprint"]
+        if args.compact:
+            payload = {key: value for key, value in payload.items() if key not in {
+                "context", "budgets", "usage", "old_fingerprint", "history_old_fingerprint",
+                "decisions_old_fingerprint", "decisions_usage",
+            }}
         print(json.dumps(payload, separators=(",", ":")))
         return 0
     except (EditError, OSError, ValueError) as error:

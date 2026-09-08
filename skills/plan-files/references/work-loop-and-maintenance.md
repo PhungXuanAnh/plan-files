@@ -4,7 +4,7 @@ Read this reference when handling long waits, repeated failures, compaction, con
 
 ## Phase loop
 
-Before a phase, refresh bounded overview, restore-check, the exact phase, active decisions, and relevant findings. Set Current Phase, Active Item, and phase status before acting. Do not load every planning file for one known edit.
+Before a phase, read bounded overview and only the phase/decision/finding detail it lacks for the next action. Run restore-check for complete diagnostics when overview.restore.ok is false. Use checkpoint start (or phase-add with items and --start) to move Current Phase, Active Item, and status together. Do not load every planning file for one known edit.
 
 Give each phase executable acceptance outcomes. After meaningful work, keep verification, current errors, and touched files current. When an item becomes true, checkpoint immediately. A phase completes only after its acceptance outcomes pass.
 
@@ -49,7 +49,7 @@ Run `plan_state.py budgets` and use targeted operations. Never raw-truncate.
 2. Archive completed Verification entries.
 3. Archive resolved errors.
 4. Archive the oldest non-current complete phase with `compact-oldest`.
-5. Consolidate repeated findings while preserving a short Current Summary, durable conclusions, gotchas, and sources.
+5. Consolidate repeated findings while preserving a short Current Summary, durable conclusions, gotchas, and sources. Leave room for the next update. Existing legacy findings sections are editable through section-replace; use native Edit/Write for broader narrative repair.
 6. Compress superseded decisions without losing rationale that explains the active choice.
 7. Split only independent follow-up work if the coherent hot state still cannot fit.
 
@@ -70,7 +70,7 @@ Reverify after: 2026-08-28T10:30:00+07:00
 
 On resume, ignore and re-verify it if expired or if tasks/findings/decisions are newer. Clear obsolete handoff state. External-state Verification markers follow the same observed/reverify-after rule.
 
-If a true dependency blocks one phase, update Resume Checkpoint, use `blocked (reason)`, and continue other phases. Use `deferred (reason)` only on explicit user instruction. Set either with `plan_edit.py phase-update <N> --status blocked|deferred --reason "..."` so the exact machine-readable grammar is written for you; retitling a phase or dropping the reason leaves it actionable and the Stop hook will correctly refuse to finish. When the pause also needs a handoff, `plan_edit.py pause` does both in the correct order.
+If a true dependency blocks the active phase, use `plan_edit.py pause --phase <N> --status blocked --reason "..."`, adding partial evidence or handoff content when needed. It synchronizes Active Item and Resume Checkpoint so other actionable phases can continue. Use `deferred` only on explicit user instruction. `phase-update` can set the status of a non-active phase; it does not perform the active-work pause transition. Retitling a phase or omitting the reason leaves it actionable.
 
 ## Finalization
 
@@ -79,8 +79,6 @@ For a user-requested clarification or discussion-only turn, follow the `clarify`
 After all in-scope work settles:
 
 1. Complete the final item with current evidence and `--deactivate-pointer`. When every item is already checked — a plan that finished in an earlier turn without the flag — run `plan_checkpoint.py deactivate-pointer --project-root <root>` instead; it clears the pointer only when this plan still owns it and refuses while any other finalization issue remains.
-2. Refresh bounded overview and restore state.
-3. Re-read tasks state from disk.
-4. Run `plan_checkpoint.py assert-finalizable --project-root <root>`.
-5. If it names an issue, continue/repair instead of emitting another progress summary.
-6. Preserve the task directory as history and return only the user-facing outcome.
+2. Run `plan_state.py restore-check <known-tasks.md>` followed by `plan_checkpoint.py --plan <known-tasks.md> assert-finalizable --project-root <root>`. These check final freshness and settlement respectively; after pointer cleanup the explicit plan path is required. No extra overview or full-file reread is needed.
+3. If either names an issue, target-read and repair that issue before retrying.
+4. Preserve the task directory as history and return the user-facing outcome.

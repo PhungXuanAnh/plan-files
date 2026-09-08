@@ -34,8 +34,6 @@ P2.1
 ### Phase 2: Implement Fix
 - [ ] [P2.1] The user lookup is awaited before the login decision.
   - Evidence: pending
-- [ ] [P2.2] The focused login regression passes.
-  - Evidence: pending
 
 **Done when:**
 - [ ] [V2.1] `pytest tests/auth/test_login.py` passes.
@@ -58,7 +56,20 @@ On a new prompt, ownership hooks expose only the Task Identity and Goal above. A
 
 If that task began as research with “production implementation” under Non-goals, “Here are the lead's answers; implement this plan” is also SAME. Bind, record the authorization and answers, revise the outdated scope/profile and pending phases, then implement. Keep unrelated restrictions. By contrast, “Use AUTH-421 as an example while reviewing the planning hooks” names the task as background and does not ask to continue its implementation.
 
-For “continue that work” with unclear task identity, run the hook's `clarify` command, ask which task, and wait. The next prompt retains the candidate; no `release` is needed just to ask. For “explain why the hook blocked this plan; do not implement yet”, bind the named plan, then run the same command with `discuss` instead of `bind`. Read-only diagnosis and questions remain available even with an oversized handoff; outside writes stay gated and the answer does not complete any phase.
+For “continue that work” with unclear task identity, run the hook's `clarify` command, ask which task, and wait. The next prompt retains the candidate; no `release` is needed just to ask. For “explain why the hook blocked this plan; do not implement yet”, run the supplied `discuss` command directly. Diagnosis, questions, and requested reports outside the plan remain available; the answer does not complete any phase.
+
+## Adding the next piece of work
+
+Reuse `file_fingerprint` from the bounded overview or the previous edit. When the current phase is settled, a phase with its outcomes can be created and started in one call:
+
+```bash
+python3 <skill-dir>/scripts/plan_edit.py --compact --expected-fingerprint <file_fingerprint> \
+  phase-add --title "Verify redirect" \
+  --item "The redirect returns the requested destination." \
+  --verify "The redirect regression passes." --start
+```
+
+For newly authorized work when every earlier phase is complete/blocked/deferred, use `reopen --title ... --decision ... --item ...` instead; it records the authorization and keeps old deferred work unchanged. Use `complete Pn.m --evidence ...` when the active outcome is true, or `pause --status blocked --reason ...` for an external dependency. Short findings prose can be edited directly; do not create a second copy of each item evidence there. After final pointer cleanup, pass the known `--plan <tasks.md>` to `assert-finalizable`.
 
 ## Archive during compaction
 
@@ -168,6 +179,8 @@ Read the ledger before editing it; never silently delete the earlier choice.
 If a plan has `Phase 99` as Current Phase without such a phase, a missing status, and `**Profile:** [A | B | C]`, the next PreTool blocks operational work. Read the owned plan and fix all three fields; reads and owned-plan edits still pass. PostTool repeats the unresolved diagnosis even when the plan has not changed. Once repaired, that diagnosis disappears; a compact Stop warning remains while work is actionable.
 
 Every hook message names the absolute path of what it asks for, so copy the command as printed: `Run: python3 /abs/skill-dir/scripts/plan_state.py restore-check /abs/project/tmp/plan-files/<task>/tasks.md`. Do not re-derive the location; a background `find` across the home directory is never the recovery. If the host already returns a task id, wait/get that result before dependent work instead of launching the same command again.
+
+If old findings contain `## Phase 5 Evidence`, preserve its useful detail in a linked findings file, then replace that exact section with a short summary and link. Native Edit/Write works, or use `plan_edit.py --expected-fingerprint <findings-sha> --compact section-replace --file findings.md --heading "Phase 5 Evidence" --content "<summary and link>"`. The heading must already exist exactly once. Leave room below the budget for the next discovery. For shell-only tools, `cat > <owned-plan>/findings-detail.md <<'MD'` with a literal body and closing `MD` is recognized; inline Python is not made maintenance-safe by including the same path in its arguments.
 
 ## Answering a question without owning the plan
 

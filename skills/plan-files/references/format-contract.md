@@ -88,6 +88,8 @@ Use P ids for work and V ids for phase acceptance:
 
 The immediate checkpoint barrier applies when the observable outcome becomes true, not at phase end. Use `plan_checkpoint.py` instead of editing checkbox/status/current pointers independently.
 
+The new-plan template starts with one phase and task-specific work/acceptance outcomes. Expand it only for meaningful work boundaries. For a new phase, `phase-add --item ... --verify ... --start` creates its outcomes and execution pointers together; do not first mark an empty phase in_progress.
+
 ## Legacy migration
 
 A plan without `## Active Item` remains readable. Before its next implementation mutation:

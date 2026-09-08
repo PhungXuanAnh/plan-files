@@ -44,49 +44,15 @@ Use P IDs for work and V IDs for phase acceptance. IDs are unique and match the 
 Use targeted plan operations for routine reads/edits. Phase add/compaction archives and evicts the oldest eligible complete phase when the 12-heading hot window needs room; never remove unfinished work to make space.
 -->
 
-### Phase 1: Requirements & Discovery
-- [ ] [P1.1] User intent, constraints, non-goals, and verification needs are recorded.
+<!-- Begin with one useful phase. Replace these outcomes with task-specific ones; add phases only for real work boundaries. Do not create separate items merely to narrate planning activity. -->
+### Phase 1: Deliver the requested result
+- [ ] [P1.1] [Specific observable result requested by the user]
   - Evidence: pending
-- [ ] [P1.2] Relevant discoveries and confirmed user choices are recorded in their durable files.
-  - Evidence: pending
-- **Status:** pending
 
 **Done when:**
-- [ ] [V1.1] `findings.md` answers the key questions, `decisions.md` reflects current choices, and Workflow Profile is selected.
-  - Evidence: pending
-
-### Phase 2: Planning
-- [ ] [P2.1] The implementation approach and non-obvious decisions are recorded.
-  - Evidence: pending
-- [ ] [P2.2] Exact verification commands or observable checks are named.
+- [ ] [V1.1] [Exact acceptance check demonstrates the requested result]
   - Evidence: pending
 - **Status:** pending
-
-**Done when:**
-- [ ] [V2.1] No unresolved question blocks implementation and every required check is listed below.
-  - Evidence: pending
-
-### Phase 3: Implementation
-- [ ] [P3.1] The planned scoped changes are present without modifying unrelated worktree state.
-  - Evidence: pending
-- [ ] [P3.2] Current progress, errors, and touched files accurately reflect the implementation.
-  - Evidence: pending
-- **Status:** pending
-
-**Done when:**
-- [ ] [V3.1] Relevant implementation checks pass or a genuine external blocker is recorded.
-  - Evidence: pending
-
-### Phase 4: Verification & Delivery
-- [ ] [P4.1] Every exact check listed in `## Verification` has a current result and failures have been resolved or externally blocked.
-  - Evidence: pending
-- [ ] [P4.2] The final user-facing outcome is ready and contains no plan-only narration.
-  - Evidence: pending
-- **Status:** pending
-
-**Done when:**
-- [ ] [V4.1] The plan is finalizable: every phase is settled, evidence is current, and the pointer can be deactivated.
-  - Evidence: pending
 
 ## Key Questions
 1. [Question to answer]

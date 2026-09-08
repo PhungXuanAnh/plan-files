@@ -1,4 +1,5 @@
 """Cross-provider ownership recovery and maintenance behavior, in isolated roots."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -6,6 +7,7 @@ import re
 import shlex
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -458,10 +460,11 @@ P1.1
                     self.assertIn(diagnosis, self.hook(provider, "agent-stop.sh")["reason"])
             self.tasks.write_text(original)
             self.assertNotIn(self.hook(provider, "pre-tool-use.sh", "touch app.py").get("decision"), {"block", "deny"})
-            for _ in range(2):
-                context = self.hook(provider, "post-tool-use.sh").get("additionalContext", "")
-                self.assertIn("actionable phases remain", context)
-                self.assertNotIn("FORMAT CONTRACT VIOLATION", context)
+            healthy = [self.hook(provider, "post-tool-use.sh").get("additionalContext", "") for _ in range(2)]
+            # Removing an invalid hidden heading need not change the semantic
+            # fingerprint; an already delivered healthy reminder can stay quiet.
+            self.assertEqual(healthy[1], "")
+            self.assertNotIn("FORMAT CONTRACT VIOLATION", healthy[0])
             # Companion state is rechecked even without a tasks.md change.
             findings = self.plan / "findings.md"
             saved = findings.read_text()
@@ -469,7 +472,7 @@ P1.1
             for _ in range(2):
                 self.assertIn("RESTORE STATE ACTION REQUIRED", self.hook(provider, "post-tool-use.sh")["additionalContext"])
             findings.write_text(saved)
-            self.assertNotIn("RESTORE STATE ACTION REQUIRED", self.hook(provider, "post-tool-use.sh")["additionalContext"])
+            self.assertNotIn("RESTORE STATE ACTION REQUIRED", self.hook(provider, "post-tool-use.sh").get("additionalContext", ""))
 
     def test_planning_commands_foreground_only(self):
         import shlex
@@ -670,6 +673,132 @@ P1.1
             token = token.strip("'\"`,.;:()[]")
             self.assertTrue(token.startswith("/"),
                             f"{where}: {token!r} named without an absolute path in: {text[:400]}")
+
+    def test_settled_recovery_command_executes_and_advisories_debounce(self):
+        """Replay the resume flow with an old deferred phase, in every envelope."""
+        original = self.tasks.read_text()
+        settled = (original.replace("- [ ] [P1.1]", "- [x] [P1.1]")
+                   .replace("Evidence: pending", "Evidence: redirect returned 302")
+                   .replace("- **Status:** in_progress", "- **Status:** complete")
+                   .replace("## Active Item\nP1.1\n", "## Active Item\n\n")
+                   .replace("## Verification", "### Phase 2: Another owner\n"
+                            "- [ ] [P2.1] Followup delivered.\n  - Evidence: pending\n"
+                            "- **Status:** deferred (user assigned another owner)\n## Verification"))
+        decisions = self.plan / "decisions.md"
+        for provider in ADAPTERS:
+            with self.subTest(provider=provider):
+                self.tasks.write_text(settled)
+                decisions.write_text("## Active Decisions\n- None.\n")
+                (self.project / ".plan-files").write_text("task-a\n")
+                self.own(provider)
+                first = self.hook(provider, "post-tool-use.sh").get("additionalContext", "")
+                self.assertIn("FINALIZATION ACTION REQUIRED", first)
+                self.assertEqual(self.hook(provider, "post-tool-use.sh").get("additionalContext", ""), "")
+                denied = self.hook(provider, "pre-tool-use.sh", "touch app.py")
+                self.assertIn(denied.get("decision"), {"block", "deny"})
+                command = re.search(r'python3 .*?--compact .*?--item "<first outcome>"', denied["reason"])[0]
+                for key, value in {"phase title": "New request", "ID": "D2",
+                                   "what the user authorized": "Verify new redirect", "why": "User request",
+                                   "date": "2026-09-08", "first outcome": "New redirect works."}.items():
+                    command = command.replace(f"<{key}>", value)
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", command).get("decision"), {"block", "deny"})
+                result = json.loads(self.run_command(["bash", "-c", command], provider).stdout)
+                self.assertEqual(result["item"], "P3.1")
+                self.assertIn("deferred (user assigned another owner)", self.tasks.read_text())
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", "touch app.py").get("decision"), {"block", "deny"})
+                self.assertEqual(self.hook(provider, "agent-stop.sh").get("decision"), "block")
+                complete = shlex.join(["python3", str(SCRIPTS / "plan_checkpoint.py"), "complete",
+                                       "P3.1", "--evidence", "New redirect returned 302", "--deactivate-pointer"])
+                self.run_command(["bash", "-c", complete], provider)
+                # Real Bash helpers used to count as unknown risk, producing a
+                # false reopen demand after completion and each final read.
+                checks = [complete,
+                          shlex.join(["python3", str(SCRIPTS / "plan_state.py"), "overview", str(self.tasks)]),
+                          shlex.join(["python3", str(SCRIPTS / "plan_state.py"), "restore-check", str(self.tasks)]),
+                          shlex.join(["python3", str(SCRIPTS / "plan_checkpoint.py"), "--plan", str(self.tasks),
+                                      "assert-finalizable", "--project-root", str(self.project)])]
+                for check in checks:
+                    self.assertEqual(self.hook(provider, "post-tool-use.sh", check).get("additionalContext", ""), "")
+                reporter = shlex.join(["python3", str(SCRIPTS / "observe.py"), "--project-root", str(self.project), "--json"])
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", reporter).get("decision"), {"block", "deny"})
+                self.assertEqual(json.loads(self.run_command(["bash", "-c", reporter], provider).stdout)["schema_version"], 1)
+                self.assertEqual(self.hook(provider, "post-tool-use.sh", reporter).get("additionalContext", ""), "")
+                for unsafe in (reporter + " && touch app.py", reporter.replace(str(SCRIPTS / "observe.py"), "./observe.py")):
+                    self.assertIn(self.hook(provider, "pre-tool-use.sh", unsafe).get("decision"), {"block", "deny"})
+                self.assertNotEqual(self.hook(provider, "agent-stop.sh").get("decision"), "block")
+
+    def test_scoped_compaction_repairs_legacy_findings(self):
+        findings = self.plan / "findings.md"
+        for provider in ADAPTERS:
+            with self.subTest(provider=provider):
+                findings.write_text("## Current Summary\n- Preserve verification notes.\n"
+                                    "## Phase 5 Evidence\n" + "x" * 33000 + "\n")
+                self.own(provider)
+                opaque = shlex.join(["python3", "-c", "pass", str(findings)])
+                denied = self.hook(provider, "pre-tool-use.sh", opaque)
+                self.assertIn(denied.get("decision"), {"block", "deny"})
+                self.assertIn("native Edit/Write", denied["reason"])
+                self.assertIn("even as arguments", denied["reason"])
+                archive = f"cat > {shlex.quote(str(self.plan / 'findings-detail.md'))} <<'MD'\nLocal notes\nMD\necho ok"
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", archive).get("decision"), {"block", "deny"})
+                self.assertIn(self.hook(provider, "pre-tool-use.sh", archive + "\ntouch app.py").get("decision"), {"block", "deny"})
+                command = shlex.join(["python3", str(SCRIPTS / "plan_edit.py"), "--compact",
+                                      "--expected-fingerprint", hashlib.sha256(findings.read_bytes()).hexdigest(),
+                                      "section-replace", "--file", "findings.md", "--heading", "Phase 5 Evidence",
+                                      "--content", "- Legacy notes summarized; verification remains."])
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", command).get("decision"), {"block", "deny"})
+                self.assertTrue(json.loads(self.run_command(["bash", "-c", command], provider).stdout)["ok"])
+                self.assertNotIn("COMPACTION REQUIRED", self.hook(provider, "post-tool-use.sh", command).get("additionalContext", ""))
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", "touch app.py").get("decision"), {"block", "deny"})
+
+    def test_unknown_activity_does_not_imply_early_stale_evidence(self):
+        for provider in ADAPTERS:
+            with self.subTest(provider=provider):
+                self.own(provider)
+                self.hook(provider, "post-tool-use.sh")
+                cache = Path(self.state(provider, "cache", provider, "fixture"))
+                baseline = dict(line.split("=", 1) for line in cache.read_text().splitlines())
+
+                def seed(**updates):
+                    state = {**baseline, "last_checkpoint_ts": str(int(time.time())), **updates}
+                    cache.write_text("".join(f"{key}={value}\n" for key, value in state.items()))
+
+                # The observed unknown / mutation / unknown burst took 35s.
+                seed(last_checkpoint_ts=str(int(time.time()) - 35))
+                for tool, command in (("opaque_bridge", "query"), ("Bash", "touch result.txt"),
+                                      ("opaque_bridge", "query")):
+                    context = self.hook(provider, "post-tool-use.sh", command, tool=tool).get("additionalContext", "")
+                    self.assertNotIn("STALE ITEM STATE", context)
+                    self.assertNotIn("CHECKPOINT REVIEW", context)
+                state = dict(line.split("=", 1) for line in cache.read_text().splitlines())
+                self.assertEqual((state["unchanged_risk_score"], state["unchanged_unknown_count"]), ("1", "2"))
+
+                # Unknown-only work remains observable after the age limit.
+                seed(last_checkpoint_ts=str(int(time.time()) - 181), unchanged_unknown_count="2")
+                review = self.hook(provider, "post-tool-use.sh", tool="opaque_bridge").get("additionalContext", "")
+                self.assertIn("CHECKPOINT REVIEW", review)
+                self.assertNotIn("STALE ITEM STATE", review)
+                self.assertNotIn("CHECKPOINT REVIEW", self.hook(provider, "post-tool-use.sh", tool="opaque_bridge").get("additionalContext", ""))
+                self.assertIn("STALE ITEM STATE", self.hook(provider, "post-tool-use.sh", "pytest -q", tool="Bash").get("additionalContext", ""))
+
+                # A live pre-upgrade cache cannot retain mixed unknown risk.
+                seed(risk_schema="", unchanged_risk_score="7", unchanged_unknown_count="70")
+                self.assertNotIn("STALE ITEM STATE", self.hook(provider, "post-tool-use.sh", tool="opaque_bridge").get("additionalContext", ""))
+                state = dict(line.split("=", 1) for line in cache.read_text().splitlines())
+                self.assertEqual((state["risk_schema"], state["unchanged_risk_score"], state["unchanged_unknown_count"]), ("2", "0", "1"))
+
+                # Likely evidence still triggers early pressure, and Stop gates.
+                seed()
+                self.hook(provider, "post-tool-use.sh", "pytest -q", tool="Bash")
+                self.assertIn("STALE ITEM STATE", self.hook(provider, "post-tool-use.sh", "pytest -q", tool="Bash").get("additionalContext", ""))
+                self.assertEqual(self.hook(provider, "agent-stop.sh").get("decision"), "block")
+
+        report = json.loads(self.run_command(["python3", str(SCRIPTS / "observe.py"), "--project-root",
+                                              str(self.project), "--json"], "claude").stdout)
+        post = report["hooks"]["post_tool"]
+        self.assertEqual(post["checkpoint_review_events"], len(ADAPTERS))
+        self.assertEqual(post["stale_events"], 2 * len(ADAPTERS))
+        self.assertGreaterEqual(post["max_unknown_count"], 3)
 
     def test_messages_name_absolute_paths(self):
         original = self.tasks.read_text()

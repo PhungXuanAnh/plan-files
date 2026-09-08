@@ -423,7 +423,7 @@ candidate_context() {
     # tool calls, not context, so "read it if you do not already know it" leaves
     # an agent that believes it knows the rules blocked on its first mutation.
     printf '%s\n' "Read $skill_arg once in this session before operational work — required even if its rules are already in your context, because the gate observes tool calls. Reading it also resolves routing correctly and is allowed before bind."
-    printf '%s\n' "After bind: run \`python3 $state_tool_arg overview $plan_arg\` and \`python3 $state_tool_arg restore-check $plan_arg\` before targeted reads; reconcile user-authorized scope changes before implementation. After release: continue separately. Never release merely to bypass a gate."
+    printf '%s\n' "After bind: run \`python3 $state_tool_arg overview $plan_arg\`, then only its needed targeted reads. If restore.ok is false, use \`python3 $state_tool_arg restore-check $plan_arg\` for complete repair details. Reconcile user-authorized scope changes before implementation. After release: continue separately. Never release merely to bypass a gate."
     printf '\n%s\n' "Candidate task '$task_id' is not owned for this prompt. A previous prompt's bind does not carry forward. Non-goals still apply unless the user supersedes them."
     if [ -n "$identity" ]; then
         printf '\n## Task Identity\n%s\n' "$identity"
