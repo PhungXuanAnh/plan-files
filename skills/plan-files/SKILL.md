@@ -17,7 +17,7 @@ Store private planning state under `<project-root>/tmp/plan-files/<task-id>/`:
 - `history.md` — optional trusted cold archive; never auto-read.
 - `handoff.md` — optional overwrite-only snapshot for an intentional pause.
 
-Create new files from [the templates](templates/). Keep `tmp/` and the root `.plan-files` pointer out of version control. Task ids use only letters, digits, `-`, `_`, or `.`.
+Create new files from [the templates](templates/). Keep `tmp/` and the root `.plan-files` pointer out of version control; session hooks add local Git excludes when the project root has a `.git` directory. Task ids use only letters, digits, `-`, `_`, or `.`.
 
 ## Start and resume
 

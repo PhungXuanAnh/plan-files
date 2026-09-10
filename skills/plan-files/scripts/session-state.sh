@@ -80,8 +80,23 @@ pointer_candidate() {
     printf '%s' "$task_id"
 }
 
+# All providers keep hook state out of Git without changing shared ignore rules.
+ensure_local_excludes() {
+    local exclude="$PROJECT_ROOT/.git/info/exclude" pattern
+    [ -d "$PROJECT_ROOT/.git" ] || return 0
+    mkdir -p "$PROJECT_ROOT/.git/info" || return 1
+    for pattern in 'tmp/*' '.plan-files'; do
+        grep -Fqx -- "$pattern" "$exclude" 2>/dev/null && continue
+        if [ -s "$exclude" ] && [ -n "$(tail -c 1 "$exclude")" ]; then
+            printf '\n' >> "$exclude" || return 1
+        fi
+        printf '%s\n' "$pattern" >> "$exclude" || return 1
+    done
+}
+
 write_route() {
     local file=$1 status=$2 task=${3:-} candidate=${4:-} tmp
+    ensure_local_excludes 2>/dev/null || true
     mkdir -p "$(dirname "$file")" || return 1
     tmp="$file.tmp.$$"
     umask 077

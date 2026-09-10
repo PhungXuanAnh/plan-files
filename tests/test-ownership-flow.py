@@ -71,6 +71,35 @@ P1.1
                               input=json.dumps(payload) if payload else None,
                               capture_output=True, text=True, check=check)
 
+    def test_session_writes_add_local_git_excludes(self):
+        git_dir = self.project / ".git"
+        for provider in ADAPTERS:
+            self.state(provider, "pending", provider, "fixture")
+        self.assertFalse(git_dir.exists())
+        git_dir.write_text("gitdir: elsewhere\n")
+        self.state("codex", "pending", "codex", "fixture")
+        self.assertEqual(git_dir.read_text(), "gitdir: elsewhere\n")
+        git_dir.unlink()
+        self.run_command(["git", "init", "-q"], "codex")
+        exclude = git_dir / "info/exclude"
+        for initial in (None, "# existing rule\ncustom", "tmp/*\n# keep\n"):
+            with self.subTest(initial=initial):
+                if initial is None:
+                    exclude.unlink()
+                else:
+                    exclude.write_text(initial)
+                for provider in ADAPTERS:
+                    for _ in range(2):
+                        self.hook(provider, "user-prompt-submit.sh")
+                content = exclude.read_text()
+                self.assertTrue(content.startswith(initial or ""))
+                for pattern in ("tmp/*", ".plan-files"):
+                    self.assertEqual(content.splitlines().count(pattern), 1)
+                ignored = self.run_command(
+                    ["git", "check-ignore", "tmp/plan-files/task-a/tasks.md", ".plan-files"],
+                    "codex").stdout.splitlines()
+                self.assertEqual(ignored, ["tmp/plan-files/task-a/tasks.md", ".plan-files"])
+
     def state(self, provider, *args, check=True):
         return self.run_command(["bash", str(SCRIPTS / "session-state.sh"), *args],
                                 provider, check=check).stdout.strip()
