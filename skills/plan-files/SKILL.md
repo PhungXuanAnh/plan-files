@@ -19,6 +19,14 @@ Store private planning state under `<project-root>/tmp/plan-files/<task-id>/`:
 
 Create new files from [the templates](templates/). Keep `tmp/` and the root `.plan-files` pointer out of version control; session hooks add local Git excludes when the project root has a `.git` directory. Task ids use only letters, digits, `-`, `_`, or `.`.
 
+### Plan-owned temporary files
+
+Keep **every temporary file and directory belonging to a plan inside that plan's task folder**, not beside it or at the project root. This includes research/prototypes, downloads, extracted sources, logs, reports, generated fixtures, scratch scripts, backups, temporary worktrees, and `handoff.md`. Organize them in named subdirectories; keep only bounded planning state in the core Markdown files. Shared maintained source code is not a temporary artifact, even when named `local.py`.
+
+When the workspace requires local-only files under `.vscode/local_files/`, keep the physical plan data there and preserve the hook-compatible `tmp/plan-files/<task-id>/` path through the workspace's ignored `tmp` symlink. Do not create a second copy of the plan. Tool-required aliases and the root `.plan-files` pointer remain discovery metadata, not alternative artifact stores.
+
+When consolidating an existing plan, preserve evidence and uncommitted changes, relocate Git worktrees with Git-aware move/repair, update live path references, and label historical snapshots rather than treating old commands/results as current. Container-generated files stay in the container unless export is explicitly requested; authorized output must go directly into a dedicated volume-mounted directory inside the plan, never be copied out with `docker cp` or written into a source checkout.
+
 ## Start and resume
 
 The latest user request is authoritative. `.plan-files` suggests a candidate; a session lease owns it for one user prompt. A new prompt suspends the old lease even when the pointer is unchanged.
