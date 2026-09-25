@@ -7,6 +7,7 @@ CHECKPOINT_TOOL="$REPO_ROOT/skills/plan-files/scripts/plan_checkpoint.py"
 TEST_DIR=$(mktemp -d)
 trap 'rm -rf "$TEST_DIR"' EXIT
 
+unset CLAUDE_PROJECT_DIR
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 assert_eq() { [ "$1" = "$2" ] || fail "$3 (expected '$2', got '$1')"; }
 
@@ -77,6 +78,22 @@ WS7="$TEST_DIR/ws7/deep/nested"
 mkdir -p "$WS7"
 assert_eq "$(bash "$RESOLVER" "$WS7")" "$WS7" \
     "with no .plan-files and no git repo, the resolver must fall back to the starting directory"
+
+# --- A physical cwd behind a symlinked tmp/ has no pointer ancestor: it falls
+#     back to itself (and accepts no hook state) unless the host declares the
+#     project, while a cwd with its own pointer ancestor ignores the hint. ----
+WS9="$TEST_DIR/ws9"
+mkdir -p "$WS9" "$TEST_DIR/store9/tmp/plan-files/demo/sub"
+ln -s "$TEST_DIR/store9/tmp" "$WS9/tmp"
+: > "$WS9/.plan-files"
+PHYS9=$(cd "$WS9/tmp/plan-files/demo/sub" && pwd -P)
+assert_eq "$(bash "$RESOLVER" "$PHYS9")" "$PHYS9" "a physical cwd without a hint falls back to itself"
+! bash "$RESOLVER" --accepts-state "$PHYS9" || fail "a fallback root must not accept hook state"
+bash "$RESOLVER" --accepts-state "$WS9" || fail "a pointer root must accept hook state"
+assert_eq "$(CLAUDE_PROJECT_DIR="$WS9" bash "$RESOLVER" "$PHYS9")" "$WS9" \
+    "a physical cwd behind a symlinked tmp/ must resolve to CLAUDE_PROJECT_DIR's root"
+assert_eq "$(CLAUDE_PROJECT_DIR="$WS9" bash "$RESOLVER" "$WS2/repoA")" "$WS2" \
+    "a cwd with its own pointer ancestor must ignore the host hint"
 
 # --- plan_checkpoint.py's --deactivate-pointer must clear .plan-files at
 #     the true (resolved) project root, not a hardcoded parent-count guess —

@@ -24,7 +24,7 @@ cd "$(bash "$SCRIPT_DIR/resolve-project-root.sh")" 2>/dev/null || true
 
 LOG_DIR="tmp/hook-logs/plan-files"
 LOG_FILE="$LOG_DIR/pre-tool-use.log"
-mkdir -p "$LOG_DIR" 2>/dev/null || true
+planning_prepare_log_dir "$LOG_DIR" || { LOG_FILE=/dev/null; LOG_LOCK=/dev/null; }
 
 log() {
     printf '[%s] provider=%s %s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$PROVIDER" "$1" >> "$LOG_FILE" 2>/dev/null || true

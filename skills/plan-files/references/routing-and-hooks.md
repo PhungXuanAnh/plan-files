@@ -7,10 +7,13 @@ Read this reference when resolving a project root, deciding whether a candidate 
 Hooks resolve the project root from the tool call's current directory:
 
 1. Walk upward and collect ancestors containing `.plan-files`, including an empty pointer. The farthest/outermost ancestor wins so cwd drift into a child repository cannot silently select a leftover child plan.
-2. Otherwise use `git rev-parse --show-toplevel`, walking through an enclosing superproject when present.
-3. Otherwise use the current directory.
+2. Otherwise walk upward the same way from the host-declared project directory, `CLAUDE_PROJECT_DIR`, which Claude Code sets for every hook.
+3. Otherwise use `git rev-parse --show-toplevel`, walking through an enclosing superproject when present.
+4. Otherwise use the current directory.
 
 In nested repositories, put `.plan-files` at the intended outer workspace root. For a new non-git multi-repo workspace with no pointer yet, create an empty `.plan-files` there before its first task.
+
+Step 2 exists because Claude Code runs hooks in the session's drifting shell cwd and records it as a physical path. When `<root>/tmp` is a symlink to storage outside the project, such as a Dropbox-backed `.vscode/local_files/tmp`, a cwd under the plan directory has no `.plan-files` ancestor; resolving from it would leave the prior prompt's lease unreset (a stale `discussing` lease then blocks every write) and scatter state into the plan folder. Hooks write logs and session state only at a root with a pointer, a `tmp/plan-files` directory, or a `.git` entry (`resolve-project-root.sh --accepts-state`), so a step-4 fallback root stays untouched.
 
 ## Candidate versus ownership
 

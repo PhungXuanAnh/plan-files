@@ -95,7 +95,7 @@ LOG_FILE="$LOG_DIR/post-tool-use.log"
 LOG_LOCK="$LOG_FILE.lock"
 LOG_MAX_LINES=3000
 LOG_KEEP_LINES=2500
-mkdir -p "$LOG_DIR" 2>/dev/null || true
+planning_prepare_log_dir "$LOG_DIR" || { LOG_FILE=/dev/null; LOG_LOCK=/dev/null; }
 
 {
     flock -x 9 || true

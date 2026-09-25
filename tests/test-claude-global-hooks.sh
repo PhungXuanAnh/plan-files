@@ -177,5 +177,31 @@ run_pre_tool_hook() {
 
 run_pre_tool_hook "$NON_GIT_PROJECT" non-git
 run_pre_tool_hook "$GIT_PROJECT" git
+[ ! -e "$NON_GIT_PROJECT/tmp" ] || fail "hooks littered a root with no plan signal"
+
+# Claude Code runs hooks in the session's drifted cwd, recorded as a physical
+# path. Behind a symlinked tmp/ that path has no .plan-files ancestor, so the
+# prompt hook must still reset the lease at CLAUDE_PROJECT_DIR and write nothing
+# at the stray cwd.
+PROMPT_COMMAND=$(python3 -c '
+import json, sys
+groups = json.load(open(sys.argv[1]))["hooks"]["UserPromptSubmit"]
+print(next(h["command"] for g in groups for h in g["hooks"] if "plan-files/scripts/" in h["command"]))
+' "$MERGE_SETTINGS")
+LINKED="$TMP_DIR/linked" STORE="$TMP_DIR/store"
+DRIFTED="$STORE/tmp/plan-files/demo/sub"
+mkdir -p "$LINKED" "$DRIFTED"
+ln -s "$STORE/tmp" "$LINKED/tmp"
+printf 'demo\n' > "$LINKED/.plan-files"
+printf '## Task Identity\ndemo\n' > "$STORE/tmp/plan-files/demo/tasks.md"
+state() { PWF_PROJECT_ROOT="$LINKED" PWF_SESSION_ADAPTER=claude PWF_SESSION_ID=drift \
+    bash "$REPO_ROOT/skills/plan-files/scripts/session-state.sh" "$@"; }
+state pending claude drift >/dev/null
+state discuss demo >/dev/null
+output=$(cd "$DRIFTED" && printf '%s' '{"session_id":"drift","hook_event_name":"UserPromptSubmit","prompt":"go"}' \
+    | CLAUDE_PROJECT_DIR="$LINKED" HOME="$MERGE_HOME" bash -c "$PROMPT_COMMAND")
+[[ $output == *"OWNERSHIP ACTION REQUIRED"* ]] || fail "drifted prompt hook emitted: $output"
+[ "$(state route-status claude drift)" = pending ] || fail "drifted prompt hook left the lease unreset"
+[ ! -e "$DRIFTED/tmp" ] || fail "drifted prompt hook wrote state under the plan directory"
 
 echo "claude global hook installer tests: PASS"

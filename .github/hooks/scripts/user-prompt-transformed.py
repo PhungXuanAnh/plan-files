@@ -68,7 +68,9 @@ def run_prompt_candidate(
 
 def main() -> None:
     log_file = Path("tmp/hook-logs/plan-files/user-prompt-submit.log")
-    log_file.parent.mkdir(parents=True, exist_ok=True)
+    resolver = Path(__file__).resolve().parents[3] / "skills/plan-files/scripts/resolve-project-root.sh"
+    if subprocess.run(["bash", str(resolver), "--accepts-state", os.getcwd()], check=False).returncode == 0:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
     def log(message: str) -> None:
         try:
             with log_file.open("a", encoding="utf-8") as handle:

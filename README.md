@@ -38,8 +38,9 @@ There is no `progress.md`. Keep current progress and verification in `tasks.md`;
 Every hook needs to agree on a single `<project root>` for the storage model above, regardless of which directory inside a workspace a tool call happens to run in. `skills/plan-files/scripts/resolve-project-root.sh` resolves it in this order:
 
 1. Walk upward from the tool call's cwd collecting every ancestor that already has a `.plan-files` file (present, even empty, is enough — no separate marker file). The **farthest** (outermost) match wins. A `.plan-files` can legitimately exist at more than one nesting level (an outer workspace-level plan, plus a leftover one inside a child repo); picking the nearest one would silently resolve to the wrong plan whenever cwd drifts into — or a session simply starts inside — that child repo.
-2. Otherwise, fall back to `git rev-parse --show-toplevel`, then walk out through every enclosing git superproject (`--show-superproject-working-tree`), so a cwd inside a registered git submodule resolves to the outermost superproject root, not the submodule's own toplevel.
-3. Otherwise, the cwd itself.
+2. Otherwise, walk upward the same way from `CLAUDE_PROJECT_DIR`, the project directory Claude Code declares to every hook. Claude Code runs hooks in the session's drifting shell cwd as a physical path, so a cwd under a plan whose `tmp/` is a symlink to storage outside the project (for example Dropbox) has no `.plan-files` ancestor of its own.
+3. Otherwise, fall back to `git rev-parse --show-toplevel`, then walk out through every enclosing git superproject (`--show-superproject-working-tree`), so a cwd inside a registered git submodule resolves to the outermost superproject root, not the submodule's own toplevel.
+4. Otherwise, the cwd itself. Hooks write no logs or session state at such a fallback root unless it already has a `.plan-files`, a `tmp/plan-files` directory, or a `.git` entry.
 
 ### Workspaces that are not a repo themselves
 

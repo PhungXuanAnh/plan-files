@@ -9,8 +9,9 @@ BIND_TOOL=${3:-}
 INPUT=$(cat)
 LOG_DIR="tmp/hook-logs/plan-files"
 LOG_FILE="$LOG_DIR/user-prompt-submit.log"
-mkdir -p "$LOG_DIR" 2>/dev/null || true
-printf '[%s] event=UserPromptSubmit provider=%s input_bytes=%s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$PROVIDER" "${#INPUT}" >> "$LOG_FILE" 2>/dev/null || true
+bash "$REPO_ROOT/skills/plan-files/scripts/resolve-project-root.sh" --accepts-state "$PWD" \
+    && mkdir -p "$LOG_DIR" 2>/dev/null || LOG_FILE=/dev/null
+printf '[%s] event=UserPromptSubmit provider=%s root=%s input_bytes=%s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$PROVIDER" "$PWD" "${#INPUT}" >> "$LOG_FILE" 2>/dev/null || true
 CONTEXT=$(printf '%s' "$INPUT" \
     | bash "$REPO_ROOT/skills/plan-files/scripts/prompt-candidate.sh" "$PROVIDER" "$BIND_TOOL")
 

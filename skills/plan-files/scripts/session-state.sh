@@ -12,6 +12,10 @@ set -o pipefail 2>/dev/null || true
 # falls back to git-toplevel/superproject detection when none exists anywhere.
 _SCRIPT_DIR=$(CDPATH= cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(bash "$_SCRIPT_DIR/resolve-project-root.sh" "${PWF_PROJECT_ROOT:-$PWD}")
+# A fallback root with no pointer, plan directory, or git entry is where a
+# drifted cwd lands, not a project: a lease written there is never read again.
+ROOT_ACCEPTS_STATE=1
+bash "$_SCRIPT_DIR/resolve-project-root.sh" --accepts-state "$PROJECT_ROOT" || ROOT_ACCEPTS_STATE=0
 
 # Pre-rename layout. Plans created before the plan-files rename still live in
 # tmp/plan-with-files/ with a .plan-with-files pointer, and silently ignoring
@@ -96,6 +100,7 @@ ensure_local_excludes() {
 
 write_route() {
     local file=$1 status=$2 task=${3:-} candidate=${4:-} tmp
+    [ "$ROOT_ACCEPTS_STATE" = 1 ] || return 1
     ensure_local_excludes 2>/dev/null || true
     mkdir -p "$(dirname "$file")" || return 1
     tmp="$file.tmp.$$"
@@ -238,7 +243,8 @@ skill_loaded() {
     file=$(route_file "$1" "$2") || return 1
     marker="${file%.state}.skill-loaded"
     case "$mode" in
-        mark)  mkdir -p "$(dirname "$marker")" 2>/dev/null || return 1
+        mark)  [ "$ROOT_ACCEPTS_STATE" = 1 ] || return 1
+               mkdir -p "$(dirname "$marker")" 2>/dev/null || return 1
                : > "$marker" 2>/dev/null || return 1 ;;
         clear) rm -f "$marker" 2>/dev/null || true ;;
         check) [ -f "$marker" ] || return 1 ;;
@@ -274,6 +280,10 @@ bind_current() {
         return 1
     }
     status=$(read_value "$file" status)
+    [ "$status" = "discussing" ] && {
+        printf 'planning lease is still "discussing": this prompt was routed as discussion only, and binding waits for the next user prompt. If a new prompt was just submitted, its UserPromptSubmit hook did not reset the lease at this project root (%s); check %s/tmp/hook-logs/plan-files/user-prompt-submit.log instead of retrying bind.\n' "$PROJECT_ROOT" "$PROJECT_ROOT" >&2
+        return 1
+    }
     { [ "$status" = "pending" ] || [ "$status" = "waiting" ]; } || {
         printf 'planning lease is not awaiting a scope decision -- it is likely already owned (auto-claimed when this task'"'"'s plan file was created/edited) or settled; this bind call is unnecessary. Run "resolve" to confirm ownership instead of hand-editing .plan-files.\n' >&2
         return 1

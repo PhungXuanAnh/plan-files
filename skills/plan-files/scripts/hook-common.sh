@@ -6,6 +6,7 @@
 #   planning_skill_dir                — absolute installed skills/plan-files directory
 #   planning_script_path NAME         — absolute path of a skill script for messages
 #   planning_doc_path RELPATH         — absolute path of SKILL.md or a references/ file
+#   planning_prepare_log_dir DIR      — mkdir a hook log dir only at a state-accepting root
 #   resolve_plan_dir ROOT             — set TASK_ID PLAN_DIR PLAN_FILE from pointer
 #   current_phase_pointer PLAN_FILE   — print only a valid exact `Phase N` pointer
 #   planning_item_context PLAN_FILE   — print contracted item state as compact JSON
@@ -90,6 +91,15 @@ planning_doc_path() {
     local _dir
     _dir=$(planning_skill_dir) || { printf '%s' "${1:-}"; return 0; }
     printf '%s/%s' "$_dir" "${1:-}"
+}
+
+# planning_prepare_log_dir DIR — create a cwd-relative hook log directory only
+# when the resolved root accepts plan state, so a stray fallback root stays
+# clean. On failure a caller points its log at /dev/null: a redirect into a
+# missing directory reports to stderr before any trailing 2>/dev/null applies.
+planning_prepare_log_dir() {
+    bash "$(dirname "${BASH_SOURCE[0]}")/resolve-project-root.sh" --accepts-state "$PWD" \
+        && mkdir -p "${1:-}" 2>/dev/null
 }
 
 planning_state_tool() {
