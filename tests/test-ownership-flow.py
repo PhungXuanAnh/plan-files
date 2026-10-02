@@ -173,9 +173,12 @@ P1.1
         Byte-exact comparison refused `bind task-a 2>&1 | tail -3`, the dropped
         env prefix, and the adapter reached through a symlink, then answered
         every retry with the identical instruction -- a loop the agent left only
-        by accident. Chaining real work onto the routing command stays refused.
+        by accident. The documented bind-then-overview sequence in one call is
+        the same action too. Chaining real work onto the routing command stays
+        refused.
         """
         alias = self.project / "alias-scripts"
+        state = shlex.quote(str(SCRIPTS / "plan_state.py"))
         for provider in ADAPTERS:
             with self.subTest(provider=provider):
                 self.state(provider, "pending", provider, "fixture", "task-a")
@@ -188,6 +191,7 @@ P1.1
                     f'{command} 2>&1 | tail -2; echo "pointer=$(cat {shlex.quote(str(self.project / ".plan-files"))})"',
                     "bash " + command.split(" bash ", 1)[1],
                     command.replace(script, shlex.quote(str(alias / "bind-session.sh"))) + " 2>&1 | tail -2",
+                    f"{command} && python3 {state} overview {shlex.quote(str(self.tasks))}",
                 )
                 for variant in accepted:
                     self.assertNotIn(self.hook(provider, "pre-tool-use.sh", variant).get("decision"),
@@ -196,6 +200,8 @@ P1.1
                     f"rm -rf {shlex.quote(str(self.project / 'src'))} && {command}",
                     command.replace("task-a", "task-b"),
                     f"{command} > {shlex.quote(str(self.project / 'out.txt'))}",
+                    f"{command} && python3 {shlex.quote(str(SCRIPTS / 'plan_checkpoint.py'))} --plan "
+                    f"{shlex.quote(str(self.tasks))} complete",
                 )
                 for variant in refused:
                     self.assertIn(self.hook(provider, "pre-tool-use.sh", variant).get("decision"),

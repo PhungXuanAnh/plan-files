@@ -978,6 +978,20 @@ def _segment_routing_verb(segment: Segment, bind_tool: Path, project_root: Path,
     return operands[0]
 
 
+def _segment_reads_plan(segment: Segment) -> bool:
+    """A planning helper call that only reads, such as the overview after bind.
+
+    The skill tells the agent to bind and then restore, so `bind task-a &&
+    plan_state.py overview` is the documented sequence in one call; refusing it
+    answered with the very bind instruction the call already carried. Lease
+    helpers are excluded so a second routing action cannot ride along.
+    """
+    call = _planning_helper_call(segment.argv)
+    if call is None or call[0] in PLAN_LEASE_HELPERS:
+        return False
+    return _helper_op_class(*call) == "read" and _routing_words(segment) is not None
+
+
 def routing_verb(tool_input: object, bind_tool: Path, project_root: Path, task_id: str) -> str:
     """The routing verb a whole command runs, or "" when it runs anything else.
 
@@ -986,7 +1000,8 @@ def routing_verb(tool_input: object, bind_tool: Path, project_root: Path, task_i
     `; echo "pointer=$(cat .plan-files)"` to read the result is running that
     same command -- byte-exact comparison refused every such variant and
     re-emitted the identical instruction, a loop with no exit the agent could
-    find. Chaining anything that is not read-only still refuses the whole
+    find. A read-only planning helper (the overview after bind) passes the same
+    way. Chaining anything that is not read-only still refuses the whole
     command, so `rm -rf src && bind task-a` cannot launder itself through this
     allowance, and two routing segments are ambiguous rather than permitted.
     """
@@ -1002,7 +1017,8 @@ def routing_verb(tool_input: object, bind_tool: Path, project_root: Path, task_i
             if verb:
                 return ""
             verb = found
-        elif not _segment_is_read_only(segment, allow_substitutions=True):
+        elif not (_segment_is_read_only(segment, allow_substitutions=True)
+                  or _segment_reads_plan(segment)):
             return ""
     return verb
 
