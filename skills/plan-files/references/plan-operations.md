@@ -81,6 +81,8 @@ Direct removal is intentionally narrow: an item must be unchecked, non-active, a
 
 ## Pausing
 
+After `pause` settles every phase, `plan_checkpoint.py park --reason "user will resume after review"` permits finalization while retaining the candidate pointer. At least one phase must be blocked/deferred; actionable or entirely complete plans cannot park. The reason is stored as `- **Parked:** ...` in Resume Checkpoint. `resume`, `reopen`, and checkpoint `start` clear it before execution, and it cannot exempt actionable work from finalization. Park before writing a handoff, because parking changes `tasks.md`. A pointer naming another task is never overwritten.
+
 When the user postpones work, one call settles the phase and stages its handoff:
 
 ```bash
@@ -135,6 +137,21 @@ After deactivation, the default pointer no longer resolves a plan. Keep its know
 
 ## Lifecycle operations
 
+For a small followup to a complete phase, use `reopen --append N --decision '<authorization row>' --item '<observable outcome>'` instead of `--title`. The whole plan must be settled. Existing checked IDs and evidence remain unchanged, new IDs are allocated normally, and the first new item starts atomically. Current-phase budgets still apply; choose a new phase when the old one is full or the work is genuinely distinct. One meaningful outcome with concrete test evidence is sufficient for a small change; an extra verification item is optional. Reuse the returned `file_fingerprint` rather than computing another hash between every operation. Automatic fingerprints and pre-completed “quick” items would hide stale reads or missing evidence and are deliberately unsupported.
+
+When active decisions themselves fill the budget, consolidate with explicit judgment:
+
+```bash
+python3 <skill-dir>/scripts/plan_edit.py --expected-fingerprint <decisions-sha> \
+  decisions-consolidate --decision D2 --decision D3 \
+  --replacement '| D8 | Preserve both active requirements concisely | Consolidates D2 and D3 without changing scope | 2026-10-05 |' \
+  --expected-history-fingerprint <history-sha-or-missing>
+```
+
+The command requires each selected ID exactly once and a new replacement ID. Review the summary for every still-active requirement; the tool cannot judge semantic equivalence. It archives the exact originals and replacement in Decision History before replacing selected rows, preserving unrelated active rows, superseded rows, and open questions. It uses the same fingerprinted, history-first recovery journal as `decisions-compact`; `--dry-run` preflights the candidate without publishing. Active decisions are never automatically evicted or budgets raised.
+
+Checkpoint transitions validate their temporary candidate before replacing `tasks.md`. Unsupported `phase-update` execution transitions fail before any write. This is intentionally not a blanket requirement that every prose repair pass full `restore-check`: repairing an already-invalid plan may require several targeted edits. Run the semantic restore check before operational work.
+
 ```bash
 python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <tasks-sha> \
   resume 3 --decision '| D3 | Resume postponed verification | User authorized resumption | 2026-10-05 |'
@@ -160,7 +177,7 @@ python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprin
   handoff-write --content '<complete handoff snapshot>'
 ```
 
-`resume` continues an existing blocked/deferred phase, retaining its phase/item IDs, checked outcomes, and partial evidence. It records the required authorizing decision, starts the first unchecked item using the shared checkpoint transition, and synchronizes Current Phase, Active Item, and Resume Checkpoint. It neither adds nor archives phases and refuses to displace active work. Record the user's renewed authorization or the resolved external dependency in `--decision`. A completed phase or a phase without unchecked items cannot be resumed. A plain `phase-update --status in_progress` followed by `plan_checkpoint.py start` also works, but the intermediate state is not ready for execution; prefer `resume`.
+`resume` continues an existing blocked/deferred phase, retaining its phase/item IDs, checked outcomes, and partial evidence. It records the required authorizing decision, starts the first unchecked item using the shared checkpoint transition, and synchronizes Current Phase, Active Item, and Resume Checkpoint. It neither adds nor archives phases and refuses to displace active work. Record the user's renewed authorization or the resolved external dependency in `--decision`. A completed phase or a phase without unchecked items cannot be resumed. `phase-update` rejects reactivation and starting execution without writing; use `resume` for paused work or `plan_checkpoint.py start <id>` for an existing pending item. Direct checkpoint start also rejects settled phases before writing.
 
 `reopen` adds distinct newly authorized work to a settled plan. It appends the authorizing row to Active Decisions, optionally retires what that row replaces, reconciles whichever scope fields you name, adds the phase that carries the work with its items, and starts the first one — validating everything before writing anything, and writing `decisions.md` before `tasks.md` so a crash can leave a recorded authorization with no phase, never a phase nothing authorized. Re-running it after such a crash does not duplicate the decision row. It refuses a plan that still has an actionable phase: that plan needs `phase-add`/`item-add` and `plan_checkpoint.py start` instead. Both `resume` and `reopen` return `phase`, `items`, `item` (the started one), `decision`, `decision_already_recorded`, `superseded`, and the `decisions_file`/`decisions_old_fingerprint`/`decisions_fingerprint`/`decisions_usage` fields, alongside the usual tasks.md fingerprints, context, and budgets. Like `phase-add`, `reopen` needs `--expected-history-fingerprint` only when the new phase pushes the hot window past 12 headings; place that flag after the subcommand.
 

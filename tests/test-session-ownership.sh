@@ -253,7 +253,7 @@ CODEX_CANDIDATE=$(prompt codex codex-a)
 CLAUDE_CANDIDATE=$(prompt claude claude-a)
 COPILOT_CANDIDATE=$(prompt copilot copilot-a)
 for OUTPUT in "$CODEX_CANDIDATE" "$CLAUDE_CANDIDATE" "$COPILOT_CANDIDATE"; do
-    assert_contains "$OUTPUT" "Task Identity" "candidate identity"
+    assert_contains "$OUTPUT" "Candidate task" "compact candidate identity"
     assert_not_contains "$OUTPUT" "## Current Phase" "candidate hot-context isolation"
     assert_contains "$OUTPUT" "bind-session.sh" "hook-supplied bind command"
 done
@@ -284,14 +284,14 @@ assert_not_contains "$(post_hook codex codex-a)" "## Goal" "same-session full co
 # Pending ownership must be recoverable, not interpreted as an environment block.
 PENDING_OUTPUT=$(prompt codex codex-pending)
 assert_contains "$PENDING_OUTPUT" "Candidate task" "pending ownership candidate"
-assert_contains "$(cd "$PROJECT" && printf '%s\n' '{"session_id":"codex-pending","hook_event_name":"Stop"}' | "$REPO_ROOT/.codex/hooks/plan-files/scripts/agent-stop.sh")" "OWNERSHIP ACTION REQUIRED" "pending ownership Stop block"
+assert_eq "$(cd "$PROJECT" && printf '%s\n' '{"session_id":"codex-pending","hook_event_name":"Stop"}' | "$REPO_ROOT/.codex/hooks/plan-files/scripts/agent-stop.sh")" "{}" "text-only pending prompt may stop"
 
 # A prior owned task overrides a changed global candidate, but every prompt
 # suspends enforcement until SAME is confirmed again.
 printf '%s\n' task-b > "$PROJECT/.plan-files"
 RENEWED=$(prompt codex codex-a)
 assert_contains "$RENEWED" "Candidate task 'task-a'" "session candidate overrides global pointer"
-assert_contains "$(stop_hook codex codex-a)" "OWNERSHIP ACTION REQUIRED" "Stop enforces pending ownership"
+assert_eq "$(stop_hook codex codex-a)" "{}" "fresh text-only prompt may stop without binding"
 bind codex codex-a
 
 # Settled state is checked for integrity before either Stop or PostTool no-ops.

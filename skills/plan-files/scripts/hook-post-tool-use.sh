@@ -59,11 +59,9 @@ if [ -z "$PLAN_DIR" ] && [ -n "$SESSION_ID" ] && command -v python3 >/dev/null 2
     fi
 fi
 if [ -z "$PLAN_DIR" ]; then
-    # Unresolved ownership is the one state Stop is guaranteed to block on, so
-    # staying silent here hides the problem until the turn is already over.
-    # Repeat the same routing actions Stop would give, bounded, every call.
     CANDIDATE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" pending-candidate "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
-    if [ -n "$CANDIDATE" ] && [ -x "$BIND_TOOL" ]; then
+    if [ -n "$CANDIDATE" ] && [ -x "$BIND_TOOL" ] \
+        && PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" routing-required "$PROVIDER" "$SESSION_ID" check 2>/dev/null; then
         OWNERSHIP_WARN=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" candidate-context \
             "$CANDIDATE" "$BIND_TOOL" 2>/dev/null || true)
         if [ -n "$OWNERSHIP_WARN" ]; then

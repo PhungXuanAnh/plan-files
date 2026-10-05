@@ -116,6 +116,7 @@ write_route() {
     } > "$tmp" && mv "$tmp" "$file" || return 1
     # A feedback exception never carries across a prompt/ownership transition.
     python3 "$_SCRIPT_DIR/feedback_transport.py" clear "$file" 2>/dev/null || true
+    rm -f "${file%.state}.routing-required"
 }
 
 # ---------------------------------------------------------------------------
@@ -155,7 +156,7 @@ mark_pending() {
 }
 
 claim_task() {
-    local adapter_id=$1 session_id=$2 task_id=$3 file lock status current="" result=0
+    local adapter_id=$1 session_id=$2 task_id=$3 preview=${4:-} file lock status current="" result=0
     if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e "$PROJECT_ROOT/.plan-files-skip" ] || [ -e "$PROJECT_ROOT/.plan-with-files-skip" ]; then
         printf 'plan-files is disabled for this project or session\n' >&2
         return 1
@@ -165,9 +166,11 @@ claim_task() {
         return 1
     }
     file=$(route_file "$adapter_id" "$session_id") || return 1
-    mkdir -p "$(dirname "$file")" || return 1
+    if [ "$preview" != "--dry-run" ]; then
+        mkdir -p "$(dirname "$file")" || return 1
+    fi
     lock="$file.claim.lock"
-    if command -v flock >/dev/null 2>&1; then
+    if [ "$preview" != "--dry-run" ] && command -v flock >/dev/null 2>&1; then
         exec 9>"$lock"
         if ! flock -n 9; then
             printf 'planning lease claim is already in progress\n' >&2
@@ -192,11 +195,11 @@ claim_task() {
         fi
     fi
 
-    if [ "$result" -eq 0 ]; then
+    if [ "$result" -eq 0 ] && [ "$preview" != "--dry-run" ]; then
         write_route "$file" owned "$task_id" "" || result=1
         [ "$result" -eq 0 ] && write_pointer "$task_id"
     fi
-    if command -v flock >/dev/null 2>&1; then
+    if [ "$preview" != "--dry-run" ] && command -v flock >/dev/null 2>&1; then
         flock -u 9 2>/dev/null || true
         exec 9>&-
     fi
@@ -252,6 +255,17 @@ skill_loaded() {
     esac
 }
 
+routing_required() {
+    local file marker
+    file=$(route_file "$1" "$2") || return 1
+    marker="${file%.state}.routing-required"
+    case "${3:-check}" in
+        mark) [ "$ROOT_ACCEPTS_STATE" = 1 ] && [ -f "$file" ] || return 1; : > "$marker" ;;
+        check) [ -f "$marker" ] ;;
+        *) return 2 ;;
+    esac
+}
+
 current_identity() {
     [ -n "${PWF_SESSION_ADAPTER:-}" ] && [ -n "${PWF_SESSION_ID:-}" ] || return 1
     valid_adapter_id "$PWF_SESSION_ADAPTER" && valid_session_id "$PWF_SESSION_ID" || return 1
@@ -259,7 +273,7 @@ current_identity() {
 }
 
 bind_current() {
-    local task_id=$1 identity adapter_id session_id file status
+    local task_id=$1 reason=${2:-} identity adapter_id session_id file status
     if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e "$PROJECT_ROOT/.plan-files-skip" ] || [ -e "$PROJECT_ROOT/.plan-with-files-skip" ]; then
         printf 'plan-files is disabled for this project or session\n' >&2
         return 1
@@ -280,14 +294,15 @@ bind_current() {
         return 1
     }
     status=$(read_value "$file" status)
-    [ "$status" = "discussing" ] && {
-        printf 'planning lease is still "discussing": this prompt was routed as discussion only, and binding waits for the next user prompt. If a new prompt was just submitted, its UserPromptSubmit hook did not reset the lease at this project root (%s); check %s/tmp/hook-logs/plan-files/user-prompt-submit.log instead of retrying bind.\n' "$PROJECT_ROOT" "$PROJECT_ROOT" >&2
-        return 1
-    }
-    { [ "$status" = "pending" ] || [ "$status" = "waiting" ]; } || {
+    if [ "$status" = "discussing" ]; then
+        if [ "$(read_value "$file" task)" != "$task_id" ] || [ -z "${reason//[[:space:]]/}" ]; then
+            printf 'planning lease is still "discussing": bind the same task with --reason "user authorization for execution", or wait for the next user prompt.\n' >&2
+            return 1
+        fi
+    elif ! { [ "$status" = "pending" ] || [ "$status" = "waiting" ]; }; then
         printf 'planning lease is not awaiting a scope decision -- it is likely already owned (auto-claimed when this task'"'"'s plan file was created/edited) or settled; this bind call is unnecessary. Run "resolve" to confirm ownership instead of hand-editing .plan-files.\n' >&2
         return 1
-    }
+    fi
     write_route "$file" owned "$task_id" "" || return 1
     write_pointer "$task_id"
     printf 'planning task bound for this prompt: %s\n' "$task_id"
@@ -309,7 +324,7 @@ clarify_current() {
 }
 
 # A user-requested discussion turn retains the task while gating execution.
-# A fresh prompt must scope-check again before implementation can resume.
+# Resumption requires a fresh prompt or an explicitly authorized same-task bind.
 discuss_current() {
     local task_id=$1 identity adapter_id session_id file owned candidate
     [ "${PLANNING_DISABLED:-0}" != "1" ] && [ ! -e "$PROJECT_ROOT/.plan-files-skip" ] || return 1
@@ -330,7 +345,7 @@ discuss_current() {
     fi
     file=$(route_file "$adapter_id" "$session_id") || return 1
     write_route "$file" discussing "$task_id" "$candidate" || return 1
-    printf 'planning discussion only: %s; execution is gated until a new prompt is bound.\n' "$task_id"
+    printf 'planning discussion only: %s; execution needs a new prompt bind or an explicit same-task bind --reason "user authorization".\n' "$task_id"
 }
 
 route_status() {
@@ -436,6 +451,12 @@ candidate_context() {
     printf -v state_tool_arg '%q' "$_SCRIPT_DIR/plan_state.py"
     printf -v plan_arg '%q' "$file"
     printf -v skill_arg '%q' "$(CDPATH= cd -P -- "$_SCRIPT_DIR/.." && printf '%s/SKILL.md' "$PWD")"
+    if [ "${3:-}" = "--compact" ]; then
+        printf '%s\n' "[plan-files] Candidate task '$task_id'; text-only chat may yield without routing. Before tools, read $skill_arg and classify the request."
+        printf '%s\n' "Run PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg <verb> $task_arg: SAME=bind, DIFFERENT=release, AMBIGUOUS=clarify, DISCUSSION ONLY=discuss. Never release continuing work."
+        printf 'Goal: %.180s\n' "$goal"
+        return
+    fi
     printf '%s\n' "[plan-files] OWNERSHIP ACTION REQUIRED for this prompt. Continue/implement this plan = SAME, even after research. Resolve ownership before other tools; this is not an external blocker."
     printf '%s\n' "- SAME: run \`PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg bind $task_arg\`."
     printf '%s\n' "- DIFFERENT: first run \`PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg release $task_arg\` only for a separate goal. This may clear the candidate pointer."
@@ -507,8 +528,8 @@ case "$command" in
         mark_pending "$2" "$3" "${4:-}"
         ;;
     claim)
-        [ "$#" -eq 4 ] || exit 2
-        claim_task "$2" "$3" "$4"
+        { [ "$#" -eq 4 ] || { [ "$#" -eq 5 ] && [ "$5" = "--dry-run" ]; }; } || exit 2
+        claim_task "$2" "$3" "$4" "${5:-}"
         ;;
     resolve)
         [ "$#" -eq 3 ] || exit 2
@@ -526,9 +547,13 @@ case "$command" in
         { [ "$#" -eq 3 ] || [ "$#" -eq 4 ]; } || exit 2
         skill_loaded "$2" "$3" "${4:-check}"
         ;;
+    routing-required)
+        { [ "$#" -eq 3 ] || [ "$#" -eq 4 ]; } || exit 2
+        routing_required "$2" "$3" "${4:-check}"
+        ;;
     bind)
-        [ "$#" -eq 2 ] || exit 2
-        bind_current "$2"
+        { [ "$#" -eq 2 ] || { [ "$#" -eq 4 ] && [ "$3" = "--reason" ]; }; } || exit 2
+        bind_current "$2" "${4:-}"
         ;;
     finish)
         [ "$#" -eq 4 ] || { printf 'usage: %s finish ADAPTER_ID SESSION_ID TASK_ID\n' "$0" >&2; exit 2; }
@@ -555,8 +580,8 @@ case "$command" in
         feedback_file "$2" "$3"
         ;;
     candidate-context)
-        [ "$#" -eq 3 ] || exit 2
-        candidate_context "$2" "$3"
+        { [ "$#" -eq 3 ] || { [ "$#" -eq 4 ] && [ "$4" = "--compact" ]; }; } || exit 2
+        candidate_context "$2" "$3" "${4:-}"
         ;;
     *)
         printf 'usage: %s {bind TASK_ID|release TASK_ID|clarify TASK_ID|discuss TASK_ID|route-status ADAPTER_ID SESSION_ID|finish ADAPTER_ID SESSION_ID TASK_ID|pending ADAPTER_ID SESSION_ID [PREFERRED_TASK_ID]|claim ADAPTER_ID SESSION_ID TASK_ID|pending-candidate ADAPTER_ID SESSION_ID|resolve ADAPTER_ID SESSION_ID|cache ADAPTER_ID SESSION_ID|skill-loaded ADAPTER_ID SESSION_ID [check|mark|clear]|session-id|candidate-context TASK_ID BIND_TOOL}\n' "$0" >&2

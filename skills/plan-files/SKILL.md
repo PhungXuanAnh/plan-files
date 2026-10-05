@@ -29,7 +29,7 @@ When consolidating an existing plan, preserve evidence and uncommitted changes, 
 
 ## Start and resume
 
-The latest user request is authoritative. `.plan-files` suggests a candidate; a session lease owns it for one user prompt. A new prompt suspends the old lease even when the pointer is unchanged.
+The latest user request is authoritative. `.plan-files` suggests a candidate; a session lease owns it for one user prompt. A new prompt suspends the old lease even when the pointer is unchanged. A text-only answer without attempted operational work may yield without routing; tools still require classification.
 
 If a denial names a feedback file, read it first. **Any tool call containing that path in its arguments is allowed in full**, including nested or additional arguments. Follow the file's recovery instructions; reading it does not bind or release. The path expires when the prompt or ownership changes.
 
@@ -41,7 +41,7 @@ If a denial names a feedback file, read it first. **Any tool call containing tha
 
 An ownership denial requires routing, not an environment-blocker report. Resolve it before exploring, then retry. Never release a continuing plan just to unlock tools. Within an owned prompt, use `resolve` if uncertain; do not bind again.
 
-For `DISCUSSION ONLY`, run the supplied `discuss` command; it works on an owned plan and on a pending candidate. Reads, questions, plan maintenance, reports under the owned plan's `artifacts/`, and writes outside the plan root remain allowed; Stop may yield with unfinished work. Bind a new prompt before execution. This also permits discussing an unstarted proposal, but neither completes the plan nor excuses stopping authorized implementation.
+For `DISCUSSION ONLY`, run the supplied `discuss` command; it works on an owned plan and on a pending candidate. Reads, questions, plan maintenance, reports under the owned plan's `artifacts/`, and writes outside the plan root remain allowed; Stop may yield with unfinished work. If the user already authorized execution in this prompt, explicitly upgrade the same task with `bind <task-id> --reason "<user authorization>"`; never infer authorization from needing a tool. Otherwise bind a new prompt before execution. Discussion neither completes the plan nor excuses stopping authorized implementation.
 
 Hook messages name the absolute path of every script and document they tell you to run or read. Use the path as given; never guess an install location or search the filesystem for a skill script.
 
@@ -95,7 +95,7 @@ python3 <skill-dir>/scripts/plan_checkpoint.py --plan <task-dir>/tasks.md assert
 
 Use `plan_edit.py pause` to block/defer active work: save new decisions/findings, then settle phases, clear Active Item, sync Resume Checkpoint, and write any handoff last in one call. Read the [phase and pause commands](references/plan-operations.md) when needed.
 
-On the completion that settles the final actionable item, pass `--deactivate-pointer`. If it was omitted, use `plan_checkpoint.py deactivate-pointer --project-root <project-root>` instead of repeating `complete`. After clearing the pointer, retain the known `--plan <task-dir>/tasks.md` for final reads/checks; an empty pointer cannot resolve the plan.
+On final completion, pass `--deactivate-pointer`. If it was omitted, use `plan_checkpoint.py deactivate-pointer --project-root <project-root>` instead of repeating `complete`. For an intentional pause with all phases settled and some blocked/deferred work, use `plan_checkpoint.py park --reason ...` instead: finalization retains the candidate for resumption. Write any handoff after parking. After clearing the pointer, retain the known `--plan <task-dir>/tasks.md` for final reads/checks; an empty pointer cannot resolve the plan.
 
 ## Bounded reads and edits
 
@@ -129,7 +129,7 @@ Hooks enforce maintenance without truncation:
 
 Also keep at most 12 hot phase headings, about 100 visible items, and 15 items/4 KiB in Current Phase. Preserve Goal, current/remaining work, Active Item, exact next action/blocker, required verification, current errors/files, active decisions, and current findings. Never raw-truncate or delete unfinished/evidenced work.
 
-Compact completed notes, verification, resolved errors, and oldest non-current complete phases into `history.md`. `decisions-compact` archives superseded decisions while retaining active decisions and open questions. Phase rollover/compaction preserves a monotonic id high-water. If no complete phase is eligible, finish current work or split only an independent goal instead of raising limits.
+Compact completed notes, verification, resolved errors, and oldest non-current complete phases into `history.md`. `decisions-compact` archives superseded decisions; `decisions-consolidate` replaces explicitly selected active rows with a requirement-preserving summary while archiving originals. Neither discards open questions. For small authorized followups, `reopen --append N` reuses a complete phase without erasing evidence. Phase rollover/compaction preserves a monotonic id high-water. If no complete phase is eligible, finish current work or split only an independent goal instead of raising limits.
 
 Keep `Resume Checkpoint` current. Create `handoff.md` only when volatile pause state cannot fit there. It requires timezone-aware ISO-8601 `Updated` and `Reverify after`; ignore/re-verify it when expired or when required planning files are newer. Mark volatile results `[external-state observed=<ISO-8601> reverify-after=<ISO-8601>]` and rerun them after expiry.
 

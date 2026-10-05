@@ -28,6 +28,7 @@
 - **C - Research/Document:** stop after deliverable file/report is complete.
 
 ## Resume Checkpoint
+<!-- Optional: park adds a non-placeholder "- **Parked:** reason" here only after every phase settles with blocked/deferred work remaining. Resume/start clears it. -->
 - **Next action:** [exact next command or edit]
 - **Blocker:** none
 - **Details:** none <!-- Link handoff.md only when a short checkpoint is insufficient. -->

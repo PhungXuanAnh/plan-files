@@ -67,9 +67,12 @@ P1.1
                "CODEX_THREAD_ID": "fixture", "COPILOT_AGENT_SESSION_ID": "fixture",
                "GROK_SESSION_ID": "fixture", "GROK_WORKSPACE_ROOT": str(self.project)}
         env.pop("PLANNING_DISABLED", None)
-        return subprocess.run(args, cwd=self.project, env=env,
-                              input=json.dumps(payload) if payload else None,
-                              capture_output=True, text=True, check=check)
+        result = subprocess.run(args, cwd=self.project, env=env,
+                                input=json.dumps(payload) if payload else None,
+                                capture_output=True, text=True)
+        if check:
+            self.assertEqual(result.returncode, 0, f"{args}:\n{result.stdout}\n{result.stderr}")
+        return result
 
     def test_session_writes_add_local_git_excludes(self):
         git_dir = self.project / ".git"
@@ -119,15 +122,16 @@ P1.1
             ["python3" if event.endswith(".py") else "bash", str(ADAPTERS[provider] / event)],
             provider, {**payload, "transformedPrompt": "continue"}).stdout)
         result = result.get("hookSpecificOutput", result)
-        if provider == "grok" and event == "pre-tool-use.sh" and "reason" in result:
-            self.assertLessEqual(len(result["reason"]), 256)
+        if event == "pre-tool-use.sh" and "reason" in result:
+            if provider == "grok":
+                self.assertLessEqual(len(result["reason"]), 256)
             path = Path(self.state(provider, "feedback-file", provider, "fixture"))
             if str(path) in result["reason"]:
                 self.addCleanup(path.unlink, missing_ok=True)
                 if expand:
                     allowed = self.hook(provider, event, tool="unknown_reader",
                                         tool_input={"nested": [{"path": str(path)}]}, expand=False)
-                    self.assertEqual(allowed.get("decision"), "allow")
+                    self.assertNotIn(allowed.get("decision"), {"block", "deny"})
                     result["reason"] = path.read_text().rstrip("\n")
         return result
 
@@ -143,6 +147,65 @@ P1.1
         import re
         return next(cmd for cmd in re.findall(r"`([^`]+)`", context)
                     if cmd.endswith(f" {verb} task-a"))
+
+    def test_text_only_stop_and_explicit_discussion_upgrade(self):
+        for provider in ADAPTERS:
+            with self.subTest(provider=provider):
+                prompt = self.hook(provider, "user-prompt-submit.sh")
+                self.assertLess(len(json.dumps(prompt)), 1200)
+                self.assertEqual(self.hook(provider, "agent-stop.sh"), {})
+                self.assertEqual(self.state(provider, "pending-candidate", provider, "fixture"), "task-a")
+                self.assertIn(self.hook(provider, "pre-tool-use.sh", "touch output").get("decision"), {"block", "deny"})
+                self.assertIn(self.hook(provider, "agent-stop.sh").get("decision"), {"block", "deny"})
+                self.run_command(["bash", "-c", self.action(provider, "discuss")], provider)
+                self.assertNotEqual(self.run_command(["bash", "-c", self.action(provider, "bind")],
+                                                     provider, check=False).returncode, 0)
+                command = self.action(provider, "bind") + ' --reason "User requested the real tests in this prompt"'
+                wrong_task = command.replace(" bind task-a", " bind task-b")
+                self.assertNotEqual(self.run_command(["bash", "-c", wrong_task], provider, check=False).returncode, 0)
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", command).get("decision"), {"block", "deny"})
+                self.run_command(["bash", "-c", command], provider)
+                self.assertEqual(self.state(provider, "route-status", provider, "fixture"), "owned")
+                self.assertIn(self.hook(provider, "agent-stop.sh").get("decision"), {"block", "deny"})
+                self.hook(provider, "user-prompt-submit.sh")
+                self.assertEqual(self.hook(provider, "agent-stop.sh"), {})
+
+    def test_hook_explain_is_read_only_and_denials_shorten(self):
+        for provider in ADAPTERS:
+            with self.subTest(provider=provider):
+                self.state(provider, "pending", provider, "fixture", "task-a")
+                self.state(provider, "skill-loaded", provider, "fixture", "clear")
+                feedback = Path(self.state(provider, "feedback-file", provider, "fixture"))
+                self.addCleanup(feedback.unlink, missing_ok=True)
+                def snapshot():
+                    return {str(path): (path.read_bytes(), path.stat().st_mtime_ns)
+                            for path in [*self.project.rglob("*"), feedback] if path.is_file()}
+                for command in ("touch should-not-exist", f"cat {shlex.quote(str(SCRIPTS.parent / 'SKILL.md'))}",
+                                f"cat {shlex.quote(str(self.plan / 'findings.md'))} > {shlex.quote(str(self.tasks))}"):
+                    saved = snapshot()
+                    args = ["python3", str(SCRIPTS / "hook_explain.py"), "--provider", provider,
+                            "--command", command]
+                    explanation = json.loads(self.run_command(args, provider).stdout)
+                    self.assertEqual(snapshot(), saved)
+                    self.assertTrue(explanation["read_only"])
+                    if command.startswith("touch"):
+                        self.assertEqual(explanation["decision"], "block")
+                        self.assertIn("OWNERSHIP ACTION REQUIRED", explanation["reason"])
+                self.assertFalse((self.project / "should-not-exist").exists())
+                args[-1] = "touch should-not-exist"
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", shlex.join(args)).get("decision"), {"block", "deny"})
+                first = self.hook(provider, "pre-tool-use.sh", "touch output", expand=False)
+                second = self.hook(provider, "pre-tool-use.sh", "touch output", expand=False)
+                self.assertLessEqual(len(second["reason"]), 512)
+                self.assertIn(str(feedback), second["reason"])
+                if provider != "grok":
+                    self.assertLess(len(second["reason"]), len(first["reason"]))
+                self.assertIn("OWNERSHIP ACTION REQUIRED", feedback.read_text())
+                self.run_command(["bash", "-c", self.action(provider, "bind")], provider)
+                args[-1] = "git status --short"
+                saved = snapshot()
+                self.assertEqual(json.loads(self.run_command(args, provider).stdout)["decision"], "allow")
+                self.assertEqual(snapshot(), saved)
 
     def test_recovery_message_and_bind(self):
         # Long identity and shell-sensitive root paths exercise real output and execution.
@@ -306,8 +369,8 @@ P1.1
                 for tool, tool_input in advanced:
                     result = self.hook(provider, "pre-tool-use.sh", tool=tool, tool_input=tool_input)
                     self.assertIn(result.get("decision"), {"block", "deny"}, tool_input)
-                    # The denial has to name the recording it wants instead.
-                    self.assertIn("entry-append", result.get("reason", ""), tool_input)
+                    self.assertIn("Record decisions/findings", result.get("reason", ""), tool_input)
+                    self.assertIn('bind task-a --reason', result.get("reason", ""), tool_input)
                 # Destructive and unlocatable writes stay refused as before.
                 for tool, tool_input in (
                     ("Bash", {"command": f"rm -rf {shlex.quote(str(self.project / 'src'))}"}),
@@ -532,7 +595,8 @@ P1.1
         for provider in ADAPTERS:
             with self.subTest(provider=provider):
                 self.state(provider, "pending", provider, "fixture", "task-a")
-                blocked = self.hook(provider, "agent-stop.sh")
+                self.assertEqual(self.hook(provider, "agent-stop.sh"), {})
+                blocked = self.hook(provider, "pre-tool-use.sh", "cat README.md")
                 self.assertIn("OWNERSHIP ACTION REQUIRED", blocked["reason"])
                 # The verb that settles this must be one the message itself offered.
                 command = self.action(provider, "discuss")
@@ -584,6 +648,14 @@ P1.1
                 self.assertNotIn(self.hook(provider, "pre-tool-use.sh", tool="Write",
                                            tool_input={"file_path": str(report), "content": "x"}
                                            ).get("decision"), {"block", "deny"})
+                source = shlex.quote(str(self.plan / "findings.md"))
+                for target, allowed in ((report, True), (self.tasks, False), (other / "tasks.md", False)):
+                    for command in (f"cp {source} {shlex.quote(str(target))}",
+                                    f"cat {source} > {shlex.quote(str(target))}"):
+                        self.assertEqual(self.hook(provider, "pre-tool-use.sh", command).get("decision")
+                                         not in {"block", "deny"}, allowed, command)
+                self.assertIn(self.hook(provider, "pre-tool-use.sh", f"cp {source} {shlex.quote(str(report))}; rm app.py")
+                              .get("decision"), {"block", "deny"})
                 # The plan stays gated. A write outside every plan does not,
                 # whether or not the gate can locate it: refusing the shell form
                 # of a write the Write tool may perform is the asymmetry this
@@ -598,6 +670,19 @@ P1.1
                 self.assertIn(self.hook(provider, "pre-tool-use.sh",
                                         f"rm -rf {shlex.quote(str(self.project / 'src'))}")["decision"],
                               {"block", "deny"})
+
+    def test_settled_xargs_readers_do_not_allow_execution(self):
+        self.tasks.write_text(self.tasks.read_text().replace("\nP1.1\n", "\n")
+                              .replace("- [ ] [P1.1]", "- [x] [P1.1]")
+                              .replace("Evidence: pending", "Evidence: verified result")
+                              .replace("Status:** in_progress", "Status:** complete"))
+        for provider in ADAPTERS:
+            with self.subTest(provider=provider):
+                self.own(provider)
+                prefix = f"printf '%s\\0' {shlex.quote(str(self.tasks))} | xargs -0 "
+                for reader, allowed in (("cat", True), ("-n 1 wc", True), ("sh", False), ("sed -i s/a/b/", False)):
+                    self.assertEqual(self.hook(provider, "pre-tool-use.sh", prefix + reader).get("decision")
+                                     not in {"block", "deny"}, allowed, reader)
 
     def test_paused_phase_resume_and_discussion_artifacts(self):
         original = self.tasks.read_text()
@@ -643,6 +728,7 @@ P1.1
             with self.subTest(provider=provider):
                 self.state(provider, "pending", provider, "fixture", "task-a")
                 bind = self.action(provider, "bind")
+                self.hook(provider, "pre-tool-use.sh", "touch output")
                 for _ in range(2):
                     context = self.hook(provider, "post-tool-use.sh").get("additionalContext", "")
                     self.assertIn("ownership is unresolved", context)

@@ -17,11 +17,13 @@ Step 2 exists because Claude Code runs hooks in the session's drifting shell cwd
 
 ## Candidate versus ownership
 
+Prompt context is a short candidate notice, not a demand to operate on every chat message. A text-only turn may yield while its candidate remains pending. If PreTool rejects attempted work for unresolved routing, a prompt-scoped marker keeps Stop and PostTool recovery active until an explicit routing action succeeds. Reading the skill or running the read-only diagnostic below does not set that marker. The next prompt resets it; owned actionable work still blocks Stop.
+
 The root pointer is a human/new-session default, not authority. Session state under `tmp/plan-files/.sessions/` owns routing for a prompt. At most one agent is assumed to work a project at a time.
 
 Whenever shared session routing writes state, it adds missing exact lines `tmp/*` and `.plan-files` to `<project-root>/.git/info/exclude`, preserving existing content. This also runs for a prompt with no candidate plan. It skips roots without a `.git` directory (including worktrees with a `.git` file), and an exclude write failure does not interrupt routing. Already tracked files remain tracked.
 
-On a new user prompt, a session-aware hook suspends its prior lease and exposes only candidate Task Identity and Goal. Classify the latest request:
+On a new user prompt, a session-aware hook suspends its prior lease and exposes a short candidate notice and Goal preview. The full recovery message includes Task Identity when a tool needs routing. Classify the latest request:
 
 - `SAME`: an explicit request to resume/implement the named task is strong evidence, including research → implementation after answers or applying decisions to its handoff. Run the supplied bind command exactly before reading other plan content. A reference to a plan as an example/background does not by itself authorize continuation.
 - `DIFFERENT`: an explicit new/separate request or different id is strong evidence. Release/do not bind; never repair or compact the candidate as part of the new request.
@@ -43,7 +45,7 @@ Stable session identity and binding fail closed. A PreTool ownership response is
 
 `release` rejects a pending candidate and may clear its root pointer. It is not ordinary end-of-turn cleanup. Stop automatically calls `finish` for fully complete owned plans; blocked/deferred plans retain their resume lease. Pending candidates must be bound, released for DIFFERENT, or explicitly put into clarification wait. PreTool and Stop render the same canonical action-first contract for all four providers.
 
-For an explicitly discussion-only user request about the owned plan or workflow, run the supplied bind command with verb `discuss` instead. This retains the task under a `discussing` lease, which separates recording from advancing. PreTool permits questions, read-only diagnosis, owned-plan maintenance, recording into `decisions.md`/`findings.md`/`history.md`, explicit report writes under the owned plan's `artifacts/`, writes whose targets all lie outside every plan, and shell commands with no recognizable write — so an unfamiliar wrapper script or a network query used to answer the question is not refused for being unrecognizable, while a tool with a schema is still judged by its own name. Artifact paths resolve symlinks before classification; a link to execution state does not grant permission to change it. It blocks advancing execution state: an item checkbox, a phase status, `Current Phase`/`Active Item`, a checkpoint, `handoff.md`, a direct write to `tasks.md`, and any write whose targets cannot be located. Stop allows the answer and PostTool does not demand execution checkpoints. The next user prompt returns the lease to `pending`; rebind before execution. This is a turn scope, not a completed/blocked/deferred phase. Do not enter it merely to escape maintenance or unfinished authorized work.
+For an explicitly discussion-only user request, run the supplied command with verb `discuss`. This separates recording from advancing: questions, diagnosis, owned-plan maintenance, decisions/findings/history, reports under owned `artifacts/`, and recognized writes outside every plan remain allowed. Execution-state changes and writes whose targets cannot be located remain blocked. Paths resolve symlinks before classification. Stop allows the answer and PostTool does not demand execution checkpoints. If the current prompt already authorizes execution, explicitly upgrade the same task with the supplied bind adapter: `bind <task-id> --reason "<user authorization>"`. Plain bind still fails in discussion, another task cannot be substituted, and needing a tool is not authorization. Record any scope change before execution. Otherwise wait for the next prompt and bind it. Discussion is not completion and cannot excuse abandoning authorized work.
 
 Supported question tool names are `AskUserQuestion`, `ask_user_question`, `request_user_input`, and `request_user_input_async`, including MCP and dotted function namespace prefixes. Question tools carry zero semantic risk. In unresolved ownership they are allowed only after explicit `clarify`; plain text questions also work once that transition succeeds.
 
@@ -63,7 +65,7 @@ A direct complete-file read is valid for format repair, compaction judgment, or 
 Codex, Claude Code, Copilot, and Grok Build reuse canonical shell hook cores for resolver/session integration, common format helpers, semantic stale policy, maintenance gating, telemetry, and Stop finalization. Provider launch shims pass the provider name, session identity, and the small output-envelope differences required by each host. Provider-unique events may keep a local adapter when their input or output contract has no shared counterpart, but that adapter must delegate candidate selection and session state to the canonical scripts.
 
 - PreTool gates ambiguous ownership, an unloaded skill, invalid format/profile/item/status/restore state (including legacy plans), explicit background planning helpers, and over-budget unrelated mutations while allowing read-only diagnosis and owned-plan repair. Native Edit/Write must name a target inside the owned plan. Shell maintenance uses a scoped planning helper or the literal Markdown heredoc described below; any accompanying segments must be read-only. Arbitrary Python or shell cannot prove write scope by mentioning plan paths, even in argv. For non-shell tools with unknown schemas, a whole argument must be a path inside the plan; a path quoted inside a longer string grants nothing. Helpers resolve the owned plan from the pointer, so `--plan` is optional there. Block messages name supported repair paths.
-- PostTool repeats the routing actions while ownership is unresolved, then checks integrity, restore state, and budgets before debounce. Unresolved faults repeat every call. Healthy actionable-state and finalization advisories share semantic/time debounce with context and evidence reminders; unchanged reads and plan maintenance stay silent after the first context. It does not complete items.
+- PostTool repeats routing recovery after work was blocked for unresolved ownership, then checks integrity, restore state, and budgets before debounce. Unresolved faults repeat every call. Healthy actionable-state and finalization advisories share semantic/time debounce with context and evidence reminders; unchanged reads and plan maintenance stay silent after the first context. It does not complete items.
 - Unclassified calls retain conservative execution gating but do not accumulate early stale risk. Recognized evidence/mutations can trigger an early warning; prolonged unknown-only activity receives a conditional checkpoint review after the age limit. Neither warning proves an item is complete.
 - Stop blocks actionable or invalid plans and supplies a continuation instruction.
 
@@ -81,11 +83,24 @@ The same core mechanism can serve another adapter with a small reason budget; pr
 
 ## Early enforcement and Stop audit
 
+Repeated identical long PreTool denials use the private feedback file on all providers: uncapped hosts receive the full first reason and a recovery pointer of at most 512 characters on repeat; Grok retains its 256-character limit from the first denial. Scope transitions invalidate the file. Full instructions are retained, not truncated.
+
+To explain a decision without executing a command or changing leases, markers, logs, or feedback:
+
+```bash
+python3 <skill-dir>/scripts/hook_explain.py --provider claude \
+  --session-id <session-id> --project-root <project-root> --command 'cp findings.md report.md'
+```
+
+The session defaults to `PWF_SESSION_ID` or the corresponding provider environment when available. Output schema 1 includes `provider`, `decision`, `reason`, and `read_only`. The diagnostic invokes the actual shared PreTool policy with writes suppressed; it does not create a parallel policy or confer ownership. It can preview a prospective auto-claim but cannot reserve it against concurrent changes. The diagnostic itself is allowed before binding.
+
+Literal single-file `cp source target` and `cat source > target`/`>> target` now locate the destination, including directory destinations and symlinks, rather than treating the source plan as a write target. Compound, dynamic, recursive, or unrecognized writes stay conservative. Fixed `xargs` readers (`cat`, `head`, `tail`, `wc`, checksums, `stat`) with supported argument-count/null-input flags are read-only; `xargs sh`, mutating commands, and arbitrary flags are not. Shell gates remain hard constraints, not self-declared read-only exceptions.
+
 All three events use `planning_integrity_warning` in the canonical core; adapters only render their envelopes. Re-evaluate disk state on each tool event, including companion-file freshness. Repair calls and read-only diagnosis remain available; unrelated operational calls wait until the fault is repaired.
 
 | Condition | PreToolUse | PostToolUse | Stop |
 |---|---|---|---|
-| Pending ownership | Require a routing verb before work | Repeat the same routing actions every call | Repeat routing actions |
+| Pending ownership | Require a routing verb before work | Repeat routing recovery after a blocked attempt | Allow text-only turns; repeat routing after blocked work |
 | Malformed sections, phase headings/statuses, Current Phase, missing/unfilled profile | Block operational work, including legacy plans | Repeat bounded repair diagnostics each call | Block with full shared diagnosis |
 | Invalid Active Item, ids, evidence | Block operational work | Repeat shared diagnosis | Block |
 | Complete phase with unchecked work, stale Current Phase, hidden non-phase work | Block operational work | Repeat shared diagnosis | Block |

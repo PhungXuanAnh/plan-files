@@ -651,10 +651,28 @@ def bash_is_read_only(tool_input: object) -> bool:
     # The previous all-or-nothing bail made ordinary exploration such as
     # `cd repo && grep -n foo bar.py` look like an operational mutation, which
     # inflated the post-tool stale-checkpoint counter with pure noise.
+    if hook_diagnostic(tool_input):
+        return True
     segments = shell_segments(shell_command_text(tool_input))
     if not segments:
         return False
     return all(_segment_is_read_only(segment) for segment in segments)
+
+
+def hook_diagnostic(tool_input: object) -> bool:
+    segments = shell_segments(shell_command_text(tool_input))
+    if not segments or len(segments) != 1 or segments[0].substitutions or segments[0].terminator:
+        return False
+    try:
+        lexer = shlex.shlex(segments[0].text, posix=True, punctuation_chars=";&|()<>")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        words = list(lexer)
+    except ValueError:
+        return False
+    return (len(words) >= 2 and Path(words[0]).name in {"python", "python3"}
+            and Path(words[1]).resolve() == Path(__file__).resolve().with_name("hook_explain.py")
+            and not any(re.fullmatch(r"[;&|()<>]+", word) for word in words))
 
 
 ENV_WRAPPERS = {"env", "nohup", "setsid"}
@@ -694,6 +712,18 @@ def _segment_is_read_only(segment: Segment, allow_substitutions: bool = False) -
         return False
     executable = os.path.basename(segment.argv[start])
     operands = segment.argv[start + 1:]
+    if executable == "xargs":
+        while operands:
+            if operands[0] in {"-0", "--null", "-r", "--no-run-if-empty"}:
+                operands = operands[1:]
+            elif operands[0] in {"-n", "--max-args"} and len(operands) > 1 and operands[1].isdigit():
+                operands = operands[2:]
+            elif operands[0] == "--":
+                operands = operands[1:]
+                break
+            else:
+                break
+        return bool(operands) and operands[0] in {"cat", "head", "tail", "wc", "sha256sum", "md5sum", "stat"}
     # The documented telemetry reporter only reads local state. Match the
     # canonical file (including installation symlinks), not an arbitrary
     # project script with the same basename or inline Python mentioning it.
@@ -741,12 +771,43 @@ def _cat_heredoc_header(tool_input: object) -> bool:
 
 
 def shell_write_targets(tool_input: object) -> list[str]:
-    target = literal_heredoc_target(tool_input)
+    target = literal_heredoc_target(tool_input) or literal_copy_target(tool_input)
     if target is not None:
         return [target]
     # Even a rejected heredoc may contain patch markers as literal prose.
     # They cannot grant an invalid/mixed command the native-patch allowance.
     return [] if _cat_heredoc_header(tool_input) else mutation_targets(tool_input)
+
+
+def literal_copy_target(tool_input: object) -> str | None:
+    segments = shell_segments(shell_command_text(tool_input))
+    if not segments or len(segments) != 1 or segments[0].substitutions or segments[0].terminator:
+        return None
+    try:
+        lexer = shlex.shlex(segments[0].text, posix=True, punctuation_chars=";&|()<>")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        words = list(lexer)
+    except ValueError:
+        return None
+    if not words or any(any(char in word for char in "$`*?[{}\r\n~") for word in words):
+        return None
+    executable, operands = words[0], words[1:]
+    if operands and operands[0] == "--":
+        operands = operands[1:]
+    if executable in {"cp", "/bin/cp", "/usr/bin/cp"} and len(operands) == 2:
+        source, target = operands
+        if source.startswith("-") or target.startswith("-") or not Path(source).is_file():
+            return None
+        destination = Path(target)
+        if destination.is_dir():
+            destination /= Path(source).name
+        return str(destination)
+    if executable in {"cat", "/bin/cat", "/usr/bin/cat"} and len(operands) == 3 and operands[1] in {">", ">>"}:
+        source, _, target = operands
+        if not source.startswith("-") and Path(source).is_file() and target not in {">", ">>", "<"}:
+            return target
+    return None
 
 
 def literal_heredoc_target(tool_input: object) -> str | None:
@@ -960,8 +1021,6 @@ def _segment_routing_verb(segment: Segment, bind_tool: Path, project_root: Path,
     else:
         return None
     operands = words[index + 1:]
-    if any(word.startswith("-") for word in operands):
-        return None
     executable = Path(words[index]).name
     if executable in {"bash", "sh"}:
         if not operands:
@@ -973,6 +1032,8 @@ def _segment_routing_verb(segment: Segment, bind_tool: Path, project_root: Path,
         return None
     if os.path.realpath(script) != str(bind_tool):
         return None
+    if len(operands) == 4 and operands[0] == "bind" and operands[2] == "--reason" and operands[3].strip():
+        operands = operands[:2]
     if len(operands) != 2 or operands[0] not in ROUTING_VERBS or operands[1] != task_id:
         return None
     return operands[0]
@@ -1030,7 +1091,7 @@ def routing_verb(tool_input: object, bind_tool: Path, project_root: Path, task_i
 PLAN_RECORD_FILES = {"decisions.md", "findings.md", "history.md"}
 PLAN_LEASE_HELPERS = {"session-state.sh", "bind-session.sh", "resolve-project-root.sh"}
 CHECKPOINT_READ_OPS = {"assert-finalizable"}
-EDIT_RECORD_OPS = {"decision-supersede", "decisions-compact", "archive-phase", "compact-oldest", "archive-entry"}
+EDIT_RECORD_OPS = {"decision-supersede", "decisions-compact", "decisions-consolidate", "archive-phase", "compact-oldest", "archive-entry"}
 EDIT_FILE_OPS = {"entry-append", "entry-replace", "entry-remove", "section-replace"}
 EDIT_ADVANCE_OPS = {"phase-add", "phase-update", "phase-move", "phase-remove",
                     "item-add", "item-update", "item-move", "item-remove",
@@ -1107,7 +1168,7 @@ def _resolve_op_class(classes: set[str]) -> str:
 
 
 def _shell_plan_op_class(command: str, plan_dir: Path) -> str:
-    target = literal_heredoc_target(command)
+    target = literal_heredoc_target(command) or literal_copy_target(command)
     if target is not None:
         return _plan_file_op_class(target, plan_dir)
     segments = shell_segments(command)
@@ -1234,7 +1295,7 @@ def outside_every_plan(tool_input: object, project_root: Path) -> bool:
     user asked for may be written. Unrecognizable targets return False: a shell
     command's writes cannot be located, so it cannot be cleared this way.
     """
-    targets = mutation_targets(tool_input)
+    targets = shell_write_targets(tool_input)
     if not targets:
         return False
     roots = [Path(os.path.realpath(project_root / "tmp" / name))
@@ -1243,6 +1304,12 @@ def outside_every_plan(tool_input: object, project_root: Path) -> bool:
 
 
 def main() -> int:
+    if len(sys.argv) == 2 and sys.argv[1] == "hook-diagnostic":
+        payload = load_payload()
+        if payload is None:
+            return 1
+        name = str(payload.get("tool_name") or payload.get("toolName") or "").lower()
+        return 0 if name.rsplit("__", 1)[-1] in SHELL_TOOL_NAMES and hook_diagnostic(payload_tool_input(payload)) else 1
     if len(sys.argv) == 3 and sys.argv[1] == "outside-every-plan":
         payload = load_payload()
         if payload is None:

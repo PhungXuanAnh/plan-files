@@ -8,6 +8,12 @@ PROVIDER=${1:-}
 BIND_TOOL=${2:-}
 LABEL=${3:-$PROVIDER}
 REASON_LIMIT=${4:-0}
+EXPLAIN=${5:-}
+CLAIM_OPTIONS=()
+if [ "$EXPLAIN" = "--explain" ]; then
+    export PYTHONDONTWRITEBYTECODE=1
+    CLAIM_OPTIONS=(--dry-run)
+fi
 INPUT=$(cat)
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
@@ -24,10 +30,28 @@ cd "$(bash "$SCRIPT_DIR/resolve-project-root.sh")" 2>/dev/null || true
 
 LOG_DIR="tmp/hook-logs/plan-files"
 LOG_FILE="$LOG_DIR/pre-tool-use.log"
-planning_prepare_log_dir "$LOG_DIR" || { LOG_FILE=/dev/null; LOG_LOCK=/dev/null; }
+if [ "$EXPLAIN" != "--explain" ]; then
+    planning_prepare_log_dir "$LOG_DIR" || { LOG_FILE=/dev/null; LOG_LOCK=/dev/null; }
+fi
 
 log() {
-    printf '[%s] provider=%s %s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$PROVIDER" "$1" >> "$LOG_FILE" 2>/dev/null || true
+    if [ "$EXPLAIN" = "--explain" ]; then
+        case "$1" in
+            *decision=*)
+                local rule=${1#*decision=} detail
+                rule=${rule%% *}
+                case "$1" in
+                    *reason=*) detail=${1#*reason=}; rule="$rule:${detail%% *}" ;;
+                esac
+                printf 'rule=%s\n' "$rule" >&2 ;;
+        esac
+        return
+    fi
+    local message=${1%% command=*}
+    if [ -n "${SESSION_ID:-}" ]; then
+        message=${message//session=$SESSION_ID/session=$(planning_privacy_key "$PROVIDER:$SESSION_ID")}
+    fi
+    printf '[%s] provider=%s %s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$PROVIDER" "$message" >> "$LOG_FILE" 2>/dev/null || true
 }
 
 json_escape() {
@@ -153,7 +177,7 @@ non_mutating_shell() {
 
 block() {
     local reason=$1
-    if [ "$REASON_LIMIT" -gt 0 ] && [ -n "${FEEDBACK_FILE:-}" ]; then
+    if [ "$EXPLAIN" != "--explain" ] && [ -n "${FEEDBACK_FILE:-}" ]; then
         if printf '%s' "$reason" | python3 "$SCRIPT_DIR/feedback_transport.py" render "$FEEDBACK_FILE" "$REASON_LIMIT"; then
             exit 0
         fi
@@ -166,13 +190,18 @@ block() {
 TOOL_NAME=$(extract_tool_name)
 TOOL_INPUT_JSON=$(extract_tool_input_json)
 log "event=PreToolUse input_bytes=${#INPUT}"
-log "tool_call tool_name=$TOOL_NAME tool_input=$TOOL_INPUT_JSON"
+log "tool_call tool_name=$TOOL_NAME"
 [ -n "$PROVIDER" ] && [ -x "$BIND_TOOL" ] || { log "decision=allow reason=invalid-adapter-config"; printf '{}'; exit 0; }
 [ "${PLANNING_DISABLED:-0}" != "1" ] && [ ! -e .plan-files-skip ] \
     || { log "decision=allow reason=planning-disabled"; printf '{}'; exit 0; }
 
 SESSION_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" session-id 2>/dev/null || true)
 [ -n "$SESSION_ID" ] || { log "decision=allow reason=no-verified-session"; printf '{}'; exit 0; }
+
+if printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" hook-diagnostic; then
+    log "decision=allow-hook-diagnostic"
+    printf '{}'; exit 0
+fi
 
 FEEDBACK_FILE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" feedback-file "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
 # Explicitly input-based: any tool carrying this session's generated feedback
@@ -194,7 +223,9 @@ SKILL_READ=false
 if [ -f "$SKILL_DOC" ] \
     && [ -n "$(printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" names-skill-doc "$SKILL_DOC" 2>/dev/null)" ]; then
     SKILL_READ=true
-    PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" skill-loaded "$PROVIDER" "$SESSION_ID" mark 2>/dev/null || true
+    if [ "$EXPLAIN" != "--explain" ]; then
+        PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" skill-loaded "$PROVIDER" "$SESSION_ID" mark 2>/dev/null || true
+    fi
     log "session=$SESSION_ID skill_read=observed tool=$TOOL_NAME"
 fi
 
@@ -227,7 +258,7 @@ if [ -n "$MUTATION_PLAN" ]; then
     else
         CLAIM_STATUS=0
         PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" claim \
-            "$PROVIDER" "$SESSION_ID" "$MUTATION_PLAN" 2>/dev/null) || CLAIM_STATUS=$?
+            "$PROVIDER" "$SESSION_ID" "$MUTATION_PLAN" "${CLAIM_OPTIONS[@]}" 2>/dev/null) || CLAIM_STATUS=$?
         if [ "$CLAIM_STATUS" -ne 0 ] || [ -z "$PLAN_DIR" ]; then
             CURRENT_SCOPE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" pending-candidate \
                 "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
@@ -279,14 +310,18 @@ if [ -z "$PLAN_DIR" ]; then
         REASON_TEXT="[plan-files] OWNERSHIP ACTION REQUIRED (not a permission failure and not an external blocker). Candidate '$CANDIDATE' is pending for this prompt. Do not stop or report that the environment is blocked. Resolve ownership now by running exactly one action: SAME task -> $EXPECTED_BIND OR DIFFERENT task -> $EXPECTED_RELEASE. After bind/release succeeds, retry the original tool call."
     fi
     log "session=$SESSION_ID candidate=$CANDIDATE decision=block-ownership tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
+    if [ "$EXPLAIN" != "--explain" ]; then
+        PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" routing-required "$PROVIDER" "$SESSION_ID" mark 2>/dev/null || true
+    fi
     block "$REASON_TEXT"
 fi
 
-# Discussion is explicit, prompt-scoped, and cannot enable execution.
+# Discussion needs an explicit same-task bind with authorization before execution.
 printf -v project_root_arg '%q' "$PWD"
 printf -v bind_tool_arg '%q' "$BIND_TOOL"
 printf -v task_arg '%q' "$(basename "$PLAN_DIR")"
 EXPECTED_DISCUSS="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg discuss $task_arg"
+EXPECTED_ACTIVATE="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg bind $task_arg --reason \"user authorization for execution\""
 OWNED_ROUTING=$(routing_verb "$(basename "$PLAN_DIR")")
 BACKGROUND_WARN=$(printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" planning-background-warning)
 [ -z "$BACKGROUND_WARN" ] || block "$BACKGROUND_WARN"
@@ -299,17 +334,18 @@ if [ "$OWNED_ROUTING" = "discuss" ]; then
     printf '{}'; exit 0
 fi
 if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION_ID")" = "discussing" ]; then
+    if [ "$OWNED_ROUTING" = "bind" ]; then
+        printf '{}'; exit 0
+    fi
     # A discussion turn records; it does not advance. The lease protects the
     # plan's execution state, not the filesystem, so the decision or finding the
     # turn produces must be writable or the answer is lost -- while checking an
     # item off, moving a phase, writing a checkpoint or handoff, or writing
     # tasks.md directly is work that Stop and PostTool deliberately stop
     # accounting for under this lease, and would land unrecorded.
-    printf -v edit_arg '%q' "$SCRIPT_DIR/plan_edit.py"
-    printf -v decisions_arg '%q' "$PLAN_DIR/decisions.md"
     if [ "$(plan_op_class "$PLAN_DIR")" = "advance" ]; then
         log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=block-discussion-advance tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
-        block "[plan-files] DISCUSSION ONLY — RECORD IT, DO NOT ADVANCE IT. This call changes execution state: an item checkbox, a phase status, Current Phase/Active Item, a checkpoint, handoff.md, or a direct write inside the plan directory other than decisions.md/findings.md/history.md or artifacts/. Record what this discussion settled instead: read the fingerprint with python3 $state_arg fingerprint --file $decisions_arg, then run python3 $edit_arg --plan $plan_arg --expected-fingerprint <that sha256> entry-append --file decisions.md --heading 'Active Decisions' --entry '<decision>' (use findings.md for an observation, artifacts/ for reports). Advancing waits for the next user prompt and its bind. The candidate and unfinished work are preserved."
+        block "[plan-files] DISCUSSION ONLY — RECORD IT, DO NOT ADVANCE IT. This call changes execution state. Record decisions/findings or reports under $PLAN_DIR/artifacts instead. If this prompt already authorizes execution, run: $EXPECTED_ACTIVATE. Otherwise wait for a new user prompt. Needing a tool is not authorization; the candidate and unfinished work are preserved."
     fi
     if maintenance_tool_allowed "$PLAN_DIR"; then
         log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=allow-discussion-maintenance tool=$TOOL_NAME"
@@ -331,7 +367,7 @@ if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION
         printf '{}'; exit 0
     fi
     log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=block-discussion tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
-    block "[plan-files] DISCUSSION ONLY. This call writes and its targets cannot be located, so it cannot be shown to leave the plan alone. Allowed: reads and questions, recording into decisions.md/findings.md/history.md, owned-plan maintenance, shell commands with no recognizable write, and writes whose targets all lie outside $PWD/tmp/plan-files. Use a write tool with an explicit path for a file you mean to write. Advancing the plan waits for the next user prompt and its bind. The candidate and unfinished work are preserved."
+    block "[plan-files] DISCUSSION ONLY. This call writes and its targets cannot be located. Use a native write tool with an explicit path, a supported planning helper, or literal cp/cat report write. Reads, questions, and owned-plan records remain allowed. If this prompt already authorizes execution, run: $EXPECTED_ACTIVATE. Otherwise wait for a new user prompt."
 fi
 DISCUSSION_HINT="If the user requested only discussion of this plan/workflow, run exactly: $EXPECTED_DISCUSS. This permits a discussion Stop while keeping execution gated; do not use it to pause authorized implementation."
 

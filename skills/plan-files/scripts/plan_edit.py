@@ -709,6 +709,17 @@ def _phase_update(
         result["title"] = " ".join(title.split())
     if status is not None:
         active = state.item(state.active_item) if state.active_item else None
+        if status not in SETTLED and phase.status in SETTLED:
+            recovery = (f"resume {phase_num} --decision <authorization-row>"
+                        if phase.status in REASON_STATUSES else "reopen --title <title> --decision <authorization-row> --item <outcome>")
+            raise EditError(f"phase-update cannot reactivate settled work; use {recovery} to synchronize execution state")
+        if status == "in_progress" and not (
+            state.current_phase == phase_num and active and active.phase_num == phase_num
+        ):
+            first = next((item for item in phase.items if not item.checked), None)
+            recovery = (f"plan_checkpoint.py start {first.item_id}" if first
+                        else f"item-add --phase {phase_num} --text <outcome>, then plan_checkpoint.py start <item-id>")
+            raise EditError(f"phase-update cannot start execution; use {recovery}")
         if status in REASON_STATUSES and active and active.phase_num == phase_num:
             raise EditError(
                 f"Phase {phase_num} contains Active Item {active.item_id}; use "
@@ -1003,7 +1014,10 @@ def _parser() -> argparse.ArgumentParser:
             "step validates."
         ),
     )
-    reopen.add_argument("--title", required=True, help="title of the phase that carries the authorized work")
+    reopen_target = reopen.add_mutually_exclusive_group(required=True)
+    reopen_target.add_argument("--title", help="title of a new phase for the authorized work")
+    reopen_target.add_argument("--append", type=int, metavar="PHASE",
+                               help="append a small followup to an existing complete phase, preserving its evidence")
     reopen.add_argument(
         "--decision",
         required=True,
@@ -1046,6 +1060,11 @@ def _parser() -> argparse.ArgumentParser:
 
     decisions_compact = commands.add_parser("decisions-compact", help="archive superseded decisions; retain all active decisions and questions")
     decisions_compact.add_argument("--expected-history-fingerprint", required=True)
+
+    consolidate = commands.add_parser("decisions-consolidate", help="archive selected active rows and retain their requirements in an explicit replacement row")
+    consolidate.add_argument("--decision", action="append", required=True, help="active decision ID to consolidate; repeatable")
+    consolidate.add_argument("--replacement", required=True, help="new Active Decisions row preserving every still-active requirement")
+    consolidate.add_argument("--expected-history-fingerprint", required=True)
 
     supersede = commands.add_parser("decision-supersede", help="retire a decision into Superseded Decisions with a reason")
     supersede.add_argument("decision")
@@ -1307,14 +1326,21 @@ def _reopen_tasks(args, state) -> tuple[list[str], object, dict[str, object]]:
         items = [item.item_id for item in phase.items if not item.checked]
         if not items:
             raise EditError(f"Phase {phase.num} has no unchecked items to resume")
-        lines = _set_phase_status_lines(lines, state, phase.num, "pending", None)
+        lines = _set_phase_status_lines(lines, _validated_from_lines(args.plan, lines), phase.num, "pending", None)
         try:
             lines = plan_checkpoint.apply_start(_validated_from_lines(args.plan, lines), items[0])
         except plan_checkpoint.CheckpointError as error:
             raise EditError(str(error)) from error
         return lines, None, {"phase": phase.num, "archived_phase": None, "items": items, "item": items[0]}
 
-    lines, phase_result, archived = _phase_add(_validated_from_lines(args.plan, lines), args.title, None, None)
+    if args.append is not None:
+        phase = state.phase(args.append)
+        if not phase or phase.status != "complete":
+            raise EditError("reopen --append needs a complete phase; use resume for blocked/deferred work")
+        lines = _set_phase_status_lines(lines, _validated_from_lines(args.plan, lines), phase.num, "pending", None)
+        phase_result, archived = {"phase": phase.num, "archived_phase": None}, None
+    else:
+        lines, phase_result, archived = _phase_add(_validated_from_lines(args.plan, lines), args.title, None, None)
     phase_num = phase_result["phase"]
     lines, items = _populate_phase(args.plan, lines, phase_num, args.item, args.verify or [])
     lines = plan_checkpoint.apply_start(_validated_from_lines(args.plan, lines), items[0])
@@ -1755,16 +1781,37 @@ def _archive_entry(args, old_fingerprint: str) -> dict[str, object]:
 def _decisions_compact(args, old_fingerprint: str) -> dict[str, object]:
     target = _resolve_target(args.plan, "decisions.md")
     lines = target.read_text(encoding="utf-8").splitlines()
-    start, end = _section_bounds(lines, "Superseded Decisions")
+    consolidating = args.command == "decisions-consolidate"
+    heading = "Active Decisions" if consolidating else "Superseded Decisions"
+    start, end = _section_bounds(lines, heading)
     entries = [line for line in lines[start + 1:end] if _is_table_row(line)
                and line.strip().split("|")[1].strip() != "ID"
                and not re.fullmatch(r"[|\s:\-]+", line)]
-    if not entries:
-        raise EditError("no superseded decision rows to archive; keep active decisions and open questions hot")
-    entry = "\n".join(lines[start + 1:end]).strip()
-    candidate = _text(_replace_section(lines, "Superseded Decisions",
-        "Archived records: [history.md](history.md#decision-history).\n\n"
-        "| ID | Old Decision | Replaced By | Reason |\n|----|--------------|-------------|--------|"))
+    if consolidating:
+        replacement = args.replacement.strip()
+        replacement_id = _decision_row_cells(replacement)[0]
+        if "\n" in replacement or "\r" in replacement or replacement_id == "ID":
+            raise EditError("replacement must be one decision row with a new ID")
+        rows = {}
+        for row in entries:
+            rows.setdefault(_decision_row_cells(row)[0], []).append(row)
+        if replacement_id in rows or len(set(args.decision)) != len(args.decision):
+            raise EditError("replacement ID must be new and selected decision IDs must be unique")
+        if any(len(rows.get(decision, [])) != 1 for decision in args.decision):
+            raise EditError("each selected decision must exist exactly once in Active Decisions")
+        entries = [rows[decision][0] for decision in args.decision]
+        entry = (f"Consolidated into {replacement_id}; retained summary:\n\n{replacement}\n\n"
+                 "Original active rows:\n\n" + "\n".join(entries))
+        for row in entries:
+            lines = _edit_section_entry(lines, "entry-remove", heading, row, None)
+        candidate = _text(_edit_section_entry(lines, "entry-append", heading, replacement, None))
+    else:
+        if not entries:
+            raise EditError("no superseded decision rows to archive; keep active decisions and open questions hot")
+        entry = "\n".join(lines[start + 1:end]).strip()
+        candidate = _text(_replace_section(lines, heading,
+            "Archived records: [history.md](history.md#decision-history).\n\n"
+            "| ID | Old Decision | Replaced By | Reason |\n|----|--------------|-------------|--------|"))
     usage = _preflight_target(args.plan, target, candidate)
     marker = "<!-- Archived decisions: " + hashlib.sha256(entry.encode()).hexdigest()[:16] + " -->"
     history, history_text, history_old, already = _history_state(args.plan, args.expected_history_fingerprint, marker)
@@ -1859,7 +1906,7 @@ def _main_locked(args) -> int:
         elif args.command == "archive-entry":
             old_fingerprint = _check_expected(args.plan, args.expected_fingerprint)
             payload = _archive_entry(args, old_fingerprint)
-        elif args.command == "decisions-compact":
+        elif args.command in {"decisions-compact", "decisions-consolidate"}:
             old_fingerprint = _check_expected(_resolve_target(args.plan, "decisions.md"), args.expected_fingerprint)
             _validated_state(args.plan)
             payload = _decisions_compact(args, old_fingerprint)

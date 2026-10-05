@@ -211,6 +211,8 @@ assert_eq "$(stop_hook grok-a shutdown true)" '{}' "shutdown Stop is a no-op"
 assert_eq "$(state resolve grok grok-a)" "$PROJECT/tmp/plan-files/task-a" "shutdown preserves lease"
 printf 'task-a\n' > "$PROJECT/.plan-files"
 state pending grok grok-pending task-a >/dev/null
+assert_eq "$(stop_hook grok-pending end_turn false)" '{}' "text-only pending Stop may yield"
+assert_contains "$(pre_command grok-pending 'touch output')" 'deny' "attempted pending work requires routing"
 PENDING_STOP=$(stop_hook grok-pending end_turn false)
 assert_contains "$PENDING_STOP" '## Task Identity' "pending Stop repeats candidate identity"
 assert_contains "$PENDING_STOP" "$EXPECTED_BIND" "pending Stop includes executable bind command"

@@ -52,7 +52,7 @@ P2.1
 
 Only current/incomplete work stays detailed. The old phase is one line because its evidence has moved to history.
 
-On a new prompt, ownership hooks expose only the Task Identity and Goal above. A request to continue `AUTH-421` is `SAME`, so the agent runs the supplied bind command; a report-performance request is `DIFFERENT` even if it touches the same auth module; only unclear wording requires a question.
+On a new prompt, ownership hooks expose a short candidate notice and Goal preview; a denied operational attempt supplies full Task Identity and routing recovery. A request to continue `AUTH-421` is `SAME`, so the agent binds; a report-performance request is `DIFFERENT` even if it touches the same auth module; only unclear wording requires a question. A purely textual answer needs no routing command.
 
 If that task began as research with “production implementation” under Non-goals, “Here are the lead's answers; implement this plan” is also SAME. Bind, record the authorization and answers, revise the outdated scope/profile and pending phases, then implement. Keep unrelated restrictions. By contrast, “Use AUTH-421 as an example while reviewing the planning hooks” names the task as background and does not ask to continue its implementation.
 
@@ -184,7 +184,13 @@ If old findings contain `## Phase 5 Evidence`, preserve its useful detail in a l
 
 ## Answering a question without owning the plan
 
-The user asks why the last run behaved a certain way, and the prompt hook reports a pending candidate. This is neither SAME, DIFFERENT, nor AMBIGUOUS: nothing is being implemented and nothing needs clarifying. Run the `discuss` command the message offers, answer, and stop. A requested report can be written with native Write/Edit to `artifacts/report.md` inside the owned plan; helper previews with `--dry-run` and read-only command chains remain available. Execution stays gated and the candidate pointer survives for the next prompt.
+The user asks why the last run behaved a certain way, and the prompt hook reports a pending candidate. If the answer needs no tools, answer and stop without binding. To inspect or record the plan, run `discuss` first. A report may use native Write/Edit under owned `artifacts/`, or a literal `cp findings.md <outside-report.md>`; helper previews and fixed `xargs cat` readers remain available. If the same prompt also asked for real implementation/tests, use `bind <task-id> --reason "user requested implementation/tests"` before advancing. Merely wanting a tool is not permission to upgrade.
+
+## Small followups and intentional pauses
+
+For a three-sentence correction within a complete phase, reuse the hash from `overview` and call `reopen --append 2 --decision '<authorization row>' --item 'The corrected text passes the requested check'`. Perform the edit and check, then `complete <returned-item> --evidence '<actual result>' --deactivate-pointer`. Existing phase evidence survives; no extra phase or ceremonial verification item is required. Final restore/finalization checks still apply.
+
+For “continue after approval,” first `pause --all-remaining --status blocked --reason 'Waiting for approval'`, then `plan_checkpoint.py park --reason 'Resume when approval arrives'`. The candidate stays discoverable and `assert-finalizable` succeeds without clearing it. Write a handoff last if needed. A later authorized `resume N --decision ...` clears the parked marker and preserves original IDs and partial evidence.
 
 ## First operational call in a session
 

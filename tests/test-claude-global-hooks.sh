@@ -200,7 +200,7 @@ state pending claude drift >/dev/null
 state discuss demo >/dev/null
 output=$(cd "$DRIFTED" && printf '%s' '{"session_id":"drift","hook_event_name":"UserPromptSubmit","prompt":"go"}' \
     | CLAUDE_PROJECT_DIR="$LINKED" HOME="$MERGE_HOME" bash -c "$PROMPT_COMMAND")
-[[ $output == *"OWNERSHIP ACTION REQUIRED"* ]] || fail "drifted prompt hook emitted: $output"
+[[ $output == *"Candidate task 'demo'"* ]] || fail "drifted prompt hook emitted: $output"
 [ "$(state route-status claude drift)" = pending ] || fail "drifted prompt hook left the lease unreset"
 [ ! -e "$DRIFTED/tmp" ] || fail "drifted prompt hook wrote state under the plan directory"
 

@@ -1172,6 +1172,16 @@ def explain_issues(codes: Iterable[str], project_root: Path | None = None,
     return "; ".join(explain_issue(code, project_root, plan) for code in codes)
 
 
+def is_parked(state: PlanState) -> bool:
+    indices = _section_indices(state.lines, "## Resume Checkpoint")
+    if len(indices) != 1 or state.active_item or state.issues:
+        return False
+    body = "\n".join(_visible_body(state.lines, indices[0], _section_end(state.lines, indices[0])))
+    return (not _placeholder(_field_value(body, "Parked"))
+            and all(phase.status in SETTLED for phase in state.phases)
+            and any(phase.status in {"blocked", "deferred"} for phase in state.phases))
+
+
 def finalizability_issues(state: PlanState, project_root: Path | None = None) -> list[str]:
     issues = list(state.issues)
     if not state.phases or any(phase.status not in SETTLED for phase in state.phases):
@@ -1182,7 +1192,7 @@ def finalizability_issues(state: PlanState, project_root: Path | None = None) ->
         issues.append("ACTIVE_ITEM_INVALID")
     if project_root:
         pointer = pointer_path(project_root)
-        if pointer.is_file() and pointer.read_text(encoding="utf-8").strip() == state.path.parent.name:
+        if pointer.is_file() and pointer.read_text(encoding="utf-8").strip() == state.path.parent.name and not is_parked(state):
             issues.append("POINTER_ACTIVE")
     return list(dict.fromkeys(issues))
 

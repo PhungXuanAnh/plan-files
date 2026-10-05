@@ -32,13 +32,18 @@ post_hook() {
 }
 
 pre_hook() {
-    local provider=$1 session=$2 command=$3 script
+    local provider=$1 session=$2 command=$3 script output feedback
     case "$provider" in
         codex) script="$REPO_ROOT/.codex/hooks/plan-files/scripts/pre-tool-use.sh" ;;
         claude) script="$REPO_ROOT/.claude/hooks/plan-files/scripts/pre-tool-use.sh" ;;
         copilot) script="$REPO_ROOT/.github/hooks/scripts/pre-tool-use.sh" ;;
     esac
-    (cd "$PROJECT" && python3 -c 'import json,sys; print(json.dumps({"session_id":sys.argv[1],"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[2]}}))' "$session" "$command" | "$script")
+    output=$(cd "$PROJECT" && python3 -c 'import json,sys; print(json.dumps({"session_id":sys.argv[1],"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[2]}}))' "$session" "$command" | "$script")
+    feedback=$(PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" feedback-file "$provider" "$session")
+    case "$output" in
+        *"$feedback"*) printf '%s' "$output" | python3 -c 'import json,sys; from pathlib import Path; result=json.load(sys.stdin); result.get("hookSpecificOutput", result)["reason"]=Path(sys.argv[1]).read_text().rstrip("\n"); print(json.dumps(result))' "$feedback" ;;
+        *) printf '%s' "$output" ;;
+    esac
 }
 
 write_valid_plan() {
@@ -713,7 +718,8 @@ assert_contains "$COMPACTION_BLOCK" "even as arguments: switch to native Edit/Wr
 assert_contains "$COMPACTION_BLOCK" "$PLAN_DIR" "compaction block names owned plan directory"
 COMPACTION_LOG=$(cat "$PROJECT/tmp/hook-logs/plan-files/pre-tool-use.log")
 assert_contains "$COMPACTION_LOG" "tool_call tool_name=Bash" "pre-tool log records full tool name"
-assert_contains "$COMPACTION_LOG" 'tool_input={"command":"npm test"}' "pre-tool log records full tool parameters"
+assert_not_contains "$COMPACTION_LOG" 'tool_input=' "pre-tool log does not retain raw tool parameters"
+assert_not_contains "$COMPACTION_LOG" 'command=npm test' "pre-tool log does not retain command previews"
 assert_contains "$COMPACTION_LOG" "decision=block-compaction tool=Bash" "pre-tool log correlates blocked decision"
 CHECKPOINT_PAYLOAD=$(printf '{"session_id":"codex-compaction","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"python3 %s --plan %s progress P1.1 --evidence checkpoint"}}\n' "$CHECKPOINT_TOOL" "$PLAN_DIR/tasks.md")
 assert_eq "$(cd "$PROJECT" && printf '%s\n' "$CHECKPOINT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/plan-files/scripts/pre-tool-use.sh")" "{}" "pre-tool gate permits owned structured checkpoint"
@@ -729,7 +735,8 @@ CODEX_CANDIDATE=$(cd "$PROJECT" && printf '%s\n' '{"session_id":"codex-contract"
 CLAUDE_CANDIDATE=$(cd "$PROJECT" && printf '%s\n' '{"session_id":"claude-contract","hook_event_name":"UserPromptSubmit","prompt":"continue contract-fixture"}' | "$REPO_ROOT/.claude/hooks/plan-files/scripts/user-prompt-submit.sh")
 COPILOT_CANDIDATE=$(cd "$PROJECT" && printf '%s\n' '{"sessionId":"copilot-contract","transformedPrompt":"continue contract-fixture"}' | "$REPO_ROOT/.github/hooks/scripts/user-prompt-transformed.py")
 for OUTPUT in "$CODEX_CANDIDATE" "$CLAUDE_CANDIDATE" "$COPILOT_CANDIDATE"; do
-    assert_contains "$OUTPUT" "Task Identity" "candidate identity injection"
+    assert_contains "$OUTPUT" "Candidate task" "compact candidate identity injection"
+    assert_contains "$OUTPUT" "Goal:" "compact candidate goal preview"
 done
 PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=codex PWF_SESSION_ID=codex-contract "$STATE_TOOL" bind test-task >/dev/null
 PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=claude PWF_SESSION_ID=claude-contract "$STATE_TOOL" bind test-task >/dev/null

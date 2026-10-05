@@ -138,6 +138,45 @@ Phase 1
             self.assertNotEqual(failed.returncode, 0)
             self.assertEqual({file: file.read_bytes() for file in saved}, saved)
 
+    def test_append_followup_preserves_evidence_and_rejects_invalid_targets(self):
+        decision = "| D2 | Verify small followup | User requested followup | 2026-10-05 |"
+        for phase in (2, 9):
+            saved = {file: file.read_bytes() for file in self.plan.glob("*.md")}
+            failed = self.edit("reopen", "--append", str(phase), "--decision", decision,
+                               "--item", "Small followup verified", check=False)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertEqual({file: file.read_bytes() for file in saved}, saved)
+        result = json.loads(self.edit("reopen", "--append", "1", "--decision", decision,
+                                      "--goal", "Deliver the authorized correction.\nKeep prior verification.",
+                                      "--item", "Small followup verified").stdout)
+        state = parse_plan(self.tasks)
+        self.assertEqual((len(state.phases), state.active_item, result["item"]), (2, "P1.2", "P1.2"))
+        self.assertTrue(state.item("P1.1").checked)
+        self.assertEqual(state.item("P1.1").evidence, "local check passed")
+        self.assertTrue(restore_payload(self.tasks)["ok"])
+
+    def test_execution_status_edits_do_not_publish_unrestorable_state(self):
+        for status in ("in_progress", "pending"):
+            with self.subTest(status=status):
+                saved = self.tasks.read_bytes()
+                failed = self.edit("phase-update", "2", "--status", status, check=False)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn("resume 2 --decision", failed.stdout)
+                self.assertEqual(self.tasks.read_bytes(), saved)
+                self.assertTrue(restore_payload(self.tasks)["ok"])
+        failed = self.call("plan_checkpoint.py", "start", "P2.1", check=False)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertEqual(self.tasks.read_bytes(), saved)
+        self.edit("phase-add", "--title", "Current", "--item", "Current result", "--start")
+        self.edit("phase-add", "--title", "Next", "--item", "Next result")
+        saved = self.tasks.read_bytes()
+        failed = self.edit("phase-update", "4", "--status", "in_progress", check=False)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("start P4.1", failed.stdout)
+        self.assertEqual(self.tasks.read_bytes(), saved)
+        self.edit("phase-update", "3", "--status", "in_progress")
+        self.assertTrue(restore_payload(self.tasks)["ok"])
+
     def test_deferred_creation_is_skipped_and_active_deferral_names_pause(self):
         self.edit("phase-add", "--title", "Current", "--item", "Current result", "--start")
         failed = self.edit("phase-update", "3", "--status", "deferred", "--reason", "User postponed", check=False)
@@ -182,6 +221,61 @@ Phase 1
         self.assertEqual(history.read_text().count(old_row), 1)
         self.edit("reopen", "--title", "Next", "--decision", "| D2 | Continue | User request | 2026-10-05 |",
                   "--item", "Next result")
+
+    def test_active_decision_consolidation_is_explicit_and_recoverable(self):
+        decisions = self.plan / "decisions.md"
+        original = "| D2 | " + "retain requirement; " * 800 + " | User request | 2026-10-05 |"
+        decisions.write_text(decisions.read_text().replace("## Superseded Decisions", original + "\n## Superseded Decisions"))
+        saved = decisions.read_bytes()
+        fingerprint = hashlib.sha256(saved).hexdigest()
+        replacement = "| D3 | Retain requirement | Consolidates D2 without changing scope | 2026-10-05 |"
+        args = ("decisions-consolidate", "--decision", "D2", "--replacement", replacement,
+                "--expected-history-fingerprint", "missing")
+        for selected in ("D9", "D1"):
+            failed = self.edit("decisions-consolidate", "--decision", selected, "--replacement",
+                               replacement.replace("D3", "D1"), "--expected-history-fingerprint", "missing",
+                               fingerprint=fingerprint, check=False)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertEqual(decisions.read_bytes(), saved)
+        self.edit("--dry-run", *args, fingerprint=fingerprint)
+        self.assertEqual(decisions.read_bytes(), saved)
+        with patch.dict(os.environ, {"PWF_PLAN_EDIT_FAIL_AFTER": "history"}):
+            failed = self.edit(*args, fingerprint=fingerprint, check=False)
+        self.assertIn("injected failure after history", failed.stdout)
+        self.assertEqual(decisions.read_bytes(), saved)
+        self.edit("phase-update", "1", "--title", "Recovered")
+        self.assertIn(original, (self.plan / "history.md").read_text())
+        self.assertIn(replacement, decisions.read_text())
+        self.assertIn("| D1 | Verify locally", decisions.read_text())
+        self.assertIn("## Open Decision Questions", decisions.read_text())
+        self.assertNotIn(original, decisions.read_text())
+        self.assertLess(len(decisions.read_bytes()), 12288)
+
+    def test_park_keeps_candidate_and_resume_clears_parked_state(self):
+        saved = self.tasks.read_bytes()
+        for reason in ("none", "<reason>"):
+            self.assertNotEqual(self.call("plan_checkpoint.py", "park", "--reason", reason, check=False).returncode, 0)
+            self.assertEqual(self.tasks.read_bytes(), saved)
+        self.call("plan_checkpoint.py", "park", "--reason", "User will resume later")
+        self.call("plan_checkpoint.py", "assert-finalizable", "--project-root", self.project)
+        self.assertEqual((self.project / ".plan-files").read_text(), "work\n")
+        self.assertIn("**Parked:** User will resume later", self.tasks.read_text())
+        self.edit("resume", "2", "--decision", "| D2 | Resume followup | User authorized | 2026-10-05 |")
+        self.assertNotIn("**Parked:**", self.tasks.read_text())
+        saved = self.tasks.read_bytes()
+        self.assertNotEqual(self.call("plan_checkpoint.py", "park", "--reason", "Later", check=False).returncode, 0)
+        self.assertEqual(self.tasks.read_bytes(), saved)
+        self.assertTrue(restore_payload(self.tasks)["ok"])
+        self.assertNotEqual(self.call("plan_checkpoint.py", "assert-finalizable", "--project-root",
+                                     self.project, check=False).returncode, 0)
+
+    def test_invalid_checkpoint_candidate_never_replaces_original(self):
+        import plan_checkpoint
+        saved = self.tasks.read_bytes()
+        invalid = self.tasks.read_text().replace("- **Status:** complete", "- **Status:** in_progress").replace("[x]", "[ ]").splitlines()
+        with self.assertRaises(plan_checkpoint.CheckpointError):
+            plan_checkpoint._atomic_write(self.tasks, invalid)
+        self.assertEqual(self.tasks.read_bytes(), saved)
 
     def test_pointer_cleanup_reports_why_it_did_not_clear(self):
         pointer = self.project / ".plan-files"

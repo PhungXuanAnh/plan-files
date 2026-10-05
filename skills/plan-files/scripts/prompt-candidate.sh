@@ -29,7 +29,7 @@ if [ -z "$CANDIDATE" ]; then
     exit 0
 fi
 
-CONTEXT=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" candidate-context "$CANDIDATE" "$BIND_TOOL" 2>/dev/null || true)
+CONTEXT=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" candidate-context "$CANDIDATE" "$BIND_TOOL" --compact 2>/dev/null || true)
 if [ -z "$CONTEXT" ]; then
     exit 0
 fi

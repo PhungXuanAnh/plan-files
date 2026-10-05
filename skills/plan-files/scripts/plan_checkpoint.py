@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Iterable
 
 from plan_state import (
+    _placeholder,
     file_fingerprint,
     pointer_path,
     resolve_plan_argument,
@@ -49,9 +50,11 @@ def _replace_section_body(lines: list[str], heading: str, value: str | None) -> 
     lines[start + 1 : end] = replacement + ([""] if end < len(lines) else [])
 
 
-def _set_resume_field(lines: list[str], label: str, value: str) -> None:
+def _set_resume_field(lines: list[str], label: str, value: str | None, create: bool = False) -> None:
     indices = [index for index, line in enumerate(lines) if line.strip() == "## Resume Checkpoint"]
     if not indices:
+        if create:
+            raise CheckpointError('missing "## Resume Checkpoint" section')
         return
     if len(indices) != 1:
         raise CheckpointError('expected exactly one "## Resume Checkpoint" section')
@@ -60,10 +63,15 @@ def _set_resume_field(lines: list[str], label: str, value: str) -> None:
     prefix = f"- **{label}:**"
     matches = [index for index in range(start + 1, end) if lines[index].startswith(prefix)]
     if not matches:
+        if create and value is not None:
+            lines.insert(start + 1, f"{prefix} {value}")
         return
     if len(matches) != 1:
         raise CheckpointError(f"Resume Checkpoint must contain exactly one {prefix} field")
-    lines[matches[0]] = f"{prefix} {value}"
+    if value is None:
+        del lines[matches[0]]
+    else:
+        lines[matches[0]] = f"{prefix} {value}"
 
 
 def _next_action(item) -> str:
@@ -99,6 +107,7 @@ def _atomic_write(path: Path, lines: list[str]) -> None:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
+        _validate_for_transition(Path(temporary))
         os.chmod(temporary, mode)
         os.replace(temporary, path)
     finally:
@@ -153,6 +162,12 @@ def apply_start(state, item_id: str):
     item = state.item(item_id)
     if not item or item.checked:
         raise CheckpointError(f"{item_id} is not an unchecked contracted item")
+    phase = state.phase(item.phase_num)
+    if phase.status in SETTLED:
+        raise CheckpointError(
+            f"Phase {phase.num} is {phase.status}; use plan_edit.py resume {phase.num} --decision <authorization-row> "
+            "for paused work, or reopen for distinct new work"
+        )
     if state.active_item and state.active_item != item_id:
         raise CheckpointError(f"{state.active_item} is already active")
     if state.current_phase not in {None, item.phase_num}:
@@ -161,11 +176,11 @@ def apply_start(state, item_id: str):
             raise CheckpointError(f"Current Phase {state.current_phase} is still actionable")
 
     lines = list(state.lines)
+    _set_resume_field(lines, "Parked", None)
     _replace_section_body(lines, "## Current Phase", f"Phase {item.phase_num}")
     _replace_section_body(lines, "## Active Item", item_id)
     _set_resume_field(lines, "Next action", _next_action(item))
     _set_resume_field(lines, "Blocker", "none")
-    phase = state.phase(item.phase_num)
     if phase and phase.status == "pending":
         _set_phase_status(lines, item.phase_num, "in_progress")
     return lines
@@ -296,6 +311,25 @@ def deactivate_pointer(plan: Path, project_root: Path | None) -> dict[str, objec
     }
 
 
+def park(plan: Path, project_root: Path | None, reason: str) -> dict[str, object]:
+    state = _validate_for_transition(plan)
+    blocking = [issue for issue in finalizability_issues(state) if issue != "POINTER_ACTIVE"]
+    if blocking or not any(phase.status in {"blocked", "deferred"} for phase in state.phases):
+        raise CheckpointError("park requires all phases settled and at least one blocked/deferred phase; use pause first")
+    reason = _clean_evidence(reason)
+    if _placeholder(reason):
+        raise CheckpointError("park reason must be non-placeholder")
+    root = project_root.resolve() if project_root else resolve_project_root(plan.parent.resolve())
+    pointer = pointer_path(root)
+    if not pointer.is_file() or pointer.read_text(encoding="utf-8").strip() != plan.parent.name:
+        raise CheckpointError("park needs this task's candidate pointer; bind the task first without replacing another candidate")
+    lines = list(state.lines)
+    _set_resume_field(lines, "Parked", reason, create=True)
+    _atomic_write(plan, lines)
+    return {"operation": "park", "parked": True, "pointer": str(pointer),
+            **_fingerprints(_validate_for_transition(plan))}
+
+
 def assert_finalizable(plan: Path, project_root: Path | None) -> dict[str, object]:
     state = parse_plan(plan)
     issues = finalizability_issues(state, project_root)
@@ -355,6 +389,9 @@ def _parser() -> argparse.ArgumentParser:
         help="clear the candidate pointer for a settled plan that finished without the complete-call flag",
     )
     pointer_parser.add_argument("--project-root", type=Path, help="workspace root that owns .plan-files")
+    park_parser = subparsers.add_parser("park", help="finalize an intentional pause without losing the candidate pointer")
+    park_parser.add_argument("--reason", required=True, help="why the settled blocked/deferred task should remain discoverable")
+    park_parser.add_argument("--project-root", type=Path, help="workspace root that owns .plan-files")
     return parser
 
 
@@ -383,6 +420,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             payload = complete(args.plan, args.item, args.evidence, args.next, args.deactivate_pointer)
         elif args.command == "deactivate-pointer":
             payload = deactivate_pointer(args.plan, args.project_root)
+        elif args.command == "park":
+            payload = park(args.plan, args.project_root, args.reason)
         else:
             payload = assert_finalizable(args.plan, args.project_root)
     except (CheckpointError, OSError) as error:

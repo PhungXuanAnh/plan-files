@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deliver complete hook reasons through a private file for capped hosts."""
+"""Retain complete hook reasons while bounding capped or repeated denials."""
 
 import hashlib
 import json
@@ -84,8 +84,11 @@ def reason_label(reason: str) -> str:
 
 
 def render(path: Path, reason: str, limit: int) -> dict:
-    if len(reason) <= limit:
+    uncapped = limit == 0
+    if len(reason) <= (1024 if uncapped else limit):
         return {"decision": "block", "reason": reason}
+    repeated = valid_file(path) and path.read_text().rstrip("\n") == reason
+    limit = 512 if uncapped else limit
     if path.parent != feedback_dir() or not private_directory(create=True):
         raise ValueError("feedback directory is not private")
 
@@ -110,7 +113,7 @@ def render(path: Path, reason: str, limit: int) -> dict:
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
-    return {"decision": "block", "reason": short}
+    return {"decision": "block", "reason": reason if uncapped and not repeated else short}
 
 
 def main() -> int:

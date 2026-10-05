@@ -59,7 +59,8 @@ fi
 PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" resolve "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
 if [ -z "$PLAN_DIR" ]; then
     CANDIDATE=""
-    if [ "$PENDING_STOP_GUARD" = "1" ]; then
+    if [ "$PENDING_STOP_GUARD" = "1" ] \
+        && PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" routing-required "$PROVIDER" "$SESSION_ID" check 2>/dev/null; then
         CANDIDATE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" pending-candidate "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
     fi
     if [ -n "${CANDIDATE:-}" ]; then
