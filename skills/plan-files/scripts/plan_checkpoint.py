@@ -281,13 +281,17 @@ def deactivate_pointer(plan: Path, project_root: Path | None) -> dict[str, objec
     root = project_root.resolve() if project_root else resolve_project_root(plan.parent.resolve())
     pointer = pointer_path(root)
     cleared = False
-    if pointer.is_file() and pointer.read_text(encoding="utf-8").strip() == plan.parent.name:
+    value = pointer.read_text(encoding="utf-8").strip() if pointer.is_file() else None
+    reason = "missing" if value is None else "already_empty" if not value else "different_task"
+    if value == plan.parent.name:
         pointer.write_text("", encoding="utf-8")
         cleared = True
+        reason = "cleared"
     return {
         "operation": "deactivate-pointer",
         "pointer": str(pointer),
         "cleared": cleared,
+        "reason": reason,
         **_fingerprints(state),
     }
 

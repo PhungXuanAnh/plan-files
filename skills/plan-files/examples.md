@@ -69,7 +69,7 @@ python3 <skill-dir>/scripts/plan_edit.py --compact --expected-fingerprint <file_
   --verify "The redirect regression passes." --start
 ```
 
-For newly authorized work when every earlier phase is complete/blocked/deferred, use `reopen --title ... --decision ... --item ...` instead; it records the authorization and keeps old deferred work unchanged. Use `complete Pn.m --evidence ...` when the active outcome is true, or `pause --status blocked --reason ...` for an external dependency. Short findings prose can be edited directly; do not create a second copy of each item evidence there. After final pointer cleanup, pass the known `--plan <tasks.md>` to `assert-finalizable`.
+For distinct new work when every earlier phase is complete/blocked/deferred, use `reopen --title ... --decision ... --item ...`; it records the authorization and keeps unrelated deferred work unchanged. When the user instead resumes an existing paused phase, use `resume N --decision ...` to preserve its IDs and evidence. Add work explicitly postponed by the user with `phase-add --status deferred --reason ...`; leaving it pending makes it eligible for automatic continuation. Use `complete Pn.m --evidence ...` when the active outcome is true, or `pause --status blocked --reason ...` for an external dependency. Short findings prose can be edited directly; do not create a second copy of each item evidence there. After final pointer cleanup, pass the known `--plan <tasks.md>` to `assert-finalizable`.
 
 ## Archive during compaction
 
@@ -184,7 +184,7 @@ If old findings contain `## Phase 5 Evidence`, preserve its useful detail in a l
 
 ## Answering a question without owning the plan
 
-The user asks why the last run behaved a certain way, and the prompt hook reports a pending candidate. This is neither SAME, DIFFERENT, nor AMBIGUOUS: nothing is being implemented and nothing needs clarifying. Run the `discuss` command the message offers, answer, and stop. Execution stays gated and the candidate pointer survives for the next prompt.
+The user asks why the last run behaved a certain way, and the prompt hook reports a pending candidate. This is neither SAME, DIFFERENT, nor AMBIGUOUS: nothing is being implemented and nothing needs clarifying. Run the `discuss` command the message offers, answer, and stop. A requested report can be written with native Write/Edit to `artifacts/report.md` inside the owned plan; helper previews with `--dry-run` and read-only command chains remain available. Execution stays gated and the candidate pointer survives for the next prompt.
 
 ## First operational call in a session
 

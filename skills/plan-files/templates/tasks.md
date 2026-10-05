@@ -41,6 +41,7 @@ Required phase format:
 - **Status:** pending | in_progress | complete | blocked (external reason) | deferred (user-directed reason)
 
 Use `blocked (reason)` only for a genuine external dependency and `deferred (reason)` only when the user explicitly postpones the phase.
+Pending phases participate in automatic continuation. Add postponed work with phase-add --status deferred --reason; resume existing blocked/deferred work with resume N --decision.
 Use P IDs for work and V IDs for phase acceptance. IDs are unique and match the containing phase number.
 Use targeted plan operations for routine reads/edits. Phase add/compaction archives and evicts the oldest eligible complete phase when the 12-heading hot window needs room; never remove unfinished work to make space.
 -->

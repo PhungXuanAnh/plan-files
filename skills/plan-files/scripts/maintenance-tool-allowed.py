@@ -1030,11 +1030,11 @@ def routing_verb(tool_input: object, bind_tool: Path, project_root: Path, task_i
 PLAN_RECORD_FILES = {"decisions.md", "findings.md", "history.md"}
 PLAN_LEASE_HELPERS = {"session-state.sh", "bind-session.sh", "resolve-project-root.sh"}
 CHECKPOINT_READ_OPS = {"assert-finalizable"}
-EDIT_RECORD_OPS = {"decision-supersede", "archive-phase", "compact-oldest", "archive-entry"}
+EDIT_RECORD_OPS = {"decision-supersede", "decisions-compact", "archive-phase", "compact-oldest", "archive-entry"}
 EDIT_FILE_OPS = {"entry-append", "entry-replace", "entry-remove", "section-replace"}
 EDIT_ADVANCE_OPS = {"phase-add", "phase-update", "phase-move", "phase-remove",
                     "item-add", "item-update", "item-move", "item-remove",
-                    "reopen", "pause", "handoff-write", "handoff-clear"}
+                    "reopen", "resume", "pause", "handoff-write", "handoff-clear"}
 # Most restrictive first: one advance anywhere in a command decides it.
 OP_CLASS_ORDER = ("advance", "record", "unknown", "read")
 
@@ -1052,7 +1052,9 @@ def _plan_file_op_class(path: str, plan_dir: Path) -> str:
     """Which class a write to this path belongs to, by planning file."""
     if not inside(path, plan_dir):
         return "unknown"
-    if Path(path.replace("\\", "/")).name in PLAN_RECORD_FILES:
+    if Path(os.path.realpath(path)).name in PLAN_RECORD_FILES:
+        return "record"
+    if inside(path, plan_dir / "artifacts"):
         return "record"
     return "advance"
 

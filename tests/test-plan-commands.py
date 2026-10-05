@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "skills/plan-files/scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -112,6 +113,107 @@ Phase 1
         self.call("plan_checkpoint.py", "--plan", self.tasks, "assert-finalizable", "--project-root", self.project)
         self.assertEqual(parse_plan(self.tasks).phase(2).status, "deferred")
         self.assertEqual((self.project / ".plan-files").read_text().strip(), "")
+
+    def test_resume_preserves_ids_evidence_and_records_authorization(self):
+        self.tasks.write_text(self.tasks.read_text().replace(
+            "Evidence: pending", "Evidence: two checks already passed"))
+        saved = self.tasks.read_bytes()
+        decision = "| D2 | Resume followup | User requested | 2026-10-05 |"
+        preview = self.edit("--dry-run", "resume", "2", "--decision", decision)
+        self.assertEqual(json.loads(preview.stdout)["item"], "P2.1")
+        self.assertEqual(self.tasks.read_bytes(), saved)
+        self.assertNotIn(decision, (self.plan / "decisions.md").read_text())
+        result = json.loads(self.edit("resume", "2", "--decision", decision).stdout)
+        state = parse_plan(self.tasks)
+        self.assertEqual((state.current_phase, state.active_item, state.phase(2).status),
+                         (2, "P2.1", "in_progress"))
+        self.assertEqual(state.item("P2.1").evidence, "two checks already passed")
+        self.assertEqual(len(state.phases), 2)
+        self.assertIsNone(result["archived_phase"])
+        self.assertFalse((self.plan / "history.md").exists())
+        self.assertTrue(restore_payload(self.tasks)["ok"])
+        saved = {file: file.read_bytes() for file in self.plan.glob("*.md")}
+        for phase in (1, 2):
+            failed = self.edit("resume", str(phase), "--decision", decision, check=False)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertEqual({file: file.read_bytes() for file in saved}, saved)
+
+    def test_deferred_creation_is_skipped_and_active_deferral_names_pause(self):
+        self.edit("phase-add", "--title", "Current", "--item", "Current result", "--start")
+        failed = self.edit("phase-update", "3", "--status", "deferred", "--reason", "User postponed", check=False)
+        self.assertIn("pause --phase 3", failed.stdout)
+        saved = self.tasks.read_bytes()
+        for options in (("--status", "deferred"),
+                        ("--status", "deferred", "--reason", "User postponed", "--start")):
+            self.assertNotEqual(self.edit("phase-add", "--title", "Later", "--item", "Later result",
+                                          *options, check=False).returncode, 0)
+            self.assertEqual(self.tasks.read_bytes(), saved)
+        self.edit("phase-add", "--title", "Later", "--item", "Later result",
+                  "--status", "deferred", "--reason", "User postponed (after review)")
+        result = json.loads(self.call("plan_checkpoint.py", "complete", "P3.1", "--evidence", "Verified").stdout)
+        self.assertIsNone(result["next_item"])
+        self.assertEqual(parse_plan(self.tasks).phase(4).status, "deferred")
+        self.assertTrue(restore_payload(self.tasks)["ok"])
+
+    def test_decisions_compact_preserves_active_rows_and_recovers_history_write(self):
+        decisions = self.plan / "decisions.md"
+        history = self.plan / "history.md"
+        active = decisions.read_text().split("## Superseded Decisions")[0]
+        old_row = "| D0 | " + "x" * 12100 + " | D1 | User changed scope |"
+        decisions.write_text(active + "## Superseded Decisions\n" + old_row
+                             + "\n## Open Decision Questions\n- Keep this question.\n")
+        saved = decisions.read_bytes()
+        fingerprint = hashlib.sha256(saved).hexdigest()
+        self.edit("--dry-run", "decisions-compact", "--expected-history-fingerprint", "missing",
+                  fingerprint=fingerprint)
+        self.assertEqual(decisions.read_bytes(), saved)
+        self.assertFalse(history.exists())
+        with patch.dict(os.environ, {"PWF_PLAN_EDIT_FAIL_AFTER": "history"}):
+            failed = self.edit("decisions-compact", "--expected-history-fingerprint", "missing",
+                               fingerprint=fingerprint, check=False)
+        self.assertIn("injected failure after history", failed.stdout)
+        self.assertIn(old_row, history.read_text())
+        self.assertEqual(decisions.read_bytes(), saved)
+        self.edit("phase-update", "1", "--title", "Recovered")
+        self.assertFalse((self.plan / ".plan-edit-transaction.json").exists())
+        self.assertTrue(decisions.read_text().startswith(active))
+        self.assertIn("Keep this question.", decisions.read_text())
+        self.assertNotIn(old_row, decisions.read_text())
+        self.assertEqual(history.read_text().count(old_row), 1)
+        self.edit("reopen", "--title", "Next", "--decision", "| D2 | Continue | User request | 2026-10-05 |",
+                  "--item", "Next result")
+
+    def test_pointer_cleanup_reports_why_it_did_not_clear(self):
+        pointer = self.project / ".plan-files"
+        for value, expected in (("work\n", "cleared"), ("", "already_empty"),
+                                ("other\n", "different_task"), (None, "missing")):
+            with self.subTest(value=value):
+                if value is None:
+                    pointer.unlink()
+                else:
+                    pointer.write_text(value)
+                result = json.loads(self.call("plan_checkpoint.py", "--plan", self.tasks,
+                                              "deactivate-pointer", "--project-root", self.project).stdout)
+                self.assertEqual(result["reason"], expected)
+                self.assertEqual(result["cleared"], expected == "cleared")
+                if value == "other\n":
+                    self.assertEqual(pointer.read_text(), value)
+
+    def test_rollover_error_example_can_be_completed_and_executed(self):
+        completed = "".join(f"### Phase {number}: Earlier result\n- **Status:** complete\n"
+                            for number in range(3, 13))
+        self.tasks.write_text(self.tasks.read_text().replace("## Verification", completed + "## Verification"))
+        failed = self.edit("reopen", "--title", "Next", "--decision", "| D2 | Continue | User request | 2026-10-05 |",
+                           "--item", "Next result", check=False)
+        self.assertNotEqual(failed.returncode, 0)
+        command = json.loads(failed.stdout)["error"].split("Example: ", 1)[1]
+        for placeholder, value in {"tasks-sha256": self.sha(), "history-sha256-or-missing": "missing",
+                                   "phase title": "Next", "outcome": "Next result", "ID": "D2",
+                                   "authorization": "Continue", "reason": "User request", "date": "2026-10-05"}.items():
+            command = command.replace(f"<{placeholder}>", value)
+        result = subprocess.run(shlex.split(command), cwd=self.project, capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(result.stdout)["item"], "P13.1")
+        self.assertTrue(restore_payload(self.tasks)["ok"])
 
     def test_planning_helpers_have_zero_risk_without_hiding_other_work(self):
         helper = shlex.join(["python3", str(SCRIPTS / "plan_state.py"), "overview", str(self.tasks)])

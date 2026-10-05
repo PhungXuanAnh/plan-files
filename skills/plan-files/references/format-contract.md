@@ -60,7 +60,7 @@ Use exactly one status, either recognized inline legacy syntax or the preferred 
 - **Status:** deferred (explicit user-directed reason)
 ```
 
-Only one of those lines appears per phase. Blocked/deferred require a non-empty reason. A complete phase has no unchecked item. Blocked/deferred phases may retain unchecked outcomes.
+Only one of those lines appears per phase. Blocked/deferred require a non-empty reason, which may contain nested parentheses. A complete phase has no unchecked item. Blocked/deferred phases may retain unchecked outcomes; explicit `resume` retains those IDs and existing evidence. Pending phases are eligible for automatic continuation, while deferred phases wait for renewed authorization.
 
 Any `###` section containing work checkboxes must be a valid Phase heading. Do not hide work under Step, Task, Stage, or other headings.
 

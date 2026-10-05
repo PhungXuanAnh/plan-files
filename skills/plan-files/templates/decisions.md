@@ -8,7 +8,7 @@
 | D1 |          |           |      |
 
 ## Superseded Decisions
-<!-- Keep only history that explains the current direction; compress aggressively. -->
+<!-- Keep only history that explains the current direction; use decisions-compact to archive this section without evicting active decisions or open questions. -->
 | ID | Old Decision | Replaced By | Reason |
 |----|--------------|-------------|--------|
 

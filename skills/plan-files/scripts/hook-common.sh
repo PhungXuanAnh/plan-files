@@ -390,8 +390,8 @@ $1"
           /^### / || /^## / { flush(); in_phase=0; markers=0; next }
           !in_phase { next }
           /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*(complete|in_progress|pending)[[:space:]]*$/ { markers++; next }
-          /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*blocked[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)[[:space:]]*$/ { markers++; next }
-          /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*deferred[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)[[:space:]]*$/ { markers++; next }
+          /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*blocked[[:space:]]*\([[:space:]]*[^)[:space:]].*\)[[:space:]]*$/ { markers++; next }
+          /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*deferred[[:space:]]*\([[:space:]]*[^)[:space:]].*\)[[:space:]]*$/ { markers++; next }
           END { flush(); if (bad != "") print bad }
         ' "$_plan_file" 2>/dev/null)
     fi
@@ -694,8 +694,8 @@ print("[plan-files] RESTORE STATE ACTION REQUIRED: " + "; ".join(parts) +
 # that binds it for further work can implement, commit, and open a PR while the
 # plan still claims to be a finished research task — every gate green, nothing
 # recorded. A plan with only complete/blocked/deferred phases also has no
-# active slot for newly authorized work. Reopen adds that work while retaining
-# the old blocked/deferred phases; it never resumes them implicitly.
+# active slot for newly authorized work. Reopen adds distinct work; resume
+# explicitly continues an existing blocked/deferred phase with its IDs intact.
 # ---------------------------------------------------------------------------
 planning_settled_plan_warning() {
     local _plan_dir="${1:-}" _root="${2:-}" _plan_file _edit _checkpoint _sha _plan_arg _root_arg
@@ -709,8 +709,9 @@ planning_settled_plan_warning() {
     printf -v _plan_arg '%q' "$_plan_file"
     printf -v _root_arg '%q' "$_root"
     _sha=$(sha256sum "$_plan_file" | cut -d' ' -f1)
-    printf '[plan-files] SETTLED PLAN REOPEN REQUIRED. All %s phases in %s are settled (complete, blocked, or deferred). Newly authorized work needs its own phase; keep earlier blocked/deferred work as it is. Reopen in one call, run from %s (planning commands default --plan to this project pointer): python3 %s --compact --expected-fingerprint %s reopen --title "<phase title>" --decision "| <ID> | <what the user authorized> | <why> | <date> |" --item "<first outcome>". Add --supersede <OLD-ID> for the decision it replaces, more --item/--verify for the rest of the phase, and --goal/--deliverable/--non-goals/--profile for scope that moved. If the prompt only discusses this plan or workflow without executing its deliverable, run the discussion command instead. If no new work was authorized, finalize with python3 %s --plan %s deactivate-pointer --project-root %s, then python3 %s --plan %s assert-finalizable --project-root %s.' \
+    printf '[plan-files] SETTLED PLAN REOPEN REQUIRED. All %s phases in %s are settled (complete, blocked, or deferred). Choose resume for existing paused work or reopen for distinct new work. Reopen in one call, run from %s (planning commands default --plan to this project pointer): python3 %s --compact --expected-fingerprint %s reopen --title "<phase title>" --decision "| <ID> | <what the user authorized> | <why> | <date> |" --item "<first outcome>". Add --supersede <OLD-ID> for the decision it replaces, more --item/--verify for the rest of the phase, and --goal/--deliverable/--non-goals/--profile for scope that moved. To continue an existing blocked/deferred phase, preserve its IDs and evidence with: python3 %s --expected-fingerprint %s resume <N> --decision "| <ID> | Resume the existing work | User authorized resumption | <date> |". If the prompt only discusses this plan or workflow without executing its deliverable, run the discussion command instead. If no new work was authorized, finalize with python3 %s --plan %s deactivate-pointer --project-root %s, then python3 %s --plan %s assert-finalizable --project-root %s.' \
         "$TOTAL" "$_plan_file" "$_root" \
+        "$_edit" "$_sha" \
         "$_edit" "$_sha" \
         "$_checkpoint" "$_plan_arg" "$_root_arg" "$_checkpoint" "$_plan_arg" "$_root_arg"
 }

@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -136,6 +137,10 @@ def _recover_transaction(plan: Path) -> dict[str, object] | None:
         raise EditError("invalid or unsupported transaction journal schema")
     if journal["plan"] != plan.name or journal["history"] != "history.md":
         raise EditError("transaction journal targets do not match the owned plan directory")
+    source_name = journal.get("source_file", plan.name)
+    if not isinstance(source_name, str) or source_name not in {plan.name, "decisions.md"}:
+        raise EditError("transaction journal source is not an archivable planning file")
+    source = plan.parent / source_name
     string_fields = required - {"schema_version"}
     if any(not isinstance(journal[field], str) for field in string_fields):
         raise EditError("transaction journal fields have invalid types")
@@ -144,9 +149,9 @@ def _recover_transaction(plan: Path) -> dict[str, object] | None:
     tasks_target = hashlib.sha256(tasks_candidate.encode("utf-8")).hexdigest()
     if tasks_target != journal["tasks_fingerprint"]:
         raise EditError("transaction tasks candidate fingerprint mismatch")
-    tasks_current = file_fingerprint(plan)
+    tasks_current = file_fingerprint(source)
     if tasks_current not in {journal["tasks_old_fingerprint"], tasks_target}:
-        raise EditError("transaction recovery conflict: tasks.md matches neither old nor intended state")
+        raise EditError(f"transaction recovery conflict: {source.name} matches neither old nor intended state")
 
     history = plan.parent / "history.md"
     history_current = file_fingerprint(history) if history.is_file() else "missing"
@@ -169,8 +174,8 @@ def _recover_transaction(plan: Path) -> dict[str, object] | None:
         _atomic_write(history, history_candidate)
         recovered_boundaries.append("history")
     if tasks_current != tasks_target:
-        _atomic_write(plan, tasks_candidate)
-        recovered_boundaries.append("tasks")
+        _atomic_write(source, tasks_candidate)
+        recovered_boundaries.append(source.stem)
     _validated_state(plan)
     _clear_transaction(plan)
     return {
@@ -194,7 +199,9 @@ def _transactional_archive_write(
     history_heading: str,
     marker: str,
     archive_entry: str,
+    source: Path | None = None,
 ) -> str:
+    source = source or plan
     tasks_fingerprint = hashlib.sha256(tasks_candidate.encode("utf-8")).hexdigest()
     history_fingerprint = hashlib.sha256(history_candidate.encode("utf-8")).hexdigest()
     transaction_id = hashlib.sha256(
@@ -214,13 +221,14 @@ def _transactional_archive_write(
         "history_heading": history_heading,
         "history_marker": marker,
         "history_entry": archive_entry,
+        "source_file": source.name,
     }
     _write_transaction(plan, journal)
     _fault_after("journal")
     if not history_path.is_file() or file_fingerprint(history_path) != history_fingerprint:
         _atomic_write(history_path, history_candidate)
     _fault_after("history")
-    _atomic_write(plan, tasks_candidate)
+    _atomic_write(source, tasks_candidate)
     _fault_after("tasks")
     _validated_state(plan)
     _clear_transaction(plan)
@@ -353,7 +361,7 @@ ALLOWED_SECTIONS: dict[str, set[str]] = {
     },
     "decisions.md": {"Active Decisions", "Superseded Decisions", "Open Decision Questions"},
     "findings.md": {"Current Summary", "Requirements", "Discoveries", "Known Gotchas", "Sources", "Detail Index"},
-    "history.md": {"Completed Phases", "Verification History", "Resolved Errors"},
+    "history.md": {"Completed Phases", "Verification History", "Resolved Errors", "Decision History"},
     "handoff.md": {"Resume Checkpoint", "Working State", "Relevant Context", "Verification", "Safety"},
 }
 
@@ -365,6 +373,8 @@ HISTORY_TEMPLATE = """# History
 ## Verification History
 
 ## Resolved Errors
+
+## Decision History
 """
 
 
@@ -521,9 +531,14 @@ def _preflight_target(plan: Path, target: Path, candidate: str) -> dict[str, int
             or (new_usage["bytes"] > byte_limit and new_usage["bytes"] > old_usage["bytes"])
         )
         if worsened:
+            recovery = (
+                "; archive superseded records with decisions-compact using the decisions.md fingerprint; "
+                "consolidate active decisions with judgment if no superseded records remain"
+                if target.name == "decisions.md" else ""
+            )
             raise EditError(
                 f"edit would worsen {target.name} budget: lines={new_usage['lines']}/{line_limit}, "
-                f"bytes={new_usage['bytes']}/{byte_limit}"
+                f"bytes={new_usage['bytes']}/{byte_limit}{recovery}"
             )
     return new_usage
 
@@ -532,6 +547,8 @@ def _history_with_entry(history_text: str, heading: str, marker: str, entry: str
     if marker in history_text:
         return history_text
     lines = history_text.splitlines()
+    if heading == "Decision History" and "## Decision History" not in lines:
+        lines.extend(["", "## Decision History", ""])
     return _text(_edit_section_entry(lines, "entry-append", heading, f"{marker}\n{entry}", None))
 
 
@@ -691,6 +708,13 @@ def _phase_update(
         lines[phase.heading_index] = f"### Phase {phase_num}: {' '.join(title.split())}{suffix}"
         result["title"] = " ".join(title.split())
     if status is not None:
+        active = state.item(state.active_item) if state.active_item else None
+        if status in REASON_STATUSES and active and active.phase_num == phase_num:
+            raise EditError(
+                f"Phase {phase_num} contains Active Item {active.item_id}; use "
+                f"pause --phase {phase_num} --status {status} --reason <reason> "
+                "to synchronize Active Item and Resume Checkpoint"
+            )
         lines = _set_phase_status_lines(lines, state, phase_num, status, reason)
         result["status"] = status if status not in REASON_STATUSES else f"{status} ({' '.join((reason or '').split())})"
     return lines, result
@@ -913,6 +937,9 @@ def _parser() -> argparse.ArgumentParser:
     phase_add.add_argument("--item", action="append", default=[], help="outcome text; repeat for each work item")
     phase_add.add_argument("--verify", action="append", default=[], help="acceptance text; repeat for each verification item")
     phase_add.add_argument("--start", action="store_true", help="start the first added item atomically with the phase")
+    phase_add.add_argument("--status", choices=("pending", "deferred"), default="pending",
+                           help="pending participates in continuation; deferred waits for explicit resumption")
+    phase_add.add_argument("--reason", help="required for deferred work explicitly postponed by the user")
     phase_update = commands.add_parser(
         "phase-update", help="retitle a phase and/or set its status atomically"
     )
@@ -1009,6 +1036,16 @@ def _parser() -> argparse.ArgumentParser:
         "--expected-history-fingerprint",
         help="required only when the new phase rolls the oldest complete phase into history.md",
     )
+
+    resume = commands.add_parser("resume", help="resume a blocked/deferred phase without changing its IDs or evidence")
+    resume.add_argument("phase", type=int)
+    resume.add_argument("--decision", required=True, help="authorizing Active Decisions row, as for reopen")
+    resume.add_argument("--expected-decisions-fingerprint")
+    resume.set_defaults(goal=None, deliverable=None, non_goals=None, profile=None,
+                        supersede=None, supersede_reason=None)
+
+    decisions_compact = commands.add_parser("decisions-compact", help="archive superseded decisions; retain all active decisions and questions")
+    decisions_compact.add_argument("--expected-history-fingerprint", required=True)
 
     supersede = commands.add_parser("decision-supersede", help="retire a decision into Superseded Decisions with a reason")
     supersede.add_argument("decision")
@@ -1248,7 +1285,7 @@ def _reopen_tasks(args, state) -> tuple[list[str], object, dict[str, object]]:
     if not state.phases:
         raise EditError("reopen needs an existing plan with phases")
     actionable = [phase.num for phase in state.phases if phase.status not in SETTLED]
-    if actionable:
+    if actionable and args.command == "reopen":
         raise EditError(
             f"Phase {actionable[0]} is still actionable, so this plan is not settled; "
             "use phase-add/item-add and plan_checkpoint.py start instead"
@@ -1262,6 +1299,20 @@ def _reopen_tasks(args, state) -> tuple[list[str], object, dict[str, object]]:
         lines = _set_labelled_field(lines, "Task Identity", "Non-goals", args.non_goals)
     if args.profile:
         lines = _set_workflow_profile(lines, args.profile)
+
+    if args.command == "resume":
+        phase = state.phase(args.phase)
+        if not phase or phase.status not in REASON_STATUSES:
+            raise EditError("resume needs an existing blocked or deferred phase")
+        items = [item.item_id for item in phase.items if not item.checked]
+        if not items:
+            raise EditError(f"Phase {phase.num} has no unchecked items to resume")
+        lines = _set_phase_status_lines(lines, state, phase.num, "pending", None)
+        try:
+            lines = plan_checkpoint.apply_start(_validated_from_lines(args.plan, lines), items[0])
+        except plan_checkpoint.CheckpointError as error:
+            raise EditError(str(error)) from error
+        return lines, None, {"phase": phase.num, "archived_phase": None, "items": items, "item": items[0]}
 
     lines, phase_result, archived = _phase_add(_validated_from_lines(args.plan, lines), args.title, None, None)
     phase_num = phase_result["phase"]
@@ -1497,11 +1548,15 @@ def _phase_history_material(plan: Path, state, phase, expected: str) -> dict[str
 
 
 def _phase_add_command(args, state, old_fingerprint: str) -> dict[str, object]:
+    if args.start and args.status == "deferred":
+        raise EditError("phase-add --status deferred cannot be combined with --start; use resume when authorized")
     if args.start and not (args.item or args.verify):
         raise EditError("phase-add --start requires --item or --verify; add the outcomes in the same call")
     lines, result, archived = _phase_add(state, args.title, args.before, args.after)
     lines, items = _populate_phase(args.plan, lines, result["phase"], args.item, args.verify)
     result["items"] = items
+    lines = _set_phase_status_lines(lines, _validated_from_lines(args.plan, lines),
+                                    result["phase"], args.status, args.reason)
     if args.start:
         try:
             lines = plan_checkpoint.apply_start(_validated_from_lines(args.plan, lines), items[0])
@@ -1516,9 +1571,16 @@ def _phase_add_command(args, state, old_fingerprint: str) -> dict[str, object]:
 def _rollover_material(args, state, archived) -> dict[str, object]:
     """Validate the archival half of a rollover without writing anything."""
     if args.expected_history_fingerprint is None:
+        authorization = (
+            ' --decision "| <ID> | <authorization> | <reason> | <date> |"'
+            if args.command == "reopen" else ""
+        )
         raise EditError(
             f"{args.command} rollover requires --expected-history-fingerprint with the "
-            "current history.md SHA-256 or 'missing'"
+            f"current history.md SHA-256 or 'missing', AFTER {args.command}. Example: "
+            f"python3 {shlex.quote(str(Path(__file__).resolve()))} --plan {shlex.quote(str(args.plan))} "
+            f"--expected-fingerprint <tasks-sha256> {args.command} --expected-history-fingerprint "
+            f'<history-sha256-or-missing> --title "<phase title>" --item "<outcome>"{authorization}'
         )
     return _phase_history_material(args.plan, state, archived, args.expected_history_fingerprint)
 
@@ -1690,6 +1752,39 @@ def _archive_entry(args, old_fingerprint: str) -> dict[str, object]:
     }
 
 
+def _decisions_compact(args, old_fingerprint: str) -> dict[str, object]:
+    target = _resolve_target(args.plan, "decisions.md")
+    lines = target.read_text(encoding="utf-8").splitlines()
+    start, end = _section_bounds(lines, "Superseded Decisions")
+    entries = [line for line in lines[start + 1:end] if _is_table_row(line)
+               and line.strip().split("|")[1].strip() != "ID"
+               and not re.fullmatch(r"[|\s:\-]+", line)]
+    if not entries:
+        raise EditError("no superseded decision rows to archive; keep active decisions and open questions hot")
+    entry = "\n".join(lines[start + 1:end]).strip()
+    candidate = _text(_replace_section(lines, "Superseded Decisions",
+        "Archived records: [history.md](history.md#decision-history).\n\n"
+        "| ID | Old Decision | Replaced By | Reason |\n|----|--------------|-------------|--------|"))
+    usage = _preflight_target(args.plan, target, candidate)
+    marker = "<!-- Archived decisions: " + hashlib.sha256(entry.encode()).hexdigest()[:16] + " -->"
+    history, history_text, history_old, already = _history_state(args.plan, args.expected_history_fingerprint, marker)
+    history_candidate = _history_with_entry(history_text, "Decision History", marker, entry)
+    transaction_id = None
+    if not args.dry_run:
+        transaction_id = _transactional_archive_write(
+            plan=args.plan, source=target, operation=args.command, plan_old_fingerprint=old_fingerprint,
+            tasks_candidate=candidate, history_path=history, history_old_fingerprint=history_old,
+            history_candidate=history_candidate, history_heading="Decision History", marker=marker, archive_entry=entry,
+        )
+    return {
+        "ok": True, "operation": args.command, "dry_run": args.dry_run, "file": str(target),
+        "archived_decisions": len(entries), "old_fingerprint": old_fingerprint,
+        "fingerprint": hashlib.sha256(candidate.encode()).hexdigest(), "usage": usage,
+        "history_old_fingerprint": history_old, "history_fingerprint": hashlib.sha256(history_candidate.encode()).hexdigest(),
+        "history_already_archived": already, "transaction_id": transaction_id,
+    }
+
+
 def _bad_plan_message(plan: Path) -> str:
     """Explain the usual slip: --plan wants tasks.md, not the task directory."""
     if plan.is_dir():
@@ -1707,7 +1802,7 @@ def _main_locked(args) -> int:
         if args.command == "phase-add":
             old_fingerprint = _check_expected(args.plan, args.expected_fingerprint)
             payload = _phase_add_command(args, _validated_state(args.plan), old_fingerprint)
-        elif args.command == "reopen":
+        elif args.command in {"reopen", "resume"}:
             old_fingerprint = _check_expected(args.plan, args.expected_fingerprint)
             payload = _reopen_command(args, _validated_state(args.plan), old_fingerprint)
         elif args.command in STRUCTURAL_COMMANDS:
@@ -1764,6 +1859,10 @@ def _main_locked(args) -> int:
         elif args.command == "archive-entry":
             old_fingerprint = _check_expected(args.plan, args.expected_fingerprint)
             payload = _archive_entry(args, old_fingerprint)
+        elif args.command == "decisions-compact":
+            old_fingerprint = _check_expected(_resolve_target(args.plan, "decisions.md"), args.expected_fingerprint)
+            _validated_state(args.plan)
+            payload = _decisions_compact(args, old_fingerprint)
         elif args.command == "pause":
             old_fingerprint = _check_expected(args.plan, args.expected_fingerprint)
             payload = _pause_command(args, _validated_state(args.plan), old_fingerprint)

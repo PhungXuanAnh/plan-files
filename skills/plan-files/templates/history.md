@@ -9,3 +9,5 @@
 
 ## Resolved Errors
 - [phase] [symptom] — root cause: [cause]; resolution: [resolution]; reference: [path/link].
+
+## Decision History

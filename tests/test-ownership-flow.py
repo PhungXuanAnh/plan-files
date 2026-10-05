@@ -599,6 +599,44 @@ P1.1
                                         f"rm -rf {shlex.quote(str(self.project / 'src'))}")["decision"],
                               {"block", "deny"})
 
+    def test_paused_phase_resume_and_discussion_artifacts(self):
+        original = self.tasks.read_text()
+        artifacts = self.plan / "artifacts"
+        artifacts.mkdir()
+        (artifacts / "tasks-link.md").symlink_to(self.tasks)
+        (artifacts / "findings.md").symlink_to(self.tasks)
+        for provider in ADAPTERS:
+            with self.subTest(provider=provider):
+                self.tasks.write_text(original)
+                self.own(provider)
+                editor = ["python3", str(SCRIPTS / "plan_edit.py"), "--plan", str(self.tasks),
+                          "--expected-fingerprint", hashlib.sha256(self.tasks.read_bytes()).hexdigest()]
+                self.run_command(editor + ["pause", "--phase", "1", "--status", "blocked",
+                                           "--reason", "Waiting for user (remote access) and confirmation"], provider)
+                denied = self.hook(provider, "pre-tool-use.sh", "touch app.py")
+                self.assertNotIn("FORMAT CONTRACT VIOLATION", denied["reason"])
+                self.assertIn("resume", denied["reason"])
+                editor[-1] = hashlib.sha256(self.tasks.read_bytes()).hexdigest()
+                resume = editor + ["resume", "1", "--decision",
+                                   "| D2 | Resume original work | User authorized | 2026-10-05 |"]
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", shlex.join(resume)).get("decision"),
+                                 {"block", "deny"})
+                self.run_command(resume, provider)
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", "touch app.py").get("decision"),
+                                 {"block", "deny"})
+                self.run_command(["bash", "-c", self.action(provider, "discuss")], provider)
+                editor[-1] = hashlib.sha256(self.tasks.read_bytes()).hexdigest()
+                for command in (shlex.join(editor + ["--dry-run", "phase-update", "1", "--title", "Preview"]),
+                                "pytest -p no:cacheprovider", "git status --short; git diff --stat"):
+                    self.assertNotIn(self.hook(provider, "pre-tool-use.sh", command).get("decision"),
+                                     {"block", "deny"})
+                for target, allowed in ((artifacts / "report.md", True),
+                                        (artifacts / "findings.md", False),
+                                        (artifacts / "tasks-link.md", False), (self.tasks, False)):
+                    result = self.hook(provider, "pre-tool-use.sh", tool="Write",
+                                       tool_input={"file_path": str(target), "content": "Report"})
+                    self.assertEqual(result.get("decision") not in {"block", "deny"}, allowed)
+
     def test_posttool_reminds_unresolved_ownership(self):
         """Silence here hides a guaranteed Stop block until the turn is over."""
         for provider in ADAPTERS:
