@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterable
 
 
-PHASE_RE = re.compile(r"^### Phase\s+(\d+):\s+(.+?)(?:\s+\[(complete|in_progress|pending)\])?\s*$")
+PHASE_RE = re.compile(r"^### Phase\s+(\d+):\s+(?!.*\[(?:complete|in_progress|pending)\]\s*$)(.+?)\s*$")
 CHECKBOX_RE = re.compile(r"^- \[([ xX])\](?: \[([PV]\d+\.\d+)\])?\s+(.+)$")
 ITEM_ID_RE = re.compile(r"^[PV](\d+)\.(\d+)$")
 EVIDENCE_RE = re.compile(r"^  - Evidence:\s*(.*)$")
@@ -22,31 +22,14 @@ STATUS_RE = re.compile(r"^- \*\*Status:\*\*\s+(complete|in_progress|pending|bloc
 SETTLED = {"complete", "blocked", "deferred"}
 PLACEHOLDER_EVIDENCE = {"", "pending", "none", "n/a", "todo", "tbd"}
 PLACEHOLDER_TEXT = {"", "-", "pending", "todo", "tbd", "n/a", "na", "unknown"}
-# Pre-rename layout. Workspaces created before the plan-files rename keep their
-# state in tmp/plan-with-files/ behind a .plan-with-files pointer. New state is
-# always written under the current names; the legacy path is adopted only when
-# it is the one actually present, so existing plans stay resumable.
-LEGACY_DIR_NAME = "plan-with-files"
 
 
 def pointer_path(project_root: Path) -> Path:
-    current = project_root / ".plan-files"
-    if not current.exists():
-        legacy = project_root / f".{LEGACY_DIR_NAME}"
-        if legacy.exists():
-            return legacy
-    return current
+    return project_root / ".plan-files"
 
 
 def plan_root(project_root: Path) -> Path:
-    current = project_root / "tmp" / "plan-files"
-    if not current.is_dir():
-        legacy = project_root / "tmp" / LEGACY_DIR_NAME
-        if legacy.is_dir():
-            return legacy
-    return current
-
-
+    return project_root / "tmp" / "plan-files"
 
 
 def resolve_project_root(start: Path | None = None) -> Path:
@@ -120,10 +103,6 @@ class Phase:
     heading_index: int
     end_index: int
     items: list[Item]
-
-    @property
-    def contracted(self) -> bool:
-        return self.status not in SETTLED or any(item.item_id for item in self.items)
 
 
 @dataclass
@@ -437,17 +416,14 @@ def compact_budget_payload(plan: Path) -> dict[str, object]:
     }
 
 
-def _phase_status(lines: list[str], start: int, end: int, inline: str | None) -> str:
-    if inline:
-        return inline
-    for line in lines[start + 1 : end]:
-        match = STATUS_RE.match(line)
-        if match:
-            status, reason = match.groups()
-            if status in {"blocked", "deferred"} and not (reason or "").strip():
-                return ""
-            return status
-    return ""
+def _phase_status(lines: list[str], start: int, end: int) -> str:
+    matches = [match for line in lines[start + 1 : end] if (match := STATUS_RE.match(line))]
+    if len(matches) != 1:
+        return ""
+    status, reason = matches[0].groups()
+    if status in {"blocked", "deferred"} and not (reason or "").strip():
+        return ""
+    return status
 
 
 def _phase_items(lines: list[str], phase_num: int, start: int, end: int) -> list[Item]:
@@ -495,17 +471,16 @@ def parse_plan(path: Path) -> PlanState:
             current_phase = int(re.fullmatch(r"Phase\s+(\d+)", body[0]).group(1))  # type: ignore[union-attr]
 
     active_item: str | None = None
-    if contracted:
-        if len(active_sections) != 1 or len(current_sections) != 1 or len(phases_sections) != 1:
+    if len(active_sections) != 1 or len(current_sections) != 1 or len(phases_sections) != 1:
+        issues.append("ACTIVE_ITEM_SECTION_INVALID")
+    elif not (current_sections[0] < active_sections[0] < phases_sections[0]):
+        issues.append("ACTIVE_ITEM_SECTION_INVALID")
+    else:
+        body = _visible_body(lines, active_sections[0], _section_end(lines, active_sections[0]))
+        if len(body) > 1 or (body and not ITEM_ID_RE.fullmatch(body[0])):
             issues.append("ACTIVE_ITEM_SECTION_INVALID")
-        elif not (current_sections[0] < active_sections[0] < phases_sections[0]):
-            issues.append("ACTIVE_ITEM_SECTION_INVALID")
-        else:
-            body = _visible_body(lines, active_sections[0], _section_end(lines, active_sections[0]))
-            if len(body) > 1 or (body and not ITEM_ID_RE.fullmatch(body[0])):
-                issues.append("ACTIVE_ITEM_SECTION_INVALID")
-            elif body:
-                active_item = body[0]
+        elif body:
+            active_item = body[0]
 
     phases: list[Phase] = []
     phase_headings: list[tuple[int, re.Match[str]]] = []
@@ -516,6 +491,8 @@ def parse_plan(path: Path) -> PlanState:
             match = PHASE_RE.match(lines[index])
             if match:
                 phase_headings.append((index, match))
+            elif lines[index].startswith("### Phase"):
+                issues.append("PHASE_HEADING_INVALID")
 
     phases_end = _section_end(lines, phases_sections[0]) if len(phases_sections) == 1 else len(lines)
     for offset, (heading_index, match) in enumerate(phase_headings):
@@ -525,44 +502,41 @@ def parse_plan(path: Path) -> PlanState:
             Phase(
                 num=num,
                 title=match.group(2),
-                status=_phase_status(lines, heading_index, end_index, match.group(3)),
+                status=_phase_status(lines, heading_index, end_index),
                 heading_index=heading_index,
                 end_index=end_index,
                 items=_phase_items(lines, num, heading_index, end_index),
             )
         )
 
-    if contracted:
-        seen: set[str] = set()
-        for phase in phases:
-            if not phase.contracted:
+    seen: set[str] = set()
+    for phase in phases:
+        for item in phase.items:
+            if not item.item_id:
+                issues.append("ITEM_ID_INVALID")
                 continue
-            for item in phase.items:
-                if not item.item_id:
-                    issues.append("ITEM_ID_INVALID")
-                    continue
-                if item.item_id in seen:
-                    issues.append("ITEM_ID_DUPLICATE")
-                seen.add(item.item_id)
-                id_match = ITEM_ID_RE.fullmatch(item.item_id)
-                if not id_match or int(id_match.group(1)) != phase.num:
-                    issues.append("ITEM_PHASE_MISMATCH")
-                if item.evidence_index is None:
-                    issues.append("ITEM_EVIDENCE_MISSING")
-                if item.checked and item.evidence.strip().lower() in PLACEHOLDER_EVIDENCE:
-                    issues.append("CHECKED_ITEM_EVIDENCE_PENDING")
+            if item.item_id in seen:
+                issues.append("ITEM_ID_DUPLICATE")
+            seen.add(item.item_id)
+            id_match = ITEM_ID_RE.fullmatch(item.item_id)
+            if not id_match or int(id_match.group(1)) != phase.num:
+                issues.append("ITEM_PHASE_MISMATCH")
+            if item.evidence_index is None:
+                issues.append("ITEM_EVIDENCE_MISSING")
+            if item.checked and item.evidence.strip().lower() in PLACEHOLDER_EVIDENCE:
+                issues.append("CHECKED_ITEM_EVIDENCE_PENDING")
 
-        all_settled = bool(phases) and all(phase.status in SETTLED for phase in phases)
-        if all_settled and active_item:
+    all_settled = bool(phases) and all(phase.status in SETTLED for phase in phases)
+    if all_settled and active_item:
+        issues.append("ACTIVE_ITEM_INVALID")
+    elif active_item:
+        active = next((item for phase in phases for item in phase.items if item.item_id == active_item), None)
+        if not active or active.checked or current_phase != active.phase_num:
             issues.append("ACTIVE_ITEM_INVALID")
-        elif active_item:
-            active = next((item for phase in phases for item in phase.items if item.item_id == active_item), None)
-            if not active or active.checked or current_phase != active.phase_num:
-                issues.append("ACTIVE_ITEM_INVALID")
-        elif current_phase is not None:
-            phase = next((candidate for candidate in phases if candidate.num == current_phase), None)
-            if phase and phase.status == "in_progress" and any(not item.checked for item in phase.items):
-                issues.append("ACTIVE_ITEM_REQUIRED")
+    elif current_phase is not None:
+        phase = next((candidate for candidate in phases if candidate.num == current_phase), None)
+        if phase and phase.status == "in_progress" and any(not item.checked for item in phase.items):
+            issues.append("ACTIVE_ITEM_REQUIRED")
 
     return PlanState(
         path=path,
@@ -582,7 +556,7 @@ def progress_fingerprint(state: PlanState) -> str:
         for item in phase.items:
             canonical.append(
                 "item={}:{:d}:{}:{}".format(
-                    item.item_id or f"legacy@{item.line_index}",
+                    item.item_id or f"invalid@{item.line_index}",
                     int(item.checked),
                     item.text,
                     item.evidence,
@@ -665,6 +639,14 @@ def restore_payload(plan: Path) -> dict[str, object]:
                 }
             )
 
+    record(
+        "format",
+        not state.issues,
+        "RESTORE_FORMAT_INVALID",
+        plan,
+        "Phases",
+        "repair the current tasks format: " + "; ".join(state.issues),
+    )
     goal = _section_or_empty(plan, "Goal")
     record(
         "goal",
@@ -723,9 +705,11 @@ def restore_payload(plan: Path) -> dict[str, object]:
         and state.current_phase is None and not state.active_item
         and all(phase.status == "pending" for phase in state.phases)
     )
-    active_ok = discussion or not state.contracted or not actionable or (
-        state.active_item is not None
-        and not any(issue in state.issues for issue in ("ACTIVE_ITEM_INVALID", "ACTIVE_ITEM_REQUIRED"))
+    active_ok = state.contracted and (
+        discussion or not actionable or (
+            state.active_item is not None
+            and not any(issue in state.issues for issue in ("ACTIVE_ITEM_INVALID", "ACTIVE_ITEM_REQUIRED"))
+        )
     )
     record(
         "active_item",
@@ -1078,11 +1062,12 @@ def item_payload(plan: Path, item_id: str, max_chars: int) -> dict[str, object]:
 # One line of self-sufficient prose per code that can appear in state.issues /
 # finalizability_issues() — so an assert-finalizable/checkpoint caller never
 # has to read this file to learn what a bare code means. Codes computed only
-# on the bash side (SECTION_LAYOUT_INVALID, PHASE_HEADING_INVALID, NO_PHASES,
+# on the bash side (SECTION_LAYOUT_INVALID, NO_PHASES,
 # PHASE_STATUS_INVALID, BLOCKED_NO_REASON, DEFERRED_NO_REASON,
 # PROFILE_MISSING, PROFILE_UNFILLED) never reach this Python path and are not
 # listed here; see common.sh's task_plan_format_message for those.
 ISSUE_EXPLANATIONS: dict[str, str] = {
+    "PHASE_HEADING_INVALID": 'use "### Phase N: Title" and a separate "- **Status:**" body line',
     "ACTIVE_ITEM_SECTION_INVALID": (
         '"## Active Item" must appear exactly once, after "## Current Phase" and before '
         '"## Phases", with a body that is empty or exactly one existing "P<phase>.<n>" / '
@@ -1098,7 +1083,7 @@ ISSUE_EXPLANATIONS: dict[str, str] = {
         "is still non-empty; clear it once settled, otherwise point it at a valid unchecked ID"
     ),
     "ITEM_ID_INVALID": (
-        "a checkbox in a contracted phase has no [P<phase>.<n>] / [V<phase>.<n>] ID right "
+        "a phase checkbox has no [P<phase>.<n>] / [V<phase>.<n>] ID right "
         "after the checkbox mark"
     ),
     "ITEM_ID_DUPLICATE": "the same P/V ID is used on more than one checkbox — every ID must be unique",
@@ -1106,7 +1091,7 @@ ISSUE_EXPLANATIONS: dict[str, str] = {
         "a checkbox ID's phase number does not match the ### Phase heading it is written under"
     ),
     "ITEM_EVIDENCE_MISSING": (
-        'a checkbox in a contracted phase has no indented "  - Evidence: ..." line beneath it'
+        'a phase checkbox has no indented "  - Evidence: ..." line beneath it'
     ),
     "CHECKED_ITEM_EVIDENCE_PENDING": (
         'an item is checked "[x]" but its Evidence line is still a placeholder '

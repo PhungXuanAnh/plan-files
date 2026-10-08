@@ -116,7 +116,8 @@ P1.1
         return self.run_command(["bash", str(SCRIPTS / "session-state.sh"), *args],
                                 provider, check=check).stdout.strip()
 
-    def hook(self, provider, event, command="git status --short", tool=None, tool_input=None, expand=True):
+    def hook(self, provider, event, command="git status --short", tool=None, tool_input=None, expand=True,
+             prompt="continue tmp/plan-files/task-a/tasks.md"):
         if provider == "copilot" and event == "user-prompt-submit.sh":
             event = "user-prompt-transformed.py"
         camel = provider in {"grok", "copilot"}
@@ -129,8 +130,7 @@ P1.1
             payload["toolInput" if camel else "tool_input"] = tool_input
         result = json.loads(self.run_command(
             ["python3" if event.endswith(".py") else "bash", str(ADAPTERS[provider] / event)],
-            provider, {**payload, "prompt": "continue tmp/plan-files/task-a/tasks.md",
-                       "transformedPrompt": "continue tmp/plan-files/task-a/tasks.md"}).stdout)
+            provider, {**payload, "prompt": prompt, "transformedPrompt": prompt}).stdout)
         result = result.get("hookSpecificOutput", result)
         if event == "pre-tool-use.sh" and "reason" in result:
             if provider == "grok":
@@ -541,6 +541,13 @@ P1.1
         # Include an uncontracted legacy plan matching the reported failure.
         legacy = original.replace("## Active Item\nP1.1\n", "")
         cases = [
+            (legacy, "OUTCOME-ITEM CONTRACT VIOLATION"),
+            (original.replace("### Phase 1: Work", "### Phase 1: Work [in_progress]")
+             .replace("- **Status:** in_progress\n", ""), "FORMAT CONTRACT VIOLATION"),
+            (original.replace("- [ ] [P1.1]", "- [x]")
+             .replace("Evidence: pending", "Evidence: redirect verified")
+             .replace("- **Status:** in_progress", "- **Status:** complete")
+             .replace("## Active Item\nP1.1\n", "## Active Item\n\n"), "OUTCOME-ITEM CONTRACT VIOLATION"),
             (legacy.replace("Phase 1\n", "Phase 99\n", 1)
              .replace("**Profile:** C", "**Profile:** [A | B | C]")
              .replace("- **Status:** in_progress", "- **Status:** unknown"), "FORMAT CONTRACT VIOLATION"),
@@ -581,6 +588,22 @@ P1.1
                 self.assertIn("RESTORE STATE ACTION REQUIRED", self.hook(provider, "post-tool-use.sh")["additionalContext"])
             findings.write_text(saved)
             self.assertNotIn("RESTORE STATE ACTION REQUIRED", self.hook(provider, "post-tool-use.sh").get("additionalContext", ""))
+
+    def test_obsolete_workspace_does_not_route_or_enforce_plans(self):
+        current = self.project / "tmp/plan-files"
+        old = self.project / "tmp/plan-with-files"
+        current.rename(old)
+        (self.project / ".plan-files").rename(self.project / ".plan-with-files")
+        for provider in ADAPTERS:
+            with self.subTest(provider=provider):
+                prompt = self.hook(provider, "user-prompt-submit.sh",
+                                   prompt=f"Continue {old / 'task-a/tasks.md'}")
+                self.assertNotIn("task-a", json.dumps(prompt))
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", "touch app.py").get("decision"),
+                                 {"block", "deny"})
+                self.assertEqual(self.hook(provider, "agent-stop.sh"), {})
+                self.assertFalse((old / ".sessions").exists())
+                self.assertFalse(current.exists())
 
     def test_planning_commands_foreground_only(self):
         import shlex
@@ -981,7 +1004,8 @@ P1.1
         states = {
             "restore-incomplete": (original, "## Current Summary\n-\n"),
             "profile-unfilled": (original.replace("**Profile:** C", "**Profile:** [A | B | C]"), saved_findings),
-            "discussion-mode": (legacy.replace("Phase 1\n", "\n", 1)
+            "discussion-mode": (original.replace("## Active Item\nP1.1\n", "## Active Item\n\n")
+                                .replace("Phase 1\n", "\n", 1)
                                 .replace("- **Status:** in_progress", "- **Status:** pending"), saved_findings),
             "settled-pointer": (original.replace("- [ ] [P1.1]", "- [x] [P1.1]")
                                 .replace("Evidence: pending", "Evidence: redirect returned 302")

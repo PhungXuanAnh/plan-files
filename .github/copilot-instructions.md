@@ -7,7 +7,7 @@ This repository contains one host-neutral planning skill plus provider-specific 
 - `skills/plan-files/SKILL.md` is the compact entrypoint. It contains only routing, trust, hot-state, work-loop, checkpoint, and maintenance invariants.
 - `skills/plan-files/references/` contains conditional detail:
   - `routing-and-hooks.md` — root resolution, ownership, sessions, and provider behavior.
-  - `format-contract.md` — exact Markdown section/phase/item grammar and legacy migration.
+  - `format-contract.md` — the only supported Markdown section/phase/item grammar and repair rules.
   - `plan-operations.md` — bounded reads, fingerprinted edits, archival, schemas, and recovery.
   - `work-loop-and-maintenance.md` — continuation, waits, errors, compaction, and handoff.
   - `observing-runs.md` — privacy-safe telemetry and deterministic behavioral evaluation.

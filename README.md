@@ -23,6 +23,8 @@ For each complex task, the agent uses a workspace marker, per-session routing, a
 
 Session hooks add `tmp/*` and `.plan-files` to the project root's `.git/info/exclude` without duplicating existing entries. They skip this when `.git` is not a directory. This keeps untracked runtime files local without changing `.gitignore`.
 
+Only this layout and the [current tasks format](skills/plan-files/references/format-contract.md) are supported. The former `tmp/plan-with-files/` directory and `.plan-with-files` markers are ignored. Every plan requires `## Active Item`; every phase uses one `- **Status:**` body line, and every phase checkbox retains its ID and evidence, including completed work. Inline phase statuses are rejected.
+
 - `tasks.md` is the single authoritative plan: task identity, goal, current phase, phases/items/evidence, concise progress, errors, and verification. Its maintenance ceiling is 300 lines/24 KiB, 12 phases, about 100 visible items, and 15 items/4 KiB in Current Phase.
 - `findings.md` stores research, discoveries, and untrusted external content.
 - `decisions.md` stores user decisions, changed direction, superseded choices, and open decision questions.

@@ -29,7 +29,8 @@ P2.1
 
 ## Phases
 
-### Phase 1: Reproduce and Locate [complete]
+### Phase 1: Reproduce and Locate
+- **Status:** complete
 
 ### Phase 2: Implement Fix
 - [ ] [P2.1] The user lookup is awaited before the login decision.
@@ -50,7 +51,7 @@ P2.1
   - Evidence: pending
 ```
 
-Only current/incomplete work stays detailed. The old phase is one line because its evidence has moved to history.
+Only current/incomplete work stays detailed. The completed phase retains its heading and status because its evidence has moved to history.
 
 On a new prompt, ownership hooks expose a short candidate notice and Goal preview; a denied operational attempt supplies full Task Identity and routing recovery. A request to continue `AUTH-421` is `SAME`, so the agent binds; a report-performance request is `DIFFERENT` even if it touches the same auth module; only unclear wording requires a question. A purely textual answer needs no routing command.
 

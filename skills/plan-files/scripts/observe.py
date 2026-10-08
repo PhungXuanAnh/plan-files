@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
-from plan_state import context_payload, parse_plan
+from plan_state import active_plan_path, context_payload, parse_plan
 
 
 SCHEMA_VERSION = 1
@@ -243,18 +243,10 @@ def _rollout_metrics(path: Path) -> list[dict[str, object]]:
 def _resolve_plan(project_root: Path, explicit: Path | None) -> Path | None:
     if explicit:
         return explicit.resolve()
-    pointer = project_root / ".plan-files"
-    if not pointer.exists() and (project_root / ".plan-with-files").exists():
-        pointer = project_root / ".plan-with-files"
-    if not pointer.is_file():
+    try:
+        return active_plan_path(project_root).resolve()
+    except ValueError:
         return None
-    task_id = pointer.read_text(encoding="utf-8").strip()
-    candidate = project_root / "tmp/plan-files" / task_id / "tasks.md"
-    if not candidate.is_file():
-        legacy = project_root / "tmp/plan-with-files" / task_id / "tasks.md"
-        if legacy.is_file():
-            candidate = legacy
-    return candidate.resolve() if task_id and candidate.is_file() else None
 
 
 def _assessment(hooks: dict[str, object]) -> list[str]:

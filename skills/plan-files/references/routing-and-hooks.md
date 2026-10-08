@@ -21,6 +21,8 @@ Prompt context is a short candidate notice, not a demand to operate on every cha
 
 Session state under `tmp/plan-files/.sessions/` is the sole source of task ownership. Multiple Codex, Claude, Copilot, or Grok sessions may share one workspace while owning different task ids. A task may have at most one owner across providers. `.plan-files` marks the workspace root; its legacy contents are preserved but never select a task.
 
+Only `tmp/plan-files/`, `.plan-files`, and `.plan-files-skip` participate in discovery and disabling. The former `tmp/plan-with-files/`, `.plan-with-files`, and `.plan-with-files-skip` names are ignored, even when the current directory or marker is absent. An obsolete path in a prompt does not nominate a task or qualify as owned-plan maintenance.
+
 Whenever shared session routing writes state, it adds missing exact lines `tmp/*` and `.plan-files` to `<project-root>/.git/info/exclude`, preserving existing content. This also runs for a prompt with no candidate plan. It skips roots without a `.git` directory (including worktrees with a `.git` file), and an exclude write failure does not interrupt routing. Already tracked files remain tracked.
 
 On a new user prompt, the hook suspends this session’s execution authority while retaining its task reservation. It selects a candidate from this session’s previous task/candidate, or an exact `tmp/plan-files/<task-id>/*.md` path in the prompt. With neither, the session stays uninvolved: no candidate, plan context, or plan Stop pressure, even when other sessions own plans. A candidate produces a short notice and Goal preview. The full recovery message includes Task Identity when a tool needs routing. Classify the latest request:

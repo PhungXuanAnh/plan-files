@@ -1,6 +1,6 @@
 # Exact `tasks.md` Format Contract
 
-Read this reference before creating, migrating, or repairing a plan. Hooks use simple regular expressions, so preserve headings and field forms exactly.
+Read this reference before creating or repairing a plan. Only this format is supported. Hooks use simple regular expressions, so preserve headings and field forms exactly.
 
 ## Required section order
 
@@ -52,7 +52,7 @@ Every phase heading is inside `## Phases` and has this form:
 ### Phase 2: Implement migration
 ```
 
-Use exactly one status, either recognized inline legacy syntax or the preferred body line:
+Use exactly one status body line; inline status markers on headings are invalid:
 
 ```markdown
 - **Status:** pending
@@ -81,7 +81,7 @@ Use P ids for work and V ids for phase acceptance:
 ```
 
 - IDs are globally unique, match their containing phase number, and are never reused.
-- Every checkbox in a contracted phase has exactly one indented Evidence line.
+- Every phase checkbox, including completed work, has exactly one indented Evidence line.
 - Outcomes are falsifiable observable states, not broad activities.
 - Scope/invariants remain prose, not work checkboxes.
 - Checked evidence is concise and non-placeholder: command result, UI/API state, test result, or artifact reference.
@@ -91,16 +91,6 @@ Use P ids for work and V ids for phase acceptance:
 The immediate checkpoint barrier applies when the observable outcome becomes true, not at phase end. Use `plan_checkpoint.py` instead of editing checkbox/status/current pointers independently.
 
 The new-plan template starts with one phase and task-specific work/acceptance outcomes. Expand it only for meaningful work boundaries. For a new phase, `phase-add --item ... --verify ... --start` creates its outcomes and execution pointers together; do not first mark an empty phase in_progress.
-
-## Legacy migration
-
-A plan without `## Active Item` remains readable. Before its next implementation mutation:
-
-1. Insert Active Item immediately after Current Phase.
-2. Add stable phase-matching P/V ids and Evidence lines to current and future incomplete phases.
-3. Point Active Item at the first unchecked id in Current Phase.
-4. Keep archived completed phases compact; they need not be expanded merely to migrate.
-5. Run `plan_state.py validate` and `restore-check`.
 
 ## Restore semantics
 

@@ -9,7 +9,7 @@ Use the task folder as persistent memory. Keep current state bounded, restore it
 
 ## Core files
 
-Store private planning state under `<project-root>/tmp/plan-files/<task-id>/`:
+Store private planning state only under `<project-root>/tmp/plan-files/<task-id>/`; obsolete directories and markers are not discovered:
 
 - `tasks.md` — required trusted hot dashboard and outcome ledger.
 - `findings.md` — required discoveries, sources, and untrusted external content.
@@ -62,8 +62,8 @@ New `tasks.md` files follow [the tasks template](templates/tasks.md) and the exa
 - Keep concise non-placeholder Goal and Task Identity (`Deliverable`, `Anchors`, `Non-goals`).
 - `## Current Phase` is empty only before any phase starts; otherwise it is exactly an existing `Phase N`, including after settlement.
 - `## Active Item` is empty when no work is active or exactly one unchecked `P<phase>.<n>` / `V<phase>.<n>` id in Current Phase.
-- Each `### Phase N: Title` has exactly one `pending`, `in_progress`, `complete`, `blocked (external reason)`, or `deferred (user-directed reason)` status.
-- Every contracted checkbox has a unique phase-matching id and one indented `Evidence:` line. Checked items require concrete, non-placeholder evidence.
+- Each `### Phase N: Title` has exactly one `- **Status:**` body line with `pending`, `in_progress`, `complete`, `blocked (external reason)`, or `deferred (user-directed reason)`; inline statuses are invalid.
+- Every phase checkbox, including completed work, has a unique phase-matching id and one indented `Evidence:` line. Checked items require concrete, non-placeholder evidence.
 - `## Resume Checkpoint` names the exact next action including Active Item id, and states either `Blocker: none` or the real external dependency.
 - `## Verification`, active decisions, and current findings retain the information needed for the next action.
 

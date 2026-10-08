@@ -135,6 +135,24 @@ Phase 1
     def sha(self):
         return hashlib.sha256(self.tasks.read_bytes()).hexdigest()
 
+    def test_obsolete_tasks_format_is_rejected_without_mutation(self):
+        original = self.tasks.read_text()
+        cases = (
+            (original.replace("## Active Item\n", ""), "ACTIVE_ITEM_SECTION_INVALID"),
+            (original.replace("[P1.1] ", ""), "ITEM_ID_INVALID"),
+            (original.replace("### Phase 1: Completed verification", "### Phase 1: Completed verification [complete]")
+             .replace("- **Status:** complete\n", ""), "PHASE_HEADING_INVALID"),
+        )
+        for content, issue in cases:
+            with self.subTest(issue=issue):
+                self.tasks.write_text(content)
+                self.assertIn(issue, parse_plan(self.tasks).issues)
+                self.assertFalse(restore_payload(self.tasks)["ok"])
+                result = self.call("plan_checkpoint.py", "progress", "P1.1", "--evidence", "attempted edit", check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.tasks.read_text(), content)
+        self.tasks.write_text(original)
+
     def test_default_resolution_and_explicit_foreign_plan(self):
         other = self.plan.parent / "other"
         shutil.copytree(self.plan, other)

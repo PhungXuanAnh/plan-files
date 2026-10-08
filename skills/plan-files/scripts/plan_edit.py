@@ -21,7 +21,6 @@ from plan_state import (
     CURRENT_PHASE_ITEM_LIMIT,
     FILE_BUDGETS,
     ITEM_ID_RE,
-    PHASE_RE,
     PLACEHOLDER_EVIDENCE,
     restore_payload,
     SETTLED,
@@ -697,8 +696,7 @@ def _phase_update(
     lines = list(state.lines)
     result: dict[str, object] = {"phase": phase_num}
     if title is not None:
-        suffix = f" [{phase.status}]" if PHASE_RE.match(lines[phase.heading_index]).group(3) else ""
-        lines[phase.heading_index] = f"### Phase {phase_num}: {' '.join(title.split())}{suffix}"
+        lines[phase.heading_index] = f"### Phase {phase_num}: {' '.join(title.split())}"
         result["title"] = " ".join(title.split())
     if status is not None:
         active = state.item(state.active_item) if state.active_item else None

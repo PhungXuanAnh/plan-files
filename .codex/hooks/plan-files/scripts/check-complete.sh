@@ -22,13 +22,6 @@ BLOCKED=$(grep -cE '\*\*Status:\*\*[[:space:]]*blocked[[:space:]]*\([[:space:]]*
 # Deferred: only count when "(non-empty reason)" is present.
 DEFERRED=$(grep -cE '\*\*Status:\*\*[[:space:]]*deferred[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)' "$PLAN_FILE" || true)
 
-# Fallback: check for [complete] inline format if **Status:** not found
-if [ "$COMPLETE" -eq 0 ] && [ "$IN_PROGRESS" -eq 0 ] && [ "$PENDING" -eq 0 ] && [ "$BLOCKED" -eq 0 ] && [ "$DEFERRED" -eq 0 ]; then
-    COMPLETE=$(grep -c "\[complete\]" "$PLAN_FILE" || true)
-    IN_PROGRESS=$(grep -c "\[in_progress\]" "$PLAN_FILE" || true)
-    PENDING=$(grep -c "\[pending\]" "$PLAN_FILE" || true)
-fi
-
 # Default to 0 if empty
 : "${TOTAL:=0}"
 : "${COMPLETE:=0}"

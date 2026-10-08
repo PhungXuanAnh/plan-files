@@ -46,8 +46,7 @@ def project_root(start: Path | None = None) -> Path:
 
 
 def planning_root(root: Path) -> Path:
-    current, legacy = root / "tmp/plan-files", root / "tmp/plan-with-files"
-    return legacy if not current.is_dir() and legacy.is_dir() else current
+    return root / "tmp/plan-files"
 
 
 def identity() -> tuple[str, str] | None:
@@ -91,12 +90,10 @@ class SessionStore:
         self.sessions = self.plans / ".sessions"
 
     def accepts_state(self) -> bool:
-        return any(p.exists() for p in (self.root / ".plan-files", self.root / ".plan-with-files",
-                                       self.root / ".git", self.plans))
+        return any(p.exists() for p in (self.root / ".plan-files", self.root / ".git", self.plans))
 
     def enabled(self) -> None:
-        if os.environ.get("PLANNING_DISABLED") == "1" or any(
-                (self.root / name).exists() for name in (".plan-files-skip", ".plan-with-files-skip")):
+        if os.environ.get("PLANNING_DISABLED") == "1" or (self.root / ".plan-files-skip").exists():
             raise SessionError("plan-files is disabled for this project or session")
 
     def route(self, provider: str, session: str) -> Path:

@@ -101,7 +101,6 @@ planning_privacy_key() {
 
 planning_item_contract_issue() {
     local _plan_file="${1:-}" _tool _output _status=0
-    grep -qE '^## Active Item[[:space:]]*$' "$_plan_file" 2>/dev/null || return 0
     _tool=$(planning_state_tool 2>/dev/null) || { printf 'ITEM_STATE_TOOL_UNAVAILABLE'; return 0; }
     command -v python3 >/dev/null 2>&1 || { printf 'ITEM_STATE_TOOL_UNAVAILABLE'; return 0; }
     _output=$(python3 "$_tool" validate "$_plan_file" 2>/dev/null) || _status=$?
@@ -151,8 +150,6 @@ planning_assert_finalizable() {
 #                  a valid `(reason)` is NOT counted here — check_task_plan_format
 #                  will surface DEFERRED_NO_REASON for the agent-stop hook.
 #
-# Rules: scoped to phase blocks; at most one status credited per phase (heading
-# inline marker takes precedence over body marker); HTML comments are ignored.
 # ---------------------------------------------------------------------------
 count_phases() {
     local _plan_file="${1:-}"
@@ -172,9 +169,6 @@ $(awk '
   in_comment { if (/-->/) in_comment=0; next }
   /^### Phase/ {
     flush(); in_phase=1; total++; status=""
-    if      ($0 ~ /\[complete\]/)    status="complete"
-    else if ($0 ~ /\[in_progress\]/) status="in_progress"
-    else if ($0 ~ /\[pending\]/)     status="pending"
     next
   }
   /^### / || /^## / { flush(); in_phase=0; status=""; next }
@@ -187,9 +181,6 @@ $(awk '
   # Deferred: only credit when "(reason)" with at least one non-whitespace char is present.
   # Bare "deferred" or "deferred ()" is left with status="" so format check can flag it.
   /\*\*Status:\*\*[[:space:]]*deferred[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)/ { status="deferred"; next }
-  /\[complete\]/    { status="complete";    next }
-  /\[in_progress\]/ { status="in_progress"; next }
-  /\[pending\]/     { status="pending";     next }
   END { flush(); printf "%d %d %d %d %d %d", total, complete, in_progress, pending, blocked, deferred }
 ' "$_plan_file" 2>/dev/null)
 EOF
@@ -232,6 +223,9 @@ check_task_plan_format() {
     local _issues=""
 
     _fmt_add_issue() {
+        case $'\n'"$_issues"$'\n' in
+            *$'\n'"$1"$'\n'*) return ;;
+        esac
         if [ -n "$_issues" ]; then
             _issues="$_issues
 $1"
@@ -258,7 +252,8 @@ $1"
 
     if grep -E '^### Phase' "$_plan_file" 2>/dev/null \
         | grep -Ev '^### Phase[[:space:]]+[0-9]+:[[:space:]]+[^[:space:]]' \
-        | grep -q .; then
+        | grep -q . \
+        || grep -Eq '^### Phase.*\[(complete|in_progress|pending)\][[:space:]]*$' "$_plan_file"; then
         _fmt_add_issue PHASE_HEADING_INVALID
     fi
 
@@ -360,8 +355,6 @@ $1"
           in_comment { if (/-->/) in_comment=0; next }
           /^### Phase[[:space:]]+[0-9]+:[[:space:]]+/ {
             flush(); in_phase=1; markers=0
-            line=$0
-            markers += gsub(/\[(complete|in_progress|pending)\]/, "", line)
             next
           }
           /^### / || /^## / { flush(); in_phase=0; markers=0; next }
@@ -414,7 +407,7 @@ task_plan_format_message() {
             printf 'FORMAT CONTRACT VIOLATION in %s: 0 phases detected. Required heading format is exactly "### Phase N: Title" (level-3, colon, no decorations, no backticks), and each phase MUST have one recognized status. See %s > FORMAT CONTRACT. Fix the plan file headings/status markers, then continue.' "$_plan_file" "$(planning_doc_path SKILL.md)"
             ;;
         PHASE_STATUS_INVALID)
-            printf 'FORMAT CONTRACT VIOLATION in %s: every phase must have exactly one recognized inline or body status.' "$_plan_file"
+            printf 'FORMAT CONTRACT VIOLATION in %s: every phase must have exactly one recognized "- **Status:**" body line.' "$_plan_file"
             ;;
         BLOCKED_NO_REASON)
             printf 'FORMAT CONTRACT VIOLATION in %s: "**Status:** blocked" requires a non-empty parenthesised reason. Use "- **Status:** blocked (external dependency)" only when a genuine external dependency prevents progress. Do not use it to silence the hook after a transient error.' "$_plan_file"
@@ -438,7 +431,7 @@ task_plan_format_message() {
             printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: "## Active Item" names an ID that either does not exist, is already checked, or belongs to a phase other than Current Phase — or every phase is already settled while Active Item is still non-empty. If every phase is settled, clear Active Item; otherwise set it to exactly one unchecked ID that belongs to Current Phase.' "$_plan_file"
             ;;
         ITEM_ID_INVALID)
-            printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: a checkbox inside a contracted phase (one that already has "## Active Item" populated) has no "[P<phase>.<n>]" or "[V<phase>.<n>]" ID right after the checkbox mark. Add one, for example "- [ ] [P2.1] observable outcome".' "$_plan_file"
+            printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: every phase checkbox, including completed work, requires a "[P<phase>.<n>]" or "[V<phase>.<n>]" ID right after the checkbox mark. Add one, for example "- [ ] [P2.1] observable outcome".' "$_plan_file"
             ;;
         ITEM_ID_DUPLICATE)
             printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: the same P/V ID is used on more than one checkbox. Every ID must be unique across the entire plan file — renumber whichever checkbox duplicates an existing ID.' "$_plan_file"
@@ -447,7 +440,7 @@ task_plan_format_message() {
             printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: a checkbox ID phase number does not match the "### Phase N" heading it is written under (for example "[P2.1]" appearing inside "### Phase 3"). Either correct the ID phase number to match its heading, or move the checkbox into the phase its ID names.' "$_plan_file"
             ;;
         ITEM_EVIDENCE_MISSING)
-            printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: a checkbox inside a contracted phase has no indented "  - Evidence: ..." line directly beneath it. Add one immediately after the checkbox line, for example "  - Evidence: pending" while the item is unchecked.' "$_plan_file"
+            printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: every phase checkbox, including completed work, requires an indented "  - Evidence: ..." line directly beneath it. Add one immediately after the checkbox line, for example "  - Evidence: pending" while the item is unchecked.' "$_plan_file"
             ;;
         CHECKED_ITEM_EVIDENCE_PENDING)
             printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: an item is checked "[x]" but its Evidence line is still a placeholder (empty, "pending", "none", "n/a", "todo", or "tbd"). Replace it with concrete non-placeholder evidence — a command result, UI/API state, test result, or artifact reference — before the item may stay checked, or uncheck it if the work is not actually done.' "$_plan_file"
@@ -517,9 +510,6 @@ phase_summary() {
           sub(/^Phase[[:space:]]+/, "", tok)
           num = tok
         }
-        if      ($0 ~ /\[complete\]/)    status="complete"
-        else if ($0 ~ /\[in_progress\]/) status="in_progress"
-        else if ($0 ~ /\[pending\]/)     status="pending"
         next
       }
       /^### / || /^## / { flush(); in_phase=0; status=""; unchecked=0; first=""; num=""; next }
@@ -535,9 +525,6 @@ phase_summary() {
       /\*\*Status:\*\*[[:space:]]*pending([^a-zA-Z_]|$)/     { status="pending";     next }
       /\*\*Status:\*\*[[:space:]]*blocked[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)/ { status="blocked"; next }
       /\*\*Status:\*\*[[:space:]]*deferred[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)/ { status="deferred"; next }
-      /\[complete\]/    { status="complete";    next }
-      /\[in_progress\]/ { status="in_progress"; next }
-      /\[pending\]/     { status="pending";     next }
       END { flush() }
     ' "$_plan_file" 2>/dev/null
 }
@@ -694,7 +681,6 @@ planning_settled_plan_warning() {
 }
 
 # Shared Stop-invalid state, also enforced before tools and repeated after tools.
-# Keep the same diagnostics for legacy and contracted plans. No session effects.
 planning_integrity_warning() {
     local PLAN_FILE="$1" TOTAL COMPLETE IN_PROGRESS PENDING BLOCKED DEFERRED
     local PHASE_NUM FORMAT_ISSUES SUMMARY LIE_PHASE LIE_COUNT LIE_FIRST

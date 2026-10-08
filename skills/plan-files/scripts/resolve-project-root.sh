@@ -39,15 +39,12 @@
 set -u
 
 has_pointer() {
-    # Accept the pre-rename pointer too, so an un-migrated workspace still
-    # resolves to the same root instead of silently falling back to $PWD.
-    [ -e "$1/.plan-files" ] || [ -e "$1/.plan-with-files" ]
+    [ -e "$1/.plan-files" ]
 }
 
 if [ "${1:-}" = "--accepts-state" ]; then
     root=${2:-$PWD}
-    has_pointer "$root" || [ -d "$root/tmp/plan-files" ] \
-        || [ -d "$root/tmp/plan-with-files" ] || [ -e "$root/.git" ]
+    has_pointer "$root" || [ -d "$root/tmp/plan-files" ] || [ -e "$root/.git" ]
     exit
 fi
 

@@ -295,11 +295,7 @@ def plan_id_for_path(path: str, project_root: Path) -> str | None:
     if not candidate.is_absolute():
         candidate = project_root / candidate
     candidate = Path(os.path.realpath(candidate))
-    # Match either layout so a pre-rename workspace is still recognized as
-    # plan state rather than as unrelated files.
     plan_root = project_root / "tmp" / "plan-files"
-    if not plan_root.is_dir() and (project_root / "tmp" / "plan-with-files").is_dir():
-        plan_root = project_root / "tmp" / "plan-with-files"
     plan_root = Path(os.path.realpath(plan_root))
     try:
         relative = candidate.relative_to(plan_root)
@@ -899,7 +895,7 @@ def planning_helper_segments(command: str):
             yield segment
 
 
-PLAN_ROOT_MARKERS = ("tmp/plan-files/", "tmp/plan-with-files/")
+PLAN_ROOT_MARKERS = ("tmp/plan-files/",)
 
 
 def _plan_file_arguments(words: list[str]):
@@ -1288,9 +1284,8 @@ def outside_every_plan(tool_input: object, project_root: Path) -> bool:
     targets = shell_write_targets(tool_input)
     if not targets:
         return False
-    roots = [Path(os.path.realpath(project_root / "tmp" / name))
-             for name in ("plan-files", "plan-with-files")]
-    return not any(inside(path, root) for path in targets for root in roots)
+    root = Path(os.path.realpath(project_root / "tmp/plan-files"))
+    return not any(inside(path, root) for path in targets)
 
 
 def main() -> int:

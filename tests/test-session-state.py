@@ -169,7 +169,7 @@ class SessionIsolation(unittest.TestCase):
                     worker.join()
                 self.assertEqual(worker.exitcode, 0)
 
-    def test_roots_legacy_disable_and_stop_lifecycle(self):
+    def test_roots_disable_and_stop_lifecycle(self):
         other = SessionStore(self.root / "nested")
         path = other.plans / "task-a"
         path.mkdir(parents=True)
@@ -215,6 +215,41 @@ Phase 1
                 row = self.store.read(self.store.route(provider, "lifecycle"))
                 self.assertEqual(row["status"], "inactive" if status == "complete" else "owned")
             self.assertEqual((self.root / ".plan-files").read_text(), "task-a\n")
+
+    def test_obsolete_paths_are_ignored_and_current_state_remains_authoritative(self):
+        import runpy
+        from plan_state import plan_root, pointer_path
+        from observe import _resolve_plan
+        classifier = runpy.run_path(str(Path(__file__).resolve().parents[1]
+                                       / "skills/plan-files/scripts/maintenance-tool-allowed.py"))
+        root = self.root / "obsolete"
+        old = root / "tmp/plan-with-files/task-a/tasks.md"
+        old.parent.mkdir(parents=True)
+        old.write_text("# Obsolete plan\n")
+        (root / ".plan-with-files").write_text("task-a\n")
+        (root / ".plan-with-files-skip").touch()
+        store = SessionStore(root)
+        current = root / "tmp/plan-files"
+        self.assertEqual((store.plans, plan_root(root), pointer_path(root)),
+                         (current, current, root / ".plan-files"))
+        self.assertFalse(store.accepts_state())
+        with patch.dict(os.environ, {"PLANNING_DISABLED": "0"}):
+            store.enabled()
+        with self.assertRaises(SessionError):
+            store.task_path("task-a")
+        self.assertIsNone(classifier["plan_id_for_path"](str(old), root))
+        self.assertEqual(list(classifier["_plan_file_arguments"]([str(old)])), [])
+        self.assertTrue(classifier["outside_every_plan"]({"file_path": str(old)}, root))
+        self.assertIsNone(_resolve_plan(root, None))
+        tasks = current / "task-a/tasks.md"
+        tasks.parent.mkdir(parents=True)
+        tasks.write_text("# Current plan\n")
+        store.claim("codex", "current", "task-a")
+        with patch.dict(os.environ, {"PWF_SESSION_ADAPTER": "codex", "PWF_SESSION_ID": "current"}):
+            self.assertEqual(_resolve_plan(root, None), tasks.resolve())
+        self.assertEqual(classifier["plan_id_for_path"](str(tasks), root), "task-a")
+        self.assertFalse(classifier["outside_every_plan"]({"file_path": str(tasks)}, root))
+        self.assertEqual(old.read_text(), "# Obsolete plan\n")
 
     def hook(self, provider, session, event, *, task="new", event_id="first", tool="Write", tool_input=None, disabled=False):
         repo = Path(__file__).resolve().parents[1]

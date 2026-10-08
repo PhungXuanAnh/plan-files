@@ -79,6 +79,15 @@ mkdir -p "$WS7"
 assert_eq "$(bash "$RESOLVER" "$WS7")" "$WS7" \
     "with no .plan-files and no git repo, the resolver must fall back to the starting directory"
 
+WS_OLD="$TEST_DIR/obsolete"
+mkdir -p "$WS_OLD/tmp/plan-with-files/demo" "$WS_OLD/child"
+printf 'demo\n' > "$WS_OLD/.plan-with-files"
+assert_eq "$(bash "$RESOLVER" "$WS_OLD/child")" "$WS_OLD/child" "an obsolete marker cannot select the project root"
+! bash "$RESOLVER" --accepts-state "$WS_OLD" || fail "obsolete planning paths must not accept hook state"
+: > "$WS_OLD/.plan-files"
+assert_eq "$(bash "$RESOLVER" "$WS_OLD/child")" "$WS_OLD" "the current marker resolves the root beside obsolete state"
+bash "$RESOLVER" --accepts-state "$WS_OLD" || fail "the current marker must accept hook state"
+
 # --- A physical cwd behind a symlinked tmp/ has no pointer ancestor: it falls
 #     back to itself (and accepts no hook state) unless the host declares the
 #     project, while a cwd with its own pointer ancestor ignores the hint. ----
@@ -117,9 +126,10 @@ Phase 1
 ## Active Item
 V1.1
 ## Phases
-### Phase 1: Do the thing [in_progress]
+### Phase 1: Do the thing
 - [ ] [V1.1] the thing works
   - Evidence: pending
+- **Status:** in_progress
 EOF
 printf 'DEMO\n' > "$WS8/.plan-files"
 (cd "$WS8/viralize" && python3 "$CHECKPOINT_TOOL" --plan "$WS8/tmp/plan-files/DEMO/tasks.md" \

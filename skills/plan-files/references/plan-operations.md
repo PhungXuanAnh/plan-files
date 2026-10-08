@@ -28,6 +28,8 @@ python3 <skill-dir>/scripts/plan_state.py restore-check <task-dir>/tasks.md
 
 `restore-check` emits bounded issue metadata rather than section bodies. It validates semantic resume fields and freshness, exits 2 while repair is required, and names the source, heading, and targeted repair for every issue. `overview.restore` carries at most the first three issues plus `issue_count`; use `restore-check` for the complete diagnosis.
 
+`RESTORE_FORMAT_INVALID` reports invalid current-format item or phase state, including missing Active Item sections, missing IDs/evidence on completed work, and obsolete inline phase statuses. The schema-1 `checks.format` field is additive.
+
 If `overview.restore.ok` is true, do not run a second restore check immediately. Follow targeted reads only for the state the next action needs. The hooks still recheck disk state before operational tools.
 
 Schema-version migration notes:

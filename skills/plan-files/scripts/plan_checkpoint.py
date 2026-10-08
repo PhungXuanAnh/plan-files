@@ -91,9 +91,6 @@ def _set_phase_status(lines: list[str], phase_num: int, status: str) -> None:
         (index for index in range(heading_index + 1, len(lines)) if lines[index].startswith("## ")),
         len(lines),
     )
-    if match.group(3):
-        lines[heading_index] = re.sub(r"\[(complete|in_progress|pending)\]\s*$", f"[{status}]", lines[heading_index])
-        return
     status_indices = [index for index in range(heading_index + 1, end) if STATUS_RE.match(lines[index])]
     if len(status_indices) != 1:
         raise CheckpointError(f"Phase {phase_num} must have exactly one body status")

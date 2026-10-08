@@ -61,6 +61,9 @@ Verify the planning contract.
 ## Current Phase
 Phase 1
 
+## Active Item
+P1.1
+
 ## Workflow Profile
 **Profile:** C
 
@@ -72,12 +75,17 @@ Phase 1
 ## Phases
 
 ### Phase 1: Implement
-- [ ] Make the change
+- [ ] [P1.1] Make the change
+  - Evidence: pending
 - **Status:** in_progress
 
 ### Phase 2: Verify
-- [ ] Run the check
+- [ ] [P2.1] Run the check
+  - Evidence: pending
 - **Status:** pending
+
+## Verification
+- Run the fixture check.
 EOF
     printf '# Findings\n\n## Current Summary\n- fixture\n\n## Discoveries\n- original\n' > "$PLAN_DIR/findings.md"
     cat > "$PLAN_DIR/decisions.md" <<'EOF'
@@ -161,6 +169,9 @@ Verify the rolling hot phase window.
 ## Current Phase
 Phase 12
 
+## Active Item
+P12.1
+
 ## Workflow Profile
 **Profile:** C
 
@@ -172,12 +183,13 @@ Phase 12
 ## Phases
 EOF
     for N in $(seq 1 11); do
-        printf '\n### Phase %s: Completed %s [complete]\n' "$N" "$N" >> "$PLAN_DIR/tasks.md"
+        printf '\n### Phase %s: Completed %s\n- **Status:** complete\n' "$N" "$N" >> "$PLAN_DIR/tasks.md"
     done
     cat >> "$PLAN_DIR/tasks.md" <<'EOF'
 
 ### Phase 12: Current
-- [ ] Current work
+- [ ] [P12.1] Current work
+  - Evidence: pending
 - **Status:** in_progress
 EOF
 }
@@ -462,7 +474,7 @@ OUTPUT=$(python3 "$EDIT_TOOL" --plan "$PLAN_DIR/tasks.md" --expected-fingerprint
 assert_contains "$OUTPUT" '"phase":13' "rollover allocates Phase 13"
 assert_contains "$OUTPUT" '"archived_phase":1' "rollover archives oldest complete phase"
 assert_not_contains "$(cat "$PLAN_DIR/tasks.md")" '### Phase 1:' "archived phase leaves the hot window"
-assert_contains "$(cat "$PLAN_DIR/history.md")" '### Phase 1: Completed 1 [complete]' "rollover writes full phase history"
+assert_contains "$(cat "$PLAN_DIR/history.md")" '### Phase 1: Completed 1' "rollover writes full phase history"
 assert_contains "$(python3 "$REPO_ROOT/skills/plan-files/scripts/plan_state.py" budgets "$PLAN_DIR/tasks.md")" '"phases":12' "rollover retains twelve hot phase headings"
 OUTPUT=$(python3 "$EDIT_TOOL" --plan "$PLAN_DIR/tasks.md" --expected-fingerprint "$(file_sha "$PLAN_DIR/tasks.md")" \
     phase-add --title "Fourteenth" --after 13 --expected-history-fingerprint "$(file_sha "$PLAN_DIR/history.md")")
@@ -475,7 +487,7 @@ OUTPUT=$(python3 "$EDIT_TOOL" --plan "$PLAN_DIR/tasks.md" --expected-fingerprint
     compact-oldest --expected-history-fingerprint missing)
 assert_contains "$OUTPUT" '"phase":1' "explicit compaction selects oldest complete phase"
 assert_not_contains "$(cat "$PLAN_DIR/tasks.md")" '### Phase 1:' "explicit compaction evicts the selected phase"
-assert_contains "$(cat "$PLAN_DIR/history.md")" '### Phase 1: Completed 1 [complete]' "explicit compaction preserves phase history"
+assert_contains "$(cat "$PLAN_DIR/history.md")" '### Phase 1: Completed 1' "explicit compaction preserves phase history"
 assert_contains "$(python3 "$REPO_ROOT/skills/plan-files/scripts/plan_state.py" budgets "$PLAN_DIR/tasks.md")" '"phases":11' "explicit compaction shrinks hot phase count"
 
 # A journal left after any durable-write boundary is reconciled on the next
@@ -573,7 +585,7 @@ assert_eq "$(file_sha "$PLAN_DIR/history.md")" "$CONFLICT_HISTORY_SHA" "history 
 rm -f "$CONFLICT_JOURNAL"
 
 write_rollover_plan
-sed -i 's/\[complete\]/[pending]/g' "$PLAN_DIR/tasks.md"
+sed -i 's/\*\*Status:\*\* complete/**Status:** pending/g' "$PLAN_DIR/tasks.md"
 ROLLOVER_SHA=$(file_sha "$PLAN_DIR/tasks.md")
 if python3 "$EDIT_TOOL" --plan "$PLAN_DIR/tasks.md" --expected-fingerprint "$ROLLOVER_SHA" \
     phase-add --title "No eligible archive" --after 12 --expected-history-fingerprint missing >/dev/null; then
@@ -595,11 +607,11 @@ assert_eq "$(check_task_plan_format "$PLAN_DIR/tasks.md")" "ITEM_ID_DUPLICATE" "
 write_valid_plan
 sed '/^## Phases$/d' "$PLAN_DIR/tasks.md" > "$PLAN_DIR/bad-layout.md"
 count_phases "$PLAN_DIR/bad-layout.md"
-assert_eq "$(check_task_plan_format "$PLAN_DIR/bad-layout.md")" "SECTION_LAYOUT_INVALID" "missing Phases section"
+assert_eq "$(check_task_plan_format "$PLAN_DIR/bad-layout.md")" "$(printf 'SECTION_LAYOUT_INVALID\nACTIVE_ITEM_SECTION_INVALID')" "missing Phases section"
 
 sed 's/^Phase 1$/Phase 1 extra/' "$PLAN_DIR/tasks.md" > "$PLAN_DIR/bad-current.md"
 count_phases "$PLAN_DIR/bad-current.md"
-assert_eq "$(check_task_plan_format "$PLAN_DIR/bad-current.md")" "CURRENT_PHASE_INVALID" "invalid Current Phase body"
+assert_eq "$(check_task_plan_format "$PLAN_DIR/bad-current.md")" "$(printf 'CURRENT_PHASE_INVALID\nACTIVE_ITEM_INVALID')" "invalid Current Phase body"
 
 sed 's/^### Phase 1:/### Phase one:/' "$PLAN_DIR/tasks.md" > "$PLAN_DIR/bad-heading.md"
 count_phases "$PLAN_DIR/bad-heading.md"
@@ -625,7 +637,8 @@ head -c 33000 /dev/zero | tr '\0' x > "$PLAN_DIR/findings.md"
 assert_contains "$(planning_file_budget_warning "$PLAN_DIR")" "findings.md=" "byte budget"
 
 write_valid_plan
-for N in $(seq 3 13); do printf '\n### Phase %s: Archived Candidate [complete]\n' "$N" >> "$PLAN_DIR/tasks.md"; done
+sed -i '/^## Verification$/,$d' "$PLAN_DIR/tasks.md"
+for N in $(seq 3 13); do printf '\n### Phase %s: Archived Candidate\n- **Status:** complete\n' "$N" >> "$PLAN_DIR/tasks.md"; done
 assert_contains "$(planning_file_budget_warning "$PLAN_DIR")" "13/12 phase entries" "hot phase-entry budget"
 
 # The raised tasks.md limit admits useful plans beyond the old 150-line cap.
@@ -638,7 +651,7 @@ write_valid_plan
 for N in $(seq 1 101); do
     printf '%s\n' "- [ ] bulk item $N"
 done > "$TEST_DIR/bulk-items.md"
-sed "/^- \[ \] Make the change$/r $TEST_DIR/bulk-items.md" "$PLAN_DIR/tasks.md" > "$PLAN_DIR/tasks-with-bulk.md"
+sed "/^- \[ \] \[P1\.1\] Make the change$/r $TEST_DIR/bulk-items.md" "$PLAN_DIR/tasks.md" > "$PLAN_DIR/tasks-with-bulk.md"
 mv "$PLAN_DIR/tasks-with-bulk.md" "$PLAN_DIR/tasks.md"
 WARNING=$(planning_file_budget_warning "$PLAN_DIR")
 assert_contains "$WARNING" "103/100 item entries" "total item budget"
@@ -834,11 +847,13 @@ assert_contains "$CODEX_PROGRESS_OUTPUT" "Structured plan progress occurred" "it
 
 write_valid_plan
 sed -i 's/in_progress/blocked (external dependency unavailable)/; s/pending/deferred (user postponed validation)/' "$PLAN_DIR/tasks.md"
+sed -i '/^## Active Item$/{n;/^P1\.1$/d;}' "$PLAN_DIR/tasks.md"
 CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/plan-files/scripts/agent-stop.sh")
 assert_eq "$CODEX_OUTPUT" "{}" "Codex repeated Stop allows blocked/deferred phases"
 
 write_valid_plan
 sed -i 's/in_progress/blocked (external dependency unavailable)/' "$PLAN_DIR/tasks.md"
+sed -i '/^## Active Item$/{n;/^P1\.1$/d;}' "$PLAN_DIR/tasks.md"
 CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/plan-files/scripts/agent-stop.sh")
 assert_contains "$CODEX_OUTPUT" "STALE" "blocked current phase advances to later actionable phase"
 
@@ -852,11 +867,13 @@ done
 
 write_valid_plan
 sed -i 's/^Phase 1$//; s/in_progress/pending/' "$PLAN_DIR/tasks.md"
+sed -i '/^## Active Item$/{n;/^P1\.1$/d;}' "$PLAN_DIR/tasks.md"
 CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_PAYLOAD" | "$REPO_ROOT/.codex/hooks/plan-files/scripts/agent-stop.sh")
 assert_eq "$CODEX_OUTPUT" "{}" "Codex discussion mode"
 
 write_valid_plan
-sed -i 's/^- \[ \] Make the change/- [x] Make the change/; s/in_progress/complete/' "$PLAN_DIR/tasks.md"
+sed -i 's/^- \[ \] \[P1\.1\]/- [x] [P1.1]/; s/in_progress/complete/; s/Evidence: pending/Evidence: fixture checked/' "$PLAN_DIR/tasks.md"
+sed -i '/^## Active Item$/{n;/^P1\.1$/d;}' "$PLAN_DIR/tasks.md"
 CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_PAYLOAD" | "$REPO_ROOT/.codex/hooks/plan-files/scripts/agent-stop.sh")
 assert_contains "$CODEX_OUTPUT" "STALE" "Codex stale Current Phase"
 
@@ -985,17 +1002,5 @@ assert_contains "$(python3 "$CHECKPOINT_TOOL" --plan "$PLAN_DIR/tasks.md" assert
     '"finalizable":true' "retained marker permits plan finalization"
 assert_contains "$(cd "$PROJECT" && eval "$POINTER_CMD")" '"cleared":false' "deactivate-pointer is idempotent"
 printf 'test-task\n' > "$PROJECT/.plan-files"
-
-# A finalizable plan names the pointer that actually exists, not the current
-# name, so a pre-rename workspace is not told to clear a missing file.
-LEGACY_ROOT="$TEST_DIR/legacy"
-mkdir -p "$LEGACY_ROOT/tmp/plan-with-files/legacy-task"
-printf 'legacy-task\n' > "$LEGACY_ROOT/.plan-with-files"
-write_settled_plan
-cp "$PLAN_DIR/tasks.md" "$LEGACY_ROOT/tmp/plan-with-files/legacy-task/tasks.md"
-LEGACY_ISSUES=$(python3 "$REPO_ROOT/skills/plan-files/scripts/plan_state.py" assert-finalizable \
-    "$LEGACY_ROOT/tmp/plan-with-files/legacy-task/tasks.md" --project-root "$LEGACY_ROOT" || true)
-assert_not_contains "$LEGACY_ISSUES" "still names this task" "legacy marker does not gate finalization"
-assert_not_contains "$LEGACY_ISSUES" ".plan-files still names" "legacy workspace is not sent to the current pointer name"
 
 printf 'planning contract tests: PASS\n'
