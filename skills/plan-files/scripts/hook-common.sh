@@ -7,7 +7,6 @@
 #   planning_script_path NAME         — absolute path of a skill script for messages
 #   planning_doc_path RELPATH         — absolute path of SKILL.md or a references/ file
 #   planning_prepare_log_dir DIR      — mkdir a hook log dir only at a state-accepting root
-#   resolve_plan_dir ROOT             — set TASK_ID PLAN_DIR PLAN_FILE from pointer
 #   current_phase_pointer PLAN_FILE   — print only a valid exact `Phase N` pointer
 #   planning_item_context PLAN_FILE   — print contracted item state as compact JSON
 #   planning_progress_fingerprint FILE — print semantic plan progress fingerprint
@@ -18,28 +17,6 @@
 #   planning_handoff_warning DIR     — echo warning when optional handoff.md is stale
 #   planning_restore_warning DIR     — echo bounded targeted repair guidance for incomplete restore state
 #   planning_settled_plan_warning DIR ROOT — echo reopen guidance when every phase is already complete
-
-# ---------------------------------------------------------------------------
-# resolve_plan_dir ROOT
-# Sets empty globals on a missing/invalid pointer; never guesses another task.
-# ---------------------------------------------------------------------------
-resolve_plan_dir() {
-    local _root="${1:-.}" _pointer _id
-    TASK_ID="" PLAN_DIR="" PLAN_FILE=""
-    _pointer="$_root/.plan-files"
-    [ -e "$_root/.plan-files-skip" ] && return 0
-    [ -f "$_pointer" ] || return 0
-    _id=$(sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;p;}' "$_pointer" 2>/dev/null)
-    case "$_id" in
-        ""|.|*/*|*..*|*" "*) return 0 ;;
-    esac
-    if ! printf '%s' "$_id" | grep -Eq '^[A-Za-z0-9._-]+$'; then
-        return 0
-    fi
-    TASK_ID="$_id"
-    PLAN_DIR="$_root/tmp/plan-files/$_id"
-    PLAN_FILE="$PLAN_DIR/tasks.md"
-}
 
 current_phase_pointer() {
     local _plan_file="${1:-}" _body
@@ -709,7 +686,7 @@ planning_settled_plan_warning() {
     printf -v _plan_arg '%q' "$_plan_file"
     printf -v _root_arg '%q' "$_root"
     _sha=$(sha256sum "$_plan_file" | cut -d' ' -f1)
-    printf '[plan-files] SETTLED PLAN REOPEN REQUIRED. All %s phases in %s are settled (complete, blocked, or deferred). Choose resume for existing paused work or reopen for distinct new work. Reopen in one call, run from %s (planning commands default --plan to this project pointer): python3 %s --compact --expected-fingerprint %s reopen --title "<phase title>" --decision "| <ID> | <what the user authorized> | <why> | <date> |" --item "<first outcome>". Add --supersede <OLD-ID> for the decision it replaces, more --item/--verify for the rest of the phase, and --goal/--deliverable/--non-goals/--profile for scope that moved. To continue an existing blocked/deferred phase, preserve its IDs and evidence with: python3 %s --expected-fingerprint %s resume <N> --decision "| <ID> | Resume the existing work | User authorized resumption | <date> |". If the prompt only discusses this plan or workflow without executing its deliverable, run the discussion command instead. If no new work was authorized, finalize with python3 %s --plan %s deactivate-pointer --project-root %s, then python3 %s --plan %s assert-finalizable --project-root %s.' \
+    printf '[plan-files] SETTLED PLAN REOPEN REQUIRED. All %s phases in %s are settled (complete, blocked, or deferred). Choose resume for existing paused work or reopen for distinct new work. Reopen in one call, run from %s (planning commands default --plan to this session lease): python3 %s --compact --expected-fingerprint %s reopen --title "<phase title>" --decision "| <ID> | <what the user authorized> | <why> | <date> |" --item "<first outcome>". Add --supersede <OLD-ID> for the decision it replaces, more --item/--verify for the rest of the phase, and --goal/--deliverable/--non-goals/--profile for scope that moved. To continue an existing blocked/deferred phase, preserve its IDs and evidence with: python3 %s --expected-fingerprint %s resume <N> --decision "| <ID> | Resume the existing work | User authorized resumption | <date> |". If the prompt only discusses this plan or workflow without executing its deliverable, run the discussion command instead. If no new work was authorized, finalize with python3 %s --plan %s deactivate-pointer --project-root %s, then python3 %s --plan %s assert-finalizable --project-root %s.' \
         "$TOTAL" "$_plan_file" "$_root" \
         "$_edit" "$_sha" \
         "$_edit" "$_sha" \

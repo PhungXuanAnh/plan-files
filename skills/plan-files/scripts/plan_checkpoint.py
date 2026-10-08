@@ -11,6 +11,8 @@ import tempfile
 from pathlib import Path
 from typing import Iterable
 
+from session_state import guarded, identity, store_for_plan, SessionError
+
 from plan_state import (
     _placeholder,
     file_fingerprint,
@@ -186,6 +188,7 @@ def apply_start(state, item_id: str):
     return lines
 
 
+@guarded
 def start(plan: Path, item_id: str) -> dict[str, object]:
     state = _validate_for_transition(plan, {"ACTIVE_ITEM_REQUIRED"})
     lines = apply_start(state, item_id)
@@ -210,6 +213,7 @@ def _fingerprints(state) -> dict[str, str]:
     }
 
 
+@guarded
 def progress(plan: Path, item_id: str, evidence_value: str) -> dict[str, object]:
     state = _validate_for_transition(plan)
     if state.active_item != item_id:
@@ -225,6 +229,7 @@ def progress(plan: Path, item_id: str, evidence_value: str) -> dict[str, object]
     return {"operation": "progress", "item": item_id, "phase": item.phase_num, **_fingerprints(new_state)}
 
 
+@guarded
 def complete(plan: Path, item_id: str, evidence_value: str, requested_next: str | None, deactivate: bool) -> dict[str, object]:
     state = _validate_for_transition(plan)
     if state.active_item != item_id:
@@ -238,7 +243,7 @@ def complete(plan: Path, item_id: str, evidence_value: str, requested_next: str 
         expected = next_item.item_id if next_item else "none"
         raise CheckpointError(f"next item must be {expected}")
     if deactivate and next_item:
-        raise CheckpointError("cannot deactivate pointer while another item remains actionable")
+        raise CheckpointError("cannot finish this session while another item remains actionable")
 
     lines = list(state.lines)
     _set_item_evidence(lines, item, _clean_evidence(evidence_value), checked=True)
@@ -263,11 +268,6 @@ def complete(plan: Path, item_id: str, evidence_value: str, requested_next: str 
     _atomic_write(plan, lines)
     new_state = _validate_for_transition(plan)
     all_settled = all(phase.status in SETTLED for phase in new_state.phases)
-    if deactivate:
-        project_root = resolve_project_root(plan.parent.resolve())
-        pointer = pointer_path(project_root)
-        if pointer.is_file() and pointer.read_text(encoding="utf-8").strip() == plan.parent.name:
-            pointer.write_text("", encoding="utf-8")
     return {
         "operation": "complete",
         "item": item_id,
@@ -279,41 +279,27 @@ def complete(plan: Path, item_id: str, evidence_value: str, requested_next: str 
 
 
 def deactivate_pointer(plan: Path, project_root: Path | None) -> dict[str, object]:
-    """Clear the candidate pointer for a plan that finished without the flag.
-
-    `--deactivate-pointer` rides on the final `complete` call, so a plan whose
-    items were all checked off without it has no transition left to carry the
-    flag and stays POINTER_ACTIVE forever. Hand-editing the pointer is both
-    discouraged and, on a settled plan, refused by the reopen gate — this is the
-    planning-helper path out of that state.
-    """
+    """Compatibility finalizer. The root marker is never cleared by a session."""
     state = parse_plan(plan)
-    blocking = [issue for issue in finalizability_issues(state, project_root)
-                if issue != "POINTER_ACTIVE"]
+    blocking = finalizability_issues(state, project_root)
     if blocking:
         raise CheckpointError(
             "plan is not finalizable: " + explain_issues(blocking, project_root, plan))
     root = project_root.resolve() if project_root else resolve_project_root(plan.parent.resolve())
     pointer = pointer_path(root)
-    cleared = False
-    value = pointer.read_text(encoding="utf-8").strip() if pointer.is_file() else None
-    reason = "missing" if value is None else "already_empty" if not value else "different_task"
-    if value == plan.parent.name:
-        pointer.write_text("", encoding="utf-8")
-        cleared = True
-        reason = "cleared"
     return {
         "operation": "deactivate-pointer",
         "pointer": str(pointer),
-        "cleared": cleared,
-        "reason": reason,
+        "cleared": False,
+        "reason": "session_scoped",
         **_fingerprints(state),
     }
 
 
+@guarded
 def park(plan: Path, project_root: Path | None, reason: str) -> dict[str, object]:
     state = _validate_for_transition(plan)
-    blocking = [issue for issue in finalizability_issues(state) if issue != "POINTER_ACTIVE"]
+    blocking = finalizability_issues(state)
     if blocking or not any(phase.status in {"blocked", "deferred"} for phase in state.phases):
         raise CheckpointError("park requires all phases settled and at least one blocked/deferred phase; use pause first")
     reason = _clean_evidence(reason)
@@ -321,8 +307,6 @@ def park(plan: Path, project_root: Path | None, reason: str) -> dict[str, object
         raise CheckpointError("park reason must be non-placeholder")
     root = project_root.resolve() if project_root else resolve_project_root(plan.parent.resolve())
     pointer = pointer_path(root)
-    if not pointer.is_file() or pointer.read_text(encoding="utf-8").strip() != plan.parent.name:
-        raise CheckpointError("park needs this task's candidate pointer; bind the task first without replacing another candidate")
     lines = list(state.lines)
     _set_resume_field(lines, "Parked", reason, create=True)
     _atomic_write(plan, lines)
@@ -351,7 +335,7 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help=(
             "path to the plan's tasks.md file (not the task directory); omit it to use "
-            "the task named by this workspace's .plan-files pointer"
+            "the task owned by this provider/session in .sessions/"
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -376,7 +360,7 @@ def _parser() -> argparse.ArgumentParser:
     complete_parser.add_argument(
         "--deactivate-pointer",
         action="store_true",
-        help="required on the call whose result reports \"next_item\":null, else finalization fails with POINTER_ACTIVE",
+        help="finish this session lease on full completion; preserve the workspace marker",
     )
 
     final_parser = subparsers.add_parser(
@@ -386,10 +370,10 @@ def _parser() -> argparse.ArgumentParser:
 
     pointer_parser = subparsers.add_parser(
         "deactivate-pointer",
-        help="clear the candidate pointer for a settled plan that finished without the complete-call flag",
+        help="finish the caller's complete lease; compatibility name, workspace marker is preserved",
     )
     pointer_parser.add_argument("--project-root", type=Path, help="workspace root that owns .plan-files")
-    park_parser = subparsers.add_parser("park", help="finalize an intentional pause without losing the candidate pointer")
+    park_parser = subparsers.add_parser("park", help="finalize an intentional pause while retaining this session reservation")
     park_parser.add_argument("--reason", required=True, help="why the settled blocked/deferred task should remain discoverable")
     park_parser.add_argument("--project-root", type=Path, help="workspace root that owns .plan-files")
     return parser
@@ -412,6 +396,9 @@ def main(argv: Iterable[str] | None = None) -> int:
             raise CheckpointError(hint)
         if not args.plan.is_file():
             raise CheckpointError(f"plan file does not exist: {args.plan}")
+        who = identity()
+        store = store_for_plan(args.plan) if who else None
+        generation = store.read(store.route(*who)).get("generation", "legacy") if who else None
         if args.command == "start":
             payload = start(args.plan, args.item)
         elif args.command == "progress":
@@ -424,7 +411,10 @@ def main(argv: Iterable[str] | None = None) -> int:
             payload = park(args.plan, args.project_root, args.reason)
         else:
             payload = assert_finalizable(args.plan, args.project_root)
-    except (CheckpointError, OSError) as error:
+        if args.command == "deactivate-pointer" or (args.command == "complete" and args.deactivate_pointer):
+            if who and all(phase.status == "complete" for phase in parse_plan(args.plan).phases):
+                store.transition(*who, "finish", args.plan.parent.name, generation)
+    except (CheckpointError, SessionError, OSError) as error:
         print(json.dumps({"ok": False, "error": str(error)}, separators=(",", ":")))
         return 2
     print(json.dumps({"ok": True, "plan": str(args.plan), **payload}, separators=(",", ":")))

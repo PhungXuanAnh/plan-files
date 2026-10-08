@@ -1,7 +1,11 @@
 """The planning CLI completes a resumed task without intermediate-state repairs."""
 import hashlib
+import io
+from contextlib import contextmanager, redirect_stdout
 import json
 import os
+import multiprocessing
+import shutil
 from pathlib import Path
 import runpy
 import shlex
@@ -14,6 +18,62 @@ from unittest.mock import patch
 SCRIPTS = Path(__file__).resolve().parents[1] / "skills/plan-files/scripts"
 sys.path.insert(0, str(SCRIPTS))
 from plan_state import parse_plan, restore_payload
+from session_state import SessionStore, plan_transaction
+
+
+def checkpoint_worker(plan, operation, ready, proceed, results):
+    import plan_checkpoint
+    import session_state
+    if operation == "complete":
+        original = plan_checkpoint._atomic_write
+        def pause_write(path, lines):
+            ready.set()
+            if not proceed.wait(10):
+                raise RuntimeError("write barrier timeout")
+            original(path, lines)
+        plan_checkpoint._atomic_write = pause_write
+    else:
+        original = session_state.fcntl.flock
+        def signal_lock(fd, mode):
+            if mode == session_state.fcntl.LOCK_EX:
+                ready.set()
+            return original(fd, mode)
+        session_state.fcntl.flock = signal_lock
+    try:
+        if operation == "complete":
+            plan_checkpoint.complete(Path(plan), "P3.1", "Completion preserved", None, False)
+        elif operation == "progress":
+            plan_checkpoint.progress(Path(plan), "P3.1", "Older progress")
+        else:
+            import plan_edit
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = plan_edit.main(["--plan", plan, "--expected-fingerprint",
+                                       hashlib.sha256(Path(plan).read_bytes()).hexdigest(),
+                                       "phase-update", "3", "--title", "Older title"])
+            results.put(output.getvalue() if code else operation)
+            return
+        results.put(operation)
+    except (plan_checkpoint.CheckpointError, ValueError) as error:
+        results.put(str(error))
+
+
+def delayed_writer(plan, ready, proceed, results):
+    import plan_checkpoint
+    original = SessionStore.lock
+    @contextmanager
+    def pause_before_lock(store, **kwargs):
+        ready.set()
+        if not proceed.wait(10):
+            raise RuntimeError("handoff barrier timed out")
+        with original(store, **kwargs):
+            yield
+    SessionStore.lock = pause_before_lock
+    try:
+        plan_checkpoint.progress(Path(plan), "P3.1", "Obsolete authorization")
+        results.put("unexpected write")
+    except ValueError as error:
+        results.put(str(error))
 
 
 class PlanCommands(unittest.TestCase):
@@ -57,6 +117,11 @@ Phase 1
             "## Superseded Decisions\n- None.\n## Open Decision Questions\n- None.\n")
         (self.plan / "findings.md").write_text("## Current Summary\n- Original result passed.\n")
         (self.project / ".plan-files").write_text("work\n")
+        environment = patch.dict(os.environ, {"PWF_PROJECT_ROOT": str(self.project),
+                                 "PWF_SESSION_ADAPTER": "codex", "PWF_SESSION_ID": "commands"})
+        environment.start()
+        self.addCleanup(environment.stop)
+        SessionStore(self.project).claim("codex", "commands", "work")
 
     def call(self, script, *args, check=True):
         return subprocess.run([sys.executable, str(SCRIPTS / script), *map(str, args)],
@@ -69,6 +134,129 @@ Phase 1
 
     def sha(self):
         return hashlib.sha256(self.tasks.read_bytes()).hexdigest()
+
+    def test_default_resolution_and_explicit_foreign_plan(self):
+        other = self.plan.parent / "other"
+        shutil.copytree(self.plan, other)
+        store = SessionStore(self.project)
+        store.claim("claude", "other-session", "other")
+        (self.project / ".plan-files").write_text("other\n")
+        saved = (other / "tasks.md").read_bytes()
+        self.edit("reopen", "--title", "More", "--decision", "| D2 | Continue | User request | 2026-10-08 |",
+                  "--item", "New result")
+        result = json.loads(self.call("plan_checkpoint.py", "progress", "P3.1", "--evidence", "Own result").stdout)
+        self.assertEqual(Path(result["plan"]), self.tasks)
+        self.assertEqual((other / "tasks.md").read_bytes(), saved)
+        denied = self.call("plan_checkpoint.py", "--plan", other / "tasks.md", "progress", "P3.1",
+                           "--evidence", "Foreign result", check=False)
+        self.assertNotEqual(denied.returncode, 0)
+        self.assertIn("reserved by another session", denied.stdout)
+        with patch.dict(os.environ, dict.fromkeys(("PWF_SESSION_ADAPTER", "PWF_SESSION_ID", "CODEX_THREAD_ID",
+                         "CLAUDE_SESSION_ID", "COPILOT_AGENT_SESSION_ID", "GROK_SESSION_ID"), "")):
+            denied = self.call("plan_state.py", "overview", check=False)
+        self.assertNotEqual(denied.returncode, 0)
+        self.assertIn("no planning session identity", denied.stdout)
+
+    def test_same_and_mixed_provider_sessions_keep_separate_plans(self):
+        original = self.tasks.read_bytes()
+        other = self.plan.parent / "other"
+        shutil.copytree(self.plan, other)
+        for a, b in (("codex", "codex"), ("claude", "claude"), ("codex", "claude")):
+            with self.subTest(providers=(a, b)):
+                shutil.rmtree(self.plan.parent / ".sessions")
+                self.tasks.write_bytes(original)
+                (other / "tasks.md").write_bytes(original)
+                store = SessionStore(self.project)
+                store.bind(a, "a", "work")
+                store.bind(b, "b", "other")
+                (self.project / ".plan-files").write_text("other\n")
+                with patch.dict(os.environ, {"PWF_SESSION_ADAPTER": a, "PWF_SESSION_ID": "a"}):
+                    overview = json.loads(self.call("plan_state.py", "overview").stdout)
+                    self.assertEqual(Path(overview["plan"]), self.tasks)
+                    self.edit("reopen", "--title", "Own work", "--decision", "| D2 | Continue | User request | 2026-10-08 |",
+                              "--item", "Own result")
+                    self.call("plan_checkpoint.py", "complete", "P3.1", "--evidence", "Own result verified")
+                    self.assertEqual((other / "tasks.md").read_bytes(), original)
+                with patch.dict(os.environ, {"PWF_SESSION_ADAPTER": b, "PWF_SESSION_ID": "b"}):
+                    overview = json.loads(self.call("plan_state.py", "overview").stdout)
+                    self.assertEqual(Path(overview["plan"]), other / "tasks.md")
+                    denied = self.call("plan_edit.py", "--plan", self.tasks, "--expected-fingerprint", self.sha(),
+                                       "phase-add", "--title", "Foreign", check=False)
+                    self.assertNotEqual(denied.returncode, 0)
+                    self.assertIn("reserved by another session", denied.stdout)
+
+    def test_checkpoint_transactions_preserve_completed_evidence(self):
+        self.edit("reopen", "--title", "Concurrent", "--decision", "| D2 | Continue | User request | 2026-10-08 |",
+                  "--item", "Concurrent result")
+        saved = self.tasks.read_bytes()
+        for iteration in range(20):
+            with self.subTest(iteration=iteration):
+                self.tasks.write_bytes(saved)
+                self.checkpoint_race("progress" if iteration % 2 == 0 else "edit")
+
+    def checkpoint_race(self, second_operation):
+        context = multiprocessing.get_context("fork")
+        first_ready, second_ready, proceed = context.Event(), context.Event(), context.Event()
+        results = context.Queue()
+        workers = [context.Process(target=checkpoint_worker, args=(str(self.tasks), op, ready, proceed, results))
+                   for op, ready in (("complete", first_ready), (second_operation, second_ready))]
+        try:
+            workers[0].start()
+            self.assertTrue(first_ready.wait(10))
+            workers[1].start()
+            self.assertTrue(second_ready.wait(10))
+            proceed.set()
+            outcomes = [results.get(timeout=10) for _ in workers]
+            self.assertIn("complete", outcomes)
+            expected = "not Active Item" if second_operation == "progress" else "fingerprint"
+            self.assertTrue(any(expected in value for value in outcomes), outcomes)
+            item = parse_plan(self.tasks).item("P3.1")
+            self.assertTrue(item.checked)
+            self.assertEqual(item.evidence, "Completion preserved")
+        finally:
+            proceed.set()
+            for worker in workers:
+                if worker.pid:
+                    worker.join(10)
+                    if worker.is_alive():
+                        worker.terminate()
+                        worker.join()
+            results.close()
+
+    def test_handoff_invalidates_preapproved_and_waiting_writers(self):
+        self.edit("reopen", "--title", "Handoff", "--decision", "| D2 | Continue | User request | 2026-10-08 |",
+                  "--item", "Preserve new ownership")
+        saved = self.tasks.read_bytes()
+        pre = SCRIPTS.parents[2] / ".codex/hooks/plan-files/scripts/pre-tool-use.sh"
+        payload = {"session_id": "commands", "tool_name": "Bash", "tool_input": {
+            "command": shlex.join([sys.executable, str(SCRIPTS / "plan_checkpoint.py"), "--plan",
+                                   str(self.tasks), "progress", "P3.1", "--evidence", "Old work"])}}
+        result = subprocess.run(["bash", str(pre)], input=json.dumps(payload), cwd=self.project,
+                                text=True, capture_output=True, check=True)
+        self.assertEqual(json.loads(result.stdout), {})
+        context = multiprocessing.get_context("fork")
+        ready, proceed, results = context.Event(), context.Event(), context.Queue()
+        worker = context.Process(target=delayed_writer, args=(str(self.tasks), ready, proceed, results))
+        worker.start()
+        try:
+            self.assertTrue(ready.wait(10))
+            store = SessionStore(self.project)
+            store.transition("codex", "commands", "handoff", "work")
+            # Even the unowned gap after handoff cannot revive the old session.
+            denied = self.call("plan_checkpoint.py", "--plan", self.tasks, "progress", "P3.1",
+                               "--evidence", "Late work", check=False)
+            self.assertIn("relinquished", denied.stdout)
+            store.bind("claude", "receiver", "work")
+            proceed.set()
+            self.assertIn("ownership changed while waiting", results.get(timeout=10))
+            self.assertEqual(self.tasks.read_bytes(), saved)
+        finally:
+            proceed.set()
+            worker.join(10)
+            if worker.is_alive():
+                worker.terminate()
+                worker.join()
+            results.close()
 
     def test_fingerprint_formats_and_short_output(self):
         legacy = self.call("plan_state.py", "fingerprint").stdout.strip()
@@ -112,7 +300,7 @@ Phase 1
         self.call("plan_checkpoint.py", "complete", "P3.1", "--evidence", "New local result passed", "--deactivate-pointer")
         self.call("plan_checkpoint.py", "--plan", self.tasks, "assert-finalizable", "--project-root", self.project)
         self.assertEqual(parse_plan(self.tasks).phase(2).status, "deferred")
-        self.assertEqual((self.project / ".plan-files").read_text().strip(), "")
+        self.assertEqual((self.project / ".plan-files").read_text().strip(), "work")
 
     def test_resume_preserves_ids_evidence_and_records_authorization(self):
         self.tasks.write_text(self.tasks.read_text().replace(
@@ -279,8 +467,7 @@ Phase 1
 
     def test_pointer_cleanup_reports_why_it_did_not_clear(self):
         pointer = self.project / ".plan-files"
-        for value, expected in (("work\n", "cleared"), ("", "already_empty"),
-                                ("other\n", "different_task"), (None, "missing")):
+        for value in ("work\n", "", "other\n", None):
             with self.subTest(value=value):
                 if value is None:
                     pointer.unlink()
@@ -288,9 +475,9 @@ Phase 1
                     pointer.write_text(value)
                 result = json.loads(self.call("plan_checkpoint.py", "--plan", self.tasks,
                                               "deactivate-pointer", "--project-root", self.project).stdout)
-                self.assertEqual(result["reason"], expected)
-                self.assertEqual(result["cleared"], expected == "cleared")
-                if value == "other\n":
+                self.assertEqual(result["reason"], "session_scoped")
+                self.assertFalse(result["cleared"])
+                if value is not None:
                     self.assertEqual(pointer.read_text(), value)
 
     def test_rollover_error_example_can_be_completed_and_executed(self):

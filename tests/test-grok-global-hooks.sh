@@ -198,6 +198,7 @@ done
 NEW_TASK=post-auto-claim
 NEW_PATCH="*** Add File: $PROJECT/tmp/plan-files/$NEW_TASK/tasks.md"
 assert_eq "$(pre_command grok-new 'printf create-plan')" '{"decision":"allow"}' "unowned ordinary call is allowed"
+state reserve grok grok-new "$NEW_TASK" >/dev/null
 write_plan "$NEW_TASK" in_progress
 post_patch grok-new "$NEW_PATCH" >/dev/null
 assert_eq "$(state resolve grok grok-new)" "$PROJECT/tmp/plan-files/$NEW_TASK" "PostToolUse auto-claims new plan"

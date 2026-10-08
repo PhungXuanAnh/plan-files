@@ -142,6 +142,7 @@ def _rollover_and_resume(project: Path, plan: Path, scripts: Path) -> dict[str, 
     _run([str(state_tool), "pending", "eval", "session-1"], env=scope_env)
     _run([str(state_tool), "bind", "eval-task"], env=bind_env)
     resolved = _run([str(state_tool), "resolve", "eval", "session-1"], env=scope_env)
+    _run([str(state_tool), "handoff", "eval-task"], env=bind_env)
     state = parse_plan(plan)
     history = plan.parent / "history.md"
     return {
@@ -238,6 +239,7 @@ def _hook_probe(project: Path, scripts: Path) -> dict[str, object]:
         cwd=project,
     )
     handoff.unlink()
+    _run([str(state_tool), "handoff", "eval-task"], env=bind_env)
     return {
         "post_calls": len(contexts),
         "injections": sum(bool(context) for context in contexts),
@@ -283,7 +285,7 @@ def _grok_hook_probe(project: Path, scripts: Path) -> dict[str, object]:
         {
             "hookEventName": "user_prompt_submit",
             "sessionId": session,
-            "prompt": "resume eval-task",
+            "prompt": "resume tmp/plan-files/eval-task/tasks.md",
         },
     )
     pre_base = {

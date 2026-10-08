@@ -16,7 +16,7 @@ This repository contains one host-neutral planning skill plus provider-specific 
   - `plan_state.py` — parsing, validation, budgets, bounded reads, overview/resume-pack, and restore checks.
   - `plan_checkpoint.py` — execution transitions (`start`, `progress`, `complete`, finalizability).
   - `plan_edit.py` — fingerprinted structural/section edits and transactional lifecycle operations.
-  - `session-state.sh` and `resolve-project-root.sh` — prompt-scoped ownership and workspace resolution.
+  - `session_state.py` (stable `session-state.sh` launcher) and `resolve-project-root.sh` — exclusive task reservations, prompt-scoped ownership, shared helper locking, and workspace resolution.
   - `pre-tool-gate.sh` and `maintenance-tool-allowed.py` — restore/maintenance enforcement and semantic tool classification.
   - `hook-common.sh`, `hook-post-tool-use.sh`, and `hook-agent-stop.sh` — shared hook helpers plus canonical PostTool and Stop policy.
   - `hook-user-prompt-submit.sh` and `hook-bind-session.sh` — shared prompt and session-binding behavior for providers with compatible envelopes.
@@ -30,7 +30,7 @@ Planning state is private and project-local:
 
 ```text
 <project-root>/
-├── .plan-files                  # candidate/default task id, not ownership
+├── .plan-files                  # workspace root marker; legacy contents ignored
 └── tmp/plan-files/
     ├── .sessions/                    # private prompt-scoped ownership state
     └── <task-id>/
@@ -41,7 +41,7 @@ Planning state is private and project-local:
         └── handoff.md                # optional overwrite-only volatile snapshot
 ```
 
-- A session lease owns a task; `.plan-files` only supplies a candidate for humans/new prompts.
+- A session lease exclusively reserves a task; different sessions may own different tasks concurrently. `.sessions/` is the only ownership source and `.plan-files` only marks the root. New prompts use the session’s prior task or an explicit plan path; unrelated sessions receive no candidate or plan enforcement.
 - On every new prompt, classify the candidate as `SAME`, `DIFFERENT`, or `AMBIGUOUS`. Bind before loading SAME state; never mutate a DIFFERENT candidate; ask before changing an AMBIGUOUS one.
 - `overview`/`resume-pack` schema 2 has a strict 4 KiB serialized cap and names targeted follow-up reads for shortened sections.
 - `restore-check` schema 1 validates non-placeholder identity/resume fields, Active Item, verification, decisions/findings, and handoff/external-evidence freshness without returning complete file bodies.

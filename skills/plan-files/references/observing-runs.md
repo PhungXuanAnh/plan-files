@@ -15,7 +15,7 @@ make behavioral-eval
 python3 <plan-files-skill>/scripts/behavioral_eval.py --json
 ```
 
-The evaluator creates its project under a temporary directory, forces a 12-to-13 phase rollover, rebinds a new session, checks both complete and deliberately broken restore state, probes real PostTool/Stop hooks, and removes the fixture afterward. It compares planning disabled, the legacy unbounded overview, and the revised bounded packet under the pinned values reported in its output. `restorable_context` is a structural recovery proxy, not a claim about model-semantic recall.
+The evaluator creates its project under a temporary directory, forces a 12-to-13 phase rollover, explicitly hands off and binds a new session, checks both complete and deliberately broken restore state, probes real PostTool/Stop hooks, and removes the fixture afterward. It compares planning disabled, the legacy unbounded overview, and the revised bounded packet under the pinned values reported in its output. `restorable_context` is a structural recovery proxy, not a claim about model-semantic recall.
 
 Add `--rollout <rollout.jsonl>` when measuring Codex/ChatGPT turn behavior. Use `--json` for comparison scripts.
 
@@ -59,3 +59,9 @@ These baselines were captured before the corresponding improvements. Use the det
 | Historical stale rate | 103/142 PostTool events (72.5%) | controlled read-only false-stale rate 0/5 | historical and controlled denominators differ; do not compare raw totals |
 
 The immediate pre-split `SKILL.md` measurement was 19,752 bytes / 2,725 words; the revised entrypoint is also 52.6% / 56.2% smaller than that later snapshot. The original audit resume packet was 8,681 characters on a different fixture; `long-run-v2` reports the same-fixture legacy value above to avoid attributing fixture growth to the packet policy.
+
+## Concurrent-session audits
+
+Use isolated project roots and real resolver behavior. Cover two sessions of each provider and mixed providers with distinct tasks, plus a third session that never mentions the skill or a plan. Prove overlap with a rendezvous barrier and verify artifacts, item evidence, final lease state, and real hook event counts. A nonparticipant must receive no candidate/context/Stop enforcement and must not alter participants’ state. Replay tests exercise adapters; label them separately from native model sessions.
+
+At the shared core boundary, force same-task claim races, different-task transactions, checkpoint/editor interleavings, handoff while a helper waits, and delayed events. Verify one owner per task, no lost checkpoint, generation rejection, and recovery after process termination. Log hashed provider/session scope, model/effort, host version, tool counts, durations and plan fingerprints. Keep failed attempts and retests distinguishable; never export raw session ids, prompts or authentication data.

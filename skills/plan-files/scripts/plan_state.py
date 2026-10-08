@@ -47,7 +47,6 @@ def plan_root(project_root: Path) -> Path:
     return current
 
 
-POINTER_TASK_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def resolve_project_root(start: Path | None = None) -> Path:
@@ -71,31 +70,9 @@ def resolve_project_root(start: Path | None = None) -> Path:
 
 
 def active_plan_path(project_root: Path | None = None) -> Path:
-    """The plan an omitted --plan means: whatever this workspace points at.
-
-    The pointer is the same default the hooks resolve a candidate from, and
-    session-state.sh rewrites it on every claim/bind, so it names the plan this
-    session actually owns. Repeating that path in each command bought no extra
-    safety — the gate never parsed it — while making every prescribed recovery
-    long enough to be retyped by hand, and mistyped.
-    """
-    root = project_root or resolve_project_root()
-    pointer = pointer_path(root)
-    task_id = ""
-    if pointer.is_file():
-        first_line = pointer.read_text(encoding="utf-8").strip().splitlines()
-        task_id = first_line[0].strip() if first_line else ""
-    if not task_id or task_id in {".", ".."} or not POINTER_TASK_ID_RE.fullmatch(task_id):
-        raise ValueError(
-            f"no --plan given and {pointer} names no active task; pass --plan <path to tasks.md>"
-        )
-    plan = plan_root(root) / task_id / "tasks.md"
-    if not plan.is_file():
-        raise ValueError(
-            f"no --plan given and the active task '{task_id}' has no {plan}; "
-            "pass --plan <path to tasks.md>"
-        )
-    return plan
+    """Resolve the current prompt's session lease; never use the root marker."""
+    from session_state import active_plan
+    return active_plan(project_root)
 
 
 def resolve_plan_argument(explicit: Path | None, project_root: Path | None = None) -> Path:
@@ -1137,14 +1114,7 @@ ISSUE_EXPLANATIONS: dict[str, str] = {
     ),
     "PHASES_ACTIONABLE": "at least one phase is not yet complete, blocked, or deferred",
     "STATUS_LIES": "a phase is marked complete but still has an unchecked item beneath it",
-    # {pointer} is the pointer actually in use, which is the legacy
-    # .plan-with-files in a pre-rename workspace. Naming the current name
-    # unconditionally sends the agent to clear a file that does not exist.
-    "POINTER_ACTIVE": (
-        "{pointer} still names this task — pass --deactivate-pointer on the final "
-        "`complete` call, or when every item is already checked run: python3 "
-        "{checkpoint} deactivate-pointer --project-root {root}"
-    ),
+
 }
 
 
@@ -1153,17 +1123,6 @@ def explain_issue(code: str, project_root: Path | None = None,
     explanation = ISSUE_EXPLANATIONS.get(code)
     if not explanation:
         return code
-    if "{pointer}" in explanation:
-        # Name the pointer this workspace actually uses and an absolute,
-        # directly runnable recovery; a bare script name makes the agent guess
-        # an install location, and ".plan-files" is the wrong file in a
-        # pre-rename workspace.
-        explanation = explanation.format(
-            pointer=pointer_path(project_root).name if project_root else ".plan-files",
-            checkpoint=Path(__file__).resolve().with_name("plan_checkpoint.py"),
-            plan=plan if plan else "<tasks.md>",
-            root=project_root if project_root else "<project-root>",
-        )
     return f"{code} ({explanation})"
 
 
@@ -1190,10 +1149,6 @@ def finalizability_issues(state: PlanState, project_root: Path | None = None) ->
         issues.append("STATUS_LIES")
     if state.active_item:
         issues.append("ACTIVE_ITEM_INVALID")
-    if project_root:
-        pointer = pointer_path(project_root)
-        if pointer.is_file() and pointer.read_text(encoding="utf-8").strip() == state.path.parent.name and not is_parked(state):
-            issues.append("POINTER_ACTIVE")
     return list(dict.fromkeys(issues))
 
 
@@ -1212,7 +1167,7 @@ COMMAND_HELP = {
     "budget-warning": "print the single-line budget warning the hooks inject, or nothing",
 }
 PLAN_ARG_HELP = ("path to the plan's tasks.md file (not the task directory); "
-                 "omit it to use the task named by this workspace's .plan-files pointer")
+                 "omit it to use the task owned by this provider/session in .sessions/")
 
 
 def _parser() -> argparse.ArgumentParser:

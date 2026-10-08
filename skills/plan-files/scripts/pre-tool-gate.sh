@@ -197,6 +197,11 @@ log "tool_call tool_name=$TOOL_NAME"
 
 SESSION_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" session-id 2>/dev/null || true)
 [ -n "$SESSION_ID" ] || { log "decision=allow reason=no-verified-session"; printf '{}'; exit 0; }
+export PWF_SESSION_ADAPTER="$PROVIDER" PWF_SESSION_ID="$SESSION_ID"
+EVENT_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" event-id 2>/dev/null || true)
+if [ "$EXPLAIN" != "--explain" ] && [ -n "$EVENT_ID" ]; then
+    PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" event-record "$PROVIDER" "$SESSION_ID" "$EVENT_ID" 2>/dev/null || true
+fi
 
 if printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" hook-diagnostic; then
     log "decision=allow-hook-diagnostic"
@@ -213,6 +218,23 @@ if [ -n "$FEEDBACK_FILE" ] && printf '%s' "$TOOL_INPUT_JSON" \
 fi
 
 TOOL_COMMAND=$(extract_tool_command)
+
+# Corrupt/duplicate legacy ownership cannot silently become a nonparticipant.
+# Diagnosis and the owning session's explicit handoff remain available.
+if ! HEALTH=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" health "$PROVIDER" "$SESSION_ID" 2>&1); then
+    RECOVERY_TASK=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" owned-task "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+    if [ -n "$RECOVERY_TASK" ] && [ "$(routing_verb "$RECOVERY_TASK")" = "handoff" ]; then
+        printf '{}'; exit 0
+    fi
+    REPAIR_PLAN=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" repair-path "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+    if [ -n "$REPAIR_PLAN" ] && maintenance_tool_allowed "$REPAIR_PLAN"; then
+        printf '{}'; exit 0
+    fi
+    if printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" read-only; then
+        printf '{}'; exit 0
+    fi
+    block "[plan-files] Invalid session ownership: $HEALTH. Diagnose the session state before mutation; read-only tools remain allowed."
+fi
 
 # Recognize a read-only read of the skill entrypoint before any gate can reject
 # it, and record it immediately. An agent that loads the rules first is doing
@@ -248,13 +270,16 @@ if [ -n "$MUTATION_PLAN" ]; then
             block "$REASON_TEXT"
         fi
     elif [ ! -f "$PWD/tmp/plan-files/$MUTATION_PLAN/tasks.md" ]; then
-        # This call is CREATING tasks.md/findings.md/decisions.md for a
-        # brand-new task — PreToolUse fires before the write executes, so
-        # the file necessarily doesn't exist on disk yet and claim_task's
-        # task_exists guard would always fail here. Nothing to claim or
-        # conflict with yet: allow it through. post-tool-use.sh claims
-        # ownership once the write succeeds and the file actually exists.
+        EVENT_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" event-id 2>/dev/null || true)
+        if ! RESERVATION=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" reserve "$PROVIDER" "$SESSION_ID" \
+            "$MUTATION_PLAN" --event "$EVENT_ID" "${CLAIM_OPTIONS[@]}" 2>&1); then
+            block "[plan-files] PLAN CREATION BLOCKED. $RESERVATION"
+        fi
         log "session=$SESSION_ID plan=$MUTATION_PLAN decision=allow-new-plan-creation tool=$TOOL_NAME"
+        if [ "$EXPLAIN" != "--explain" ] && [ -n "$EVENT_ID" ]; then
+            PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" event-record "$PROVIDER" "$SESSION_ID" "$EVENT_ID" 2>/dev/null || true
+        fi
+        printf '{}'; exit 0
     else
         CLAIM_STATUS=0
         PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" claim \
@@ -268,6 +293,9 @@ if [ -n "$MUTATION_PLAN" ]; then
             block "$REASON_TEXT"
         fi
         log "session=$SESSION_ID plan=$MUTATION_PLAN decision=auto-claim-plan-mutation tool=$TOOL_NAME"
+        if [ "$EXPLAIN" != "--explain" ] && [ -n "$EVENT_ID" ]; then
+            PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" event-record "$PROVIDER" "$SESSION_ID" "$EVENT_ID" 2>/dev/null || true
+        fi
     fi
 fi
 
@@ -282,6 +310,13 @@ if [ -z "$PLAN_DIR" ]; then
     # Every routing verb the candidate message offers must be runnable here,
     # or the message names an action its own gate refuses.
     ROUTING_VERB=$(routing_verb "$CANDIDATE")
+    # A validated routing command may include the skill read in the same call.
+    # Count that read without admitting any unrelated mutation alongside bind.
+    if [ -n "$ROUTING_VERB" ] && [ "$EXPLAIN" != "--explain" ] \
+        && printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" \
+            routing-skill-read "$SKILL_DOC" "$BIND_TOOL" "$PWD" "$CANDIDATE"; then
+        PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" skill-loaded "$PROVIDER" "$SESSION_ID" mark 2>/dev/null || true
+    fi
     if [ "$ROUTING_VERB" = "clarify" ] || [ "$ROUTING_VERB" = "discuss" ]; then
         log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-routing-$ROUTING_VERB tool=$TOOL_NAME"
         printf '{}'; exit 0
@@ -329,7 +364,7 @@ BACKGROUND_WARN=$(printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-a
 printf -v plan_arg '%q' "$PLAN_DIR/tasks.md"
 printf -v state_arg '%q' "$PLAN_STATE_TOOL"
 MAINTENANCE_ACTION="Run: python3 $state_arg budgets $plan_arg. Then archive/consolidate completed material in the owned plan; preserve unfinished work."
-if [ "$OWNED_ROUTING" = "discuss" ]; then
+if [ "$OWNED_ROUTING" = "discuss" ] || [ "$OWNED_ROUTING" = "handoff" ]; then
     log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=allow-routing-discuss tool=$TOOL_NAME"
     printf '{}'; exit 0
 fi

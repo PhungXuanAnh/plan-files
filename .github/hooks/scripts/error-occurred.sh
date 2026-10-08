@@ -4,7 +4,7 @@
 # Always exits 0 — outputs JSON to stdout. Debug log written to
 #   tmp/hook-logs/plan-files/error-occurred.log
 #
-# Bash 4+ hook; session JSON uses jq, Python 3, or Node and otherwise fails closed.
+# Bash 4+ adapter; shared session ownership requires Python 3.
 
 set -u
 set -o pipefail 2>/dev/null || true
@@ -77,8 +77,7 @@ log() {
 log "=== error-occurred ==="
 log "cwd: $(pwd)"
 log "plan source: $PLAN_SOURCE -> $PLAN_FILE"
-INPUT_PREVIEW=$(printf '%s' "$INPUT" | tr '\n' ' ' | cut -c 1-500)
-log "stdin (first 500 chars, ${#INPUT} total): $INPUT_PREVIEW"
+log "event=ErrorOccurred input_bytes=${#INPUT}"
 
 if [ ! -f "$PLAN_FILE" ]; then
     log "${PLAN_FILE:-tasks.md}: ABSENT -> emitting {} (no-op)"
@@ -107,7 +106,7 @@ fi
 ERROR_MSG=${ERROR_MSG:0:200}
 
 if [ -n "${ERROR_MSG:-}" ]; then
-    log "extracted error.message (truncated to 200): $ERROR_MSG"
+    log "error_message_present=true"
     CONTEXT="[plan-files] Error detected: ${ERROR_MSG}. Log this error in ${PLAN_FILE} under Errors Encountered with the attempt number and resolution."
     ESCAPED=$(json_escape "$CONTEXT")
     OUTPUT="{\"hookSpecificOutput\":{\"hookEventName\":\"ErrorOccurred\",\"additionalContext\":$ESCAPED}}"

@@ -17,19 +17,19 @@ Store private planning state under `<project-root>/tmp/plan-files/<task-id>/`:
 - `history.md` — optional trusted cold archive; never auto-read.
 - `handoff.md` — optional overwrite-only snapshot for an intentional pause.
 
-Create new files from [the templates](templates/). Keep `tmp/` and the root `.plan-files` pointer out of version control; session hooks add local Git excludes when the project root has a `.git` directory. Task ids use only letters, digits, `-`, `_`, or `.`.
+Create new files from [the templates](templates/). Keep `tmp/` and the root `.plan-files` workspace marker out of version control; session hooks add local Git excludes when the project root has a `.git` directory. Task ids use only letters, digits, `-`, `_`, or `.`.
 
 ### Plan-owned temporary files
 
 Keep **every temporary file and directory belonging to a plan inside that plan's task folder**, not beside it or at the project root. This includes research/prototypes, downloads, extracted sources, logs, reports, generated fixtures, scratch scripts, backups, temporary worktrees, and `handoff.md`. Organize them in named subdirectories; keep only bounded planning state in the core Markdown files. Shared maintained source code is not a temporary artifact, even when named `local.py`.
 
-When the workspace requires local-only files under `.vscode/local_files/`, keep the physical plan data there and preserve the hook-compatible `tmp/plan-files/<task-id>/` path through the workspace's ignored `tmp` symlink. Do not create a second copy of the plan. Tool-required aliases and the root `.plan-files` pointer remain discovery metadata, not alternative artifact stores.
+When the workspace requires local-only files under `.vscode/local_files/`, keep the physical plan data there and preserve the hook-compatible `tmp/plan-files/<task-id>/` path through the workspace's ignored `tmp` symlink. Do not create a second copy of the plan. Tool-required aliases and the root `.plan-files` workspace marker remain discovery metadata, not alternative artifact stores.
 
 When consolidating an existing plan, preserve evidence and uncommitted changes, relocate Git worktrees with Git-aware move/repair, update live path references, and label historical snapshots rather than treating old commands/results as current. Container-generated files stay in the container unless export is explicitly requested; authorized output must go directly into a dedicated volume-mounted directory inside the plan, never be copied out with `docker cp` or written into a source checkout.
 
 ## Start and resume
 
-The latest user request is authoritative. `.plan-files` suggests a candidate; a session lease owns it for one user prompt. A new prompt suspends the old lease even when the pointer is unchanged. A text-only answer without attempted operational work may yield without routing; tools still require classification.
+The latest user request is authoritative. Each participating session owns its own task through `.sessions/`; a task has at most one owner. `.plan-files` only marks the workspace root. A new prompt suspends this session’s execution authority and offers its previous task or an explicitly named plan path as candidate. An unrelated session gets no candidate or plan enforcement. Classify a supplied candidate before tools; a text-only turn may yield without routing.
 
 If a denial names a feedback file, read it first. **Any tool call containing that path in its arguments is allowed in full**, including nested or additional arguments. Follow the file's recovery instructions; reading it does not bind or release. The path expires when the prompt or ownership changes.
 
@@ -37,7 +37,7 @@ If a denial names a feedback file, read it first. **Any tool call containing tha
 2. For `SAME`, run the hook-supplied bind command verbatim before reading planning state. Then restore state using the work loop below. Existing non-goals apply unless the user supersedes them; when the request does supersede one, record that authorization in `decisions.md` before acting on it, then reconcile Goal, Task Identity, profile, and pending work with it. Use `plan_edit.py resume N --decision ...` to continue an existing blocked/deferred phase with its IDs and evidence intact. For distinct new work on a settled plan, `reopen` records authorization, adds a phase, and starts its first item. Both operations synchronize execution state in one call.
 3. For `DIFFERENT`, run the supplied release command; do not bind, repair, compact, or mutate the candidate. Create a separate plan only if the new work needs one. Release rejects a candidate; it is not end-of-turn cleanup.
 4. For `AMBIGUOUS`, run the supplied `clarify` command, then ask and wait. It preserves the candidate and allows question tools or a text-only question, while blocking plan reads and work. Never release just to wait for clarification.
-5. For a new task, create the three required files. Hooks auto-claim after `tasks.md` exists; without ownership hooks, update `.plan-files` manually.
+5. For a new task, choose a distinct task id and create the three required files. PreTool reserves that task before a recognized plan write; PostTool confirms creation. Never reuse another session’s task id. Without hooks, use explicit plan paths and do not claim equivalent session isolation.
 
 An ownership denial requires routing, not an environment-blocker report. Resolve it before exploring, then retry. Never release a continuing plan just to unlock tools. Within an owned prompt, use `resolve` if uncertain; do not bind again.
 
@@ -95,7 +95,7 @@ python3 <skill-dir>/scripts/plan_checkpoint.py --plan <task-dir>/tasks.md assert
 
 Use `plan_edit.py pause` to block/defer active work: save new decisions/findings, then settle phases, clear Active Item, sync Resume Checkpoint, and write any handoff last in one call. Read the [phase and pause commands](references/plan-operations.md) when needed.
 
-On final completion, pass `--deactivate-pointer`. If it was omitted, use `plan_checkpoint.py deactivate-pointer --project-root <project-root>` instead of repeating `complete`. For an intentional pause with all phases settled and some blocked/deferred work, use `plan_checkpoint.py park --reason ...` instead: finalization retains the candidate for resumption. Write any handoff after parking. After clearing the pointer, retain the known `--plan <task-dir>/tasks.md` for final reads/checks; an empty pointer cannot resolve the plan.
+On final completion, pass `--deactivate-pointer`. This compatibility name now finishes only this session’s lease; it preserves `.plan-files`. If omitted, use `plan_checkpoint.py deactivate-pointer --project-root <project-root>` instead of repeating `complete`. For an intentional pause with settled blocked/deferred work, use `park --reason ...`; ownership stays reserved for resumption. Write any handoff snapshot last. For another session to continue, the owner must explicitly run the supplied bind adapter with `handoff <task-id>` before the receiver binds. Keep the known `--plan <task-dir>/tasks.md` for final reads after finishing the lease.
 
 ## Bounded reads and edits
 
@@ -112,7 +112,7 @@ python3 <skill-dir>/scripts/plan_state.py budgets
 
 For `plan_edit.py --expected-fingerprint`, reuse `file_fingerprint` from a read/previous result, or request `plan_state.py fingerprint --file`. Bare `fingerprint` is a 16-hex progress hash, not an edit token; `fingerprint --json` returns both. Put global flags (`--plan`, `--expected-fingerprint`, `--dry-run`, `--compact`) before the subcommand. Use `--compact` for short editor output instead of piping away errors; use `--dry-run` for consequential structure changes.
 
-Use native Edit/Write for short prose; a literal `cat` heredoc with a quoted delimiter and one Markdown target inside the plan is also recognized. Inline Python does not prove write scope merely by naming plan paths. Findings section edits support existing legacy headings. Use structural helpers when they preserve invariants: `phase-add` accepts repeated `--item`/`--verify` and `--start` in one call; newly authorized work on a settled plan uses `reopen`. Keep execution transitions in `plan_checkpoint.py`. Stale or budget-worsening structural edits are rejected. Scripts default to this workspace's pointer while it names a plan.
+Use native Edit/Write for short prose; a literal `cat` heredoc with a quoted delimiter and one Markdown target inside the plan is also recognized. Inline Python does not prove write scope merely by naming plan paths. Findings section edits support existing legacy headings. Use structural helpers when they preserve invariants: `phase-add` accepts repeated `--item`/`--verify` and `--start` in one call; newly authorized work on a settled plan uses `reopen`. Keep execution transitions in `plan_checkpoint.py`. Stale or budget-worsening structural edits are rejected. Scripts default to this session’s owned task. An explicit `--plan` does not grant permission to write another session’s plan.
 
 Read [targeted plan operations](references/plan-operations.md) before structural, section, archive, or handoff commands, including recovery after interrupted archival.
 

@@ -14,7 +14,7 @@ This separation prevents completed work, old test output, and resolved failures 
 
 ## Routing and ownership
 
-Task memory and conversation routing are separate. `.plan-files` names the default candidate; a private session route names what the current prompt has confirmed. Each prompt suspends the previous lease, exposes only Task Identity + Goal, and waits for an agent `SAME` decision before full loading or enforcement.
+Task memory and conversation routing are separate. `.plan-files` identifies the workspace root; a private session route identifies its own reserved task and what the current prompt has confirmed. Independent sessions use different task ids; an unrelated session has no candidate. Each prompt suspends the previous lease, exposes only Task Identity + Goal, and waits for an agent `SAME` decision before full loading or enforcement.
 
 An ownership-aware hook adapter must:
 

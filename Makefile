@@ -8,10 +8,10 @@ help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 test: ## Run planning contract tests
+	@python3 tests/test-session-state.py
 	@python3 tests/test-plan-commands.py
 	@python3 tests/test-ownership-flow.py
 	@bash tests/test-planning-contract.sh
-	@bash tests/test-session-ownership.sh
 	@bash tests/test-project-root-resolution.sh
 	@bash tests/test-codex-global-hooks.sh
 	@bash tests/test-claude-global-hooks.sh
@@ -136,18 +136,10 @@ install-global install: install-skills install-hooks ## Install skills and avail
 
 # ---------------------------------------------------------------------------
 injected-content: ## Show what the post-tool-use hook would inject from the active tasks.md
-	@id=$$(cat .plan-files 2>/dev/null || true); \
-	case "$$id" in ""|.|*/*|*..*|*" "*) echo "no valid active plan"; exit 0;; esac; \
-	file="tmp/plan-files/$$id/tasks.md"; \
-	if [ ! -f "$$file" ]; then echo "active tasks.md not found: $$file"; exit 0; fi; \
-	awk '/^## (Goal|Current Phase)[[:space:]]*$$/{c=1;print;next} /^## /{c=0} c' "$$file" | awk 'BEGIN{c=0} /<!--/{c=1} c==0{print} /-->/{c=0}'
+	@python3 "$(SKILL_SRC)/scripts/plan_state.py" context $(if $(PLAN),"$(PLAN)")
 
 plan-overview: ## Show bounded state, fingerprints, and budgets for the active plan
-	@id=$$(cat .plan-files 2>/dev/null || true); \
-	case "$$id" in ""|.|*/*|*..*|*" "*) echo "no valid active plan"; exit 0;; esac; \
-	file="tmp/plan-files/$$id/tasks.md"; \
-	if [ ! -f "$$file" ]; then echo "active tasks.md not found: $$file"; exit 0; fi; \
-	python3 "$(SKILL_SRC)/scripts/plan_state.py" overview "$$file"
+	@python3 "$(SKILL_SRC)/scripts/plan_state.py" overview $(if $(PLAN),"$(PLAN)")
 
 # ----------------------------------------------------------------------------
 # Upstream sync (origin = PhungXuanAnh fork, upstream = OthmanAdi original)

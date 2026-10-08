@@ -6,7 +6,7 @@ Resolve all script paths relative to `SKILL.md`.
 
 ## Resolving the plan
 
-`plan_state.py`, `plan_edit.py`, and `plan_checkpoint.py` all take the plan as an optional argument (`--plan` on the editor and checkpoint, positional on the reader). When it is omitted they resolve the task named by this workspace's `.plan-files` pointer, discovered upward from the working directory — the same default the hooks route on, rewritten by `session-state.sh` whenever a session claims or binds a task. A command that resolved it this way echoes the file it acted on in `plan`, and one that cannot resolve a usable pointer fails without writing, naming the pointer it read. Name the plan explicitly to act on a task other than the active one, or when running from outside the project. Examples below keep `--plan` where the path is the point; everywhere else it is optional. `plan_state.py section` accepts a bare planning filename (`decisions.md`) and resolves it inside the active task directory.
+`plan_state.py`, `plan_edit.py`, and `plan_checkpoint.py` accept an optional plan path (`--plan` on editor/checkpoint, positional on reader). Omitted paths resolve only the current provider/session’s owned task through `.sessions/`; `.plan-files` is never a task default. The result reports the chosen `plan`. Missing or ambiguous identity and unbound sessions fail explicitly. Use a known path for reads after finalization or offline work. Explicit paths do not bypass a foreign reservation: checkpoint/editor mutations share routing and plan locks and revalidate ownership after waiting. Offline mutation without identity is allowed only for an unowned plan. `plan_state.py section decisions.md HEADING` resolves inside the owned task. `make plan-overview` and `make injected-content` use the same resolver, or accept `PLAN=<tasks.md>`.
 
 ## Bounded reads
 
@@ -81,7 +81,7 @@ Direct removal is intentionally narrow: an item must be unchecked, non-active, a
 
 ## Pausing
 
-After `pause` settles every phase, `plan_checkpoint.py park --reason "user will resume after review"` permits finalization while retaining the candidate pointer. At least one phase must be blocked/deferred; actionable or entirely complete plans cannot park. The reason is stored as `- **Parked:** ...` in Resume Checkpoint. `resume`, `reopen`, and checkpoint `start` clear it before execution, and it cannot exempt actionable work from finalization. Park before writing a handoff, because parking changes `tasks.md`. A pointer naming another task is never overwritten.
+After `pause` settles every phase, `plan_checkpoint.py park --reason "user will resume after review"` permits finalization while retaining this session’s task reservation. At least one phase must be blocked/deferred; actionable or entirely complete plans cannot park. The reason is stored as `- **Parked:** ...` in Resume Checkpoint. `resume`, `reopen`, and checkpoint `start` clear it before execution, and it cannot exempt actionable work from finalization. Park before writing a handoff, because parking changes `tasks.md`. Other sessions and the workspace marker remain unchanged.
 
 When the user postpones work, one call settles the phase and stages its handoff:
 
@@ -131,9 +131,9 @@ Common targets:
 | `history.md` | Completed Phases, Verification History, Resolved Errors |
 | `handoff.md` | whole overwrite-only resume snapshot |
 
-Keep using `plan_checkpoint.py` for `start`, `progress`, and `complete`. Do not emulate execution transitions with generic section edits. `plan_checkpoint.py deactivate-pointer --project-root <root>` is the recovery for a settled plan that finished without `--deactivate-pointer`: it reports `operation`, `pointer`, `cleared`, and the additive `reason` field (`cleared`, `already_empty`, `missing`, or `different_task`). It is idempotent, names whichever pointer file the workspace actually uses, preserves pointers to other tasks, and fails with remaining issues when the plan is not otherwise finalizable. Reaching for a hand edit of the pointer instead is blocked on a settled plan.
+Keep using `plan_checkpoint.py` for `start`, `progress`, and `complete`. Do not emulate execution transitions with generic section edits. `plan_checkpoint.py deactivate-pointer --project-root <root>` is the compatibility finalizer for work completed without `--deactivate-pointer`. It retains `operation`, `pointer`, and `cleared` fields, now returning `cleared: false` and `reason: "session_scoped"`: the root marker is always preserved. The CLI finishes only the caller’s fully complete lease, with generation and completion rechecked under the routing lock. Repeated calls with an explicit path are safe. Blocked/deferred work retains ownership; use `park` for a pause or explicit `handoff` for another session. `POINTER_ACTIVE` is no longer a finalizability issue.
 
-After deactivation, the default pointer no longer resolves a plan. Keep its known path for subsequent reads and `python3 <skill-dir>/scripts/plan_checkpoint.py --plan <tasks.md> assert-finalizable --project-root <root>`.
+After the session’s lease finishes, omitted-path commands no longer resolve its plan. Keep its known path for subsequent reads and `python3 <skill-dir>/scripts/plan_checkpoint.py --plan <tasks.md> assert-finalizable --project-root <root>`.
 
 ## Lifecycle operations
 

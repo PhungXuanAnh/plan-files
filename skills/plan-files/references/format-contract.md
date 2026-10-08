@@ -42,7 +42,7 @@ Resume Checkpoint retains these fields:
 
 Use a real external dependency instead of `none` when blocked. The checkpoint script synchronizes Next action and Blocker when it advances Active Item.
 
-An optional `- **Parked:** <non-placeholder reason>` is written by `plan_checkpoint.py park` for an intentionally paused plan. It permits retaining the candidate pointer only when every phase is settled and at least one is blocked/deferred. Starting or resuming execution removes it; a stale marker never hides actionable work.
+An optional `- **Parked:** <non-placeholder reason>` is written by `plan_checkpoint.py park` for an intentionally paused plan. It records a pause only when every phase is settled and at least one is blocked/deferred; the session retains its task reservation. Starting or resuming execution removes it; a stale marker never hides actionable work.
 
 ## Phase and status grammar
 
@@ -116,4 +116,4 @@ Timezone-aware ISO-8601 timestamps and a positive window are required. Expired e
 
 ## Settlement
 
-An explicit discussion/clarification lease may yield without claiming completion; text-only pending turns may also yield before attempted work requires routing. During execution, Stop blocks malformed or actionable plans. Finalization requires every phase settled, no Active Item, truthful status/evidence, and the owned pointer deactivated or explicitly parked with blocked/deferred work remaining.
+An explicit discussion/clarification lease may yield without claiming completion; text-only pending turns may also yield before attempted work requires routing. During execution, Stop blocks malformed or actionable plans. Finalization requires every phase settled, no Active Item, truthful status/evidence, and current restore/freshness checks. Fully complete work releases its own session lease; blocked/deferred work may be explicitly parked and retains its reservation. Workspace marker contents never determine finalizability.

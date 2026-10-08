@@ -17,6 +17,9 @@ import sys
 from pathlib import Path
 from typing import NamedTuple
 
+from session_state import (RECORD_FILES as PLAN_RECORD_FILES, EDIT_RECORD_OPS,
+                           EDIT_FILE_OPS, EDIT_ADVANCE_OPS, edit_operation_class)
+
 
 QUESTION_TOOLS = {"askuserquestion", "ask_user_question", "request_user_input", "request_user_input_async"}
 
@@ -756,7 +759,7 @@ def load_payload() -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-PLANNING_HELPERS = {"plan_state.py", "plan_edit.py", "plan_checkpoint.py", "session-state.sh",
+PLANNING_HELPERS = {"plan_state.py", "plan_edit.py", "plan_checkpoint.py", "session-state.sh", "session_state.py",
                     "resolve-project-root.sh", "bind-session.sh"}
 
 
@@ -962,7 +965,7 @@ def shell_runs_planning_helper(tool_input: object, plan_dir: Path | None = None)
     return maintains
 
 
-ROUTING_VERBS = {"bind", "release", "clarify", "discuss"}
+ROUTING_VERBS = {"bind", "release", "clarify", "discuss", "handoff"}
 # PWF_SESSION_ID would rewrite another session's lease and a foreign
 # PWF_PROJECT_ROOT would route a different project, so the routing command
 # carries at most the one assignment the gate's own message prescribes.
@@ -1088,14 +1091,8 @@ def routing_verb(tool_input: object, bind_tool: Path, project_root: Path, task_i
 # may record into the other planning files. Subcommand names come from the
 # helpers' own --help surfaces, so the classification follows the tools rather
 # than a guess about what a call writes.
-PLAN_RECORD_FILES = {"decisions.md", "findings.md", "history.md"}
-PLAN_LEASE_HELPERS = {"session-state.sh", "bind-session.sh", "resolve-project-root.sh"}
+PLAN_LEASE_HELPERS = {"session-state.sh", "session_state.py", "bind-session.sh", "resolve-project-root.sh"}
 CHECKPOINT_READ_OPS = {"assert-finalizable"}
-EDIT_RECORD_OPS = {"decision-supersede", "decisions-compact", "decisions-consolidate", "archive-phase", "compact-oldest", "archive-entry"}
-EDIT_FILE_OPS = {"entry-append", "entry-replace", "entry-remove", "section-replace"}
-EDIT_ADVANCE_OPS = {"phase-add", "phase-update", "phase-move", "phase-remove",
-                    "item-add", "item-update", "item-move", "item-remove",
-                    "reopen", "resume", "pause", "handoff-write", "handoff-clear"}
 # Most restrictive first: one advance anywhere in a command decides it.
 OP_CLASS_ORDER = ("advance", "record", "unknown", "read")
 
@@ -1148,15 +1145,8 @@ def _helper_op_class(script: str, operands: list[str]) -> str:
     if script == "plan_checkpoint.py":
         return "read" if any(word in CHECKPOINT_READ_OPS for word in operands) else "advance"
     if script == "plan_edit.py":
-        if "--dry-run" in operands:
-            return "read"
-        if any(word in EDIT_ADVANCE_OPS for word in operands):
-            return "advance"
-        if any(word in EDIT_RECORD_OPS for word in operands):
-            return "record"
-        if any(word in EDIT_FILE_OPS for word in operands):
-            return "record" if _named_file_operand(operands) in PLAN_RECORD_FILES else "advance"
-        return "advance"
+        command = next((word for word in operands if word in EDIT_ADVANCE_OPS | EDIT_RECORD_OPS | EDIT_FILE_OPS), "")
+        return edit_operation_class(command, _named_file_operand(operands), "--dry-run" in operands)
     return "unknown"
 
 
@@ -1304,6 +1294,21 @@ def outside_every_plan(tool_input: object, project_root: Path) -> bool:
 
 
 def main() -> int:
+    if len(sys.argv) == 6 and sys.argv[1] == "routing-skill-read":
+        payload = load_payload()
+        if payload is None:
+            return 1
+        value = payload_tool_input(payload)
+        if not routing_verb(value, Path(sys.argv[3]).resolve(), Path(sys.argv[4]).resolve(), sys.argv[5]):
+            return 1
+        target = os.path.realpath(sys.argv[2])
+        segments = shell_segments(shell_command_text(value)) or []
+        return 0 if any(_segment_is_read_only(segment, allow_substitutions=True)
+                        and any(os.path.realpath(word) == target for word in segment.argv)
+                        for segment in segments) else 1
+    if len(sys.argv) == 2 and sys.argv[1] == "read-only":
+        payload = load_payload()
+        return 0 if payload is not None and is_read_only_call(payload) else 1
     if len(sys.argv) == 2 and sys.argv[1] == "hook-diagnostic":
         payload = load_payload()
         if payload is None:

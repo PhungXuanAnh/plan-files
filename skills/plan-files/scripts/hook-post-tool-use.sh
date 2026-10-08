@@ -31,6 +31,12 @@ if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e .plan-files-skip ]; then
     exit 0
 fi
 SESSION_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" session-id 2>/dev/null || true)
+[ -n "$SESSION_ID" ] || { printf '{}'; exit 0; }
+export PWF_SESSION_ADAPTER="$PROVIDER" PWF_SESSION_ID="$SESSION_ID"
+EVENT_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" event-id 2>/dev/null || true)
+if [ -n "$EVENT_ID" ] && ! PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" event-check "$PROVIDER" "$SESSION_ID" "$EVENT_ID" 2>/dev/null; then
+    printf '{}'; exit 0
+fi
 if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION_ID" 2>/dev/null)" = "discussing" ]; then
     printf '{}'; exit 0
 fi
@@ -46,16 +52,17 @@ json_escape() {
 }
 
 PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" resolve "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+MUTATION_PLAN=$(printf '%s' "$INPUT" \
+    | python3 "$REPO_ROOT/skills/plan-files/scripts/maintenance-tool-allowed.py" mutation-plan-id "$PWD" 2>/dev/null || true)
+if [ -n "$PLAN_DIR" ] && [ -n "$MUTATION_PLAN" ] && [ "$(basename "$PLAN_DIR")" != "$MUTATION_PLAN" ]; then
+    printf '{}'; exit 0
+fi
 if [ -z "$PLAN_DIR" ] && [ -n "$SESSION_ID" ] && command -v python3 >/dev/null 2>&1; then
-    # PreToolUse cannot claim a brand-new task's first Write (tasks.md/
-    # findings.md/decisions.md didn't exist on disk yet when it ran, so
-    # claim_task's task_exists guard would always fail there). Claim it now
-    # that the write has succeeded and the file actually exists, so this
-    # session doesn't stay silently unowned right after creating its own plan.
-    MUTATION_PLAN=$(printf '%s' "$INPUT" \
-        | python3 "$REPO_ROOT/skills/plan-files/scripts/maintenance-tool-allowed.py" mutation-plan-id "$PWD" 2>/dev/null || true)
+    # Only finish the reservation made by the matching PreTool event. A late
+    # event after release or a new prompt must never claim the old plan again.
     if [ -n "$MUTATION_PLAN" ]; then
-        PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" claim "$PROVIDER" "$SESSION_ID" "$MUTATION_PLAN" 2>/dev/null || true)
+        EVENT_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" event-id 2>/dev/null || true)
+        PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" created "$PROVIDER" "$SESSION_ID" "$MUTATION_PLAN" --event "$EVENT_ID" 2>/dev/null || true)
     fi
 fi
 if [ -z "$PLAN_DIR" ]; then
@@ -159,13 +166,13 @@ fi
 FINALIZE_WARN=""
 if [ "$TOTAL" -gt 0 ] && [ $((COMPLETE + BLOCKED + DEFERRED)) -ge "$TOTAL" ] \
     && [ -z "$INTEGRITY_WARN" ]; then
-    # Pointer cleanup is a finalization reminder, not an execution prerequisite.
+    # Finalization uses the owned plan; root marker contents do not affect settlement.
     if grep -qE '^## Active Item[[:space:]]*$' "$PLAN_FILE"; then
         FINALIZE_ISSUE=$(planning_assert_finalizable "$PLAN_FILE" "$PWD")
         if [ "$FINALIZE_ISSUE" != "FINALIZABLE" ]; then
             printf -v FINAL_PLAN_ARG '%q' "$PLAN_FILE"
             printf -v FINAL_ROOT_ARG '%q' "$PWD"
-            FINALIZE_WARN="[plan-files] FINALIZATION ACTION REQUIRED ($FINALIZE_ISSUE). After pointer cleanup, verify with: python3 $(planning_script_path plan_checkpoint.py) --plan $FINAL_PLAN_ARG assert-finalizable --project-root $FINAL_ROOT_ARG."
+            FINALIZE_WARN="[plan-files] FINALIZATION ACTION REQUIRED ($FINALIZE_ISSUE). Verify the settled plan with: python3 $(planning_script_path plan_checkpoint.py) --plan $FINAL_PLAN_ARG assert-finalizable --project-root $FINAL_ROOT_ARG."
         fi
     fi
     if [ -z "$COMPACTION_WARN$RESTORE_WARN$FINALIZE_WARN$BACKGROUND_WARN$REOPEN_WARN" ]; then

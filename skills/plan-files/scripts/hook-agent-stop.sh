@@ -51,6 +51,13 @@ if [ "${PLANNING_DISABLED:-0}" = "1" ] || [ -e .plan-files-skip ]; then
     exit 0
 fi
 SESSION_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" session-id 2>/dev/null || true)
+[ -n "$SESSION_ID" ] || { printf '{}'; exit 0; }
+export PWF_SESSION_ADAPTER="$PROVIDER" PWF_SESSION_ID="$SESSION_ID"
+LEASE_GENERATION=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" generation "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+if ! HEALTH=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" health "$PROVIDER" "$SESSION_ID" 2>&1); then
+    render_stop_block "[plan-files] Invalid session ownership: $HEALTH. Diagnose the state; an owning session can explicitly handoff a duplicate legacy reservation."
+    exit 0
+fi
 # Explicit ambiguity is allowed to wait without clearing the candidate or plan.
 ROUTE_STATUS=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
 if [ "$ROUTE_STATUS" = "waiting" ] || [ "$ROUTE_STATUS" = "discussing" ]; then
@@ -189,16 +196,13 @@ if [ -n "$INTEGRITY_WARN" ]; then
 fi
 
 if [ $((COMPLETE + BLOCKED + DEFERRED)) -ge "$TOTAL" ]; then
-    # All phases settled (complete, blocked-with-reason, or deferred-with-reason).
-    # Only a fully complete plan is genuinely finished, and only then is its
-    # LEASE stood down here. --deactivate-pointer clears .plan-files but not
-    # the lease, so without this the next prompt still nominates a task with
-    # nothing left to do and the agent must run a release command by hand.
-    # The pointer is deliberately untouched: it is the candidate signal for the
-    # next prompt, and clearing both would make a finished plan unreferenceable.
-    # A blocked or deferred plan is PAUSED, not done, so it keeps its lease.
+    # Finish only this generation of a fully complete lease. The core rechecks
+    # under the routing lock; paused tasks keep their reservation for resumption.
     if [ "$BLOCKED" -eq 0 ] && [ "$DEFERRED" -eq 0 ] && [ "$TOTAL" -gt 0 ]; then
-        PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" finish "$PROVIDER" "$SESSION_ID" "$(basename "$PLAN_DIR")" 2>/dev/null || true
+        if ! FINALIZE_ERROR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" finish "$PROVIDER" "$SESSION_ID" "$(basename "$PLAN_DIR")" "$LEASE_GENERATION" 2>&1); then
+            render_stop_block "[plan-files] $FINALIZE_ERROR"
+            exit 0
+        fi
         log "decision: ALL COMPLETE ($COMPLETE/$TOTAL) -> lease finished, pointer untouched, allow stop"
     else
         log "decision: ALL SETTLED with blocked=$BLOCKED deferred=$DEFERRED -> lease retained for resume, allow stop"

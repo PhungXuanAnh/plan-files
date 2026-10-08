@@ -1,5 +1,6 @@
 # Tasks: [Brief Description]
 <!-- Private runtime file. Session hooks add local Git excludes when the project root has a .git directory. -->
+<!-- One task has one session owner; bind/reserve via .sessions/. Do not select it by rewriting .plan-files. -->
 <!-- Trusted hot state. Keep at most 300 lines, 24 KiB, 12 hot phase headings, ~100 visible items, and 15 items/4 KiB in Current Phase. -->
 
 ## Goal

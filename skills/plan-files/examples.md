@@ -69,7 +69,7 @@ python3 <skill-dir>/scripts/plan_edit.py --compact --expected-fingerprint <file_
   --verify "The redirect regression passes." --start
 ```
 
-For distinct new work when every earlier phase is complete/blocked/deferred, use `reopen --title ... --decision ... --item ...`; it records the authorization and keeps unrelated deferred work unchanged. When the user instead resumes an existing paused phase, use `resume N --decision ...` to preserve its IDs and evidence. Add work explicitly postponed by the user with `phase-add --status deferred --reason ...`; leaving it pending makes it eligible for automatic continuation. Use `complete Pn.m --evidence ...` when the active outcome is true, or `pause --status blocked --reason ...` for an external dependency. Short findings prose can be edited directly; do not create a second copy of each item evidence there. After final pointer cleanup, pass the known `--plan <tasks.md>` to `assert-finalizable`.
+For distinct new work when every earlier phase is complete/blocked/deferred, use `reopen --title ... --decision ... --item ...`; it records the authorization and keeps unrelated deferred work unchanged. When the user instead resumes an existing paused phase, use `resume N --decision ...` to preserve its IDs and evidence. Add work explicitly postponed by the user with `phase-add --status deferred --reason ...`; leaving it pending makes it eligible for automatic continuation. Use `complete Pn.m --evidence ...` when the active outcome is true, or `pause --status blocked --reason ...` for an external dependency. Short findings prose can be edited directly; do not create a second copy of each item evidence there. After finishing the session lease, pass the known `--plan <tasks.md>` to `assert-finalizable`.
 
 ## Archive during compaction
 
@@ -120,7 +120,7 @@ python3 <skill-dir>/scripts/plan_edit.py --expected-fingerprint <sha256> \
   --heading "Files Touched" --entry '- src/auth/login.ts: await fix'
 ```
 
-These commands resolve the plan from the workspace's `.plan-files` pointer; pass `--plan <task-dir>/tasks.md` (or the positional path for `plan_state.py`) to act on another task. Read `references/plan-operations.md` for structural, archival, decision, and handoff commands. Directly read or patch the Markdown when the intended repair is too unusual for those safe primitives.
+These commands resolve this session’s owned plan. Pass `--plan <task-dir>/tasks.md` (or the positional path for `plan_state.py`) for explicit reads or offline unowned work; an explicit path cannot authorize writes to another session’s task. Read `references/plan-operations.md` for structural, archival, decision, and handoff commands. Directly read or patch the Markdown when the intended repair is too unusual for those safe primitives.
 
 When the hot window already has 12 phase headings, add the next phase with both current fingerprints. The editor archives and evicts the oldest eligible complete phase before writing the new monotonic ID:
 
@@ -189,6 +189,12 @@ The user asks why the last run behaved a certain way, and the prompt hook report
 ## Small followups and intentional pauses
 
 For a three-sentence correction within a complete phase, reuse the hash from `overview` and call `reopen --append 2 --decision '<authorization row>' --item 'The corrected text passes the requested check'`. Perform the edit and check, then `complete <returned-item> --evidence '<actual result>' --deactivate-pointer`. Existing phase evidence survives; no extra phase or ceremonial verification item is required. Final restore/finalization checks still apply.
+
+## Two sessions in one folder
+
+Give session A task `api-fix` and session B task `docs-update`. Each creates its own `tmp/plan-files/<task-id>/` files; the first recognized write reserves only that task. After binding, `plan_state.py overview` and `plan_checkpoint.py progress ...` without paths resolve that session’s own task. A third session doing ordinary code work receives no planning candidate merely because the other plans exist.
+
+To continue A’s unfinished work in B, first have A run its hook-supplied bind adapter with `handoff api-fix`. B must finish or explicitly hand off its own task before binding another. Then name `tmp/plan-files/api-fix/tasks.md` in B’s prompt and follow B’s supplied bind command. Do not copy A’s session id or edit `.sessions/`. Separate task folders do not coordinate simultaneous edits to the same source file.
 
 For “continue after approval,” first `pause --all-remaining --status blocked --reason 'Waiting for approval'`, then `plan_checkpoint.py park --reason 'Resume when approval arrives'`. The candidate stays discoverable and `assert-finalizable` succeeds without clearing it. Write a handoff last if needed. A later authorized `resume N --decision ...` clears the parked marker and preserves original IDs and partial evidence.
 

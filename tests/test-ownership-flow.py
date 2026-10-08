@@ -1,14 +1,18 @@
 """Cross-provider ownership recovery and maintenance behavior, in isolated roots."""
 import hashlib
+import concurrent.futures
+import io
 import json
 import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import tempfile
 import time
 import unittest
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +66,11 @@ P1.1
         (self.project / ".plan-files").write_text("task-a\n")
 
     def run_command(self, args, provider, payload=None, check=True):
+        # Provider parity subtests have separate lifecycles. Concurrent owners
+        # are exercised in test-session-state.py; they may not share task-a.
+        if getattr(self, "last_provider", provider) != provider:
+            shutil.rmtree(self.project / "tmp/plan-files/.sessions", ignore_errors=True)
+        self.last_provider = provider
         env = {**os.environ, "PWF_PROJECT_ROOT": str(self.project),
                "PWF_SESSION_ADAPTER": provider, "PWF_SESSION_ID": "fixture",
                "CODEX_THREAD_ID": "fixture", "COPILOT_AGENT_SESSION_ID": "fixture",
@@ -120,7 +129,8 @@ P1.1
             payload["toolInput" if camel else "tool_input"] = tool_input
         result = json.loads(self.run_command(
             ["python3" if event.endswith(".py") else "bash", str(ADAPTERS[provider] / event)],
-            provider, {**payload, "transformedPrompt": "continue"}).stdout)
+            provider, {**payload, "prompt": "continue tmp/plan-files/task-a/tasks.md",
+                       "transformedPrompt": "continue tmp/plan-files/task-a/tasks.md"}).stdout)
         result = result.get("hookSpecificOutput", result)
         if event == "pre-tool-use.sh" and "reason" in result:
             if provider == "grok":
@@ -413,7 +423,7 @@ P1.1
                 self.assertEqual(self.state(provider, "pending-candidate", provider, "fixture"), "task-a")
                 self.assertIn(self.hook(provider, "pre-tool-use.sh")["decision"], {"block", "deny"})
                 self.run_command(["bash", "-c", self.action(provider, "release")], provider)
-                self.assertEqual((self.project / ".plan-files").read_text(), "")
+                self.assertEqual((self.project / ".plan-files").read_text(), "task-a\n")
                 (self.project / ".plan-files").write_text("task-a\n")
 
     def test_maintenance_and_workflow_question(self):
@@ -493,7 +503,7 @@ P1.1
                           "complete", "P1.1", "--evidence", "redirect verified", "--deactivate-pointer"], provider)
         self.assertEqual(self.hook(provider, "agent-stop.sh"), {})
         self.assertEqual(self.state(provider, "resolve", provider, "fixture", check=False), "")
-        self.assertEqual((self.project / ".plan-files").read_text(), "")
+        self.assertEqual((self.project / ".plan-files").read_text(), "task-a\n")
 
     def test_feedback_path_allows_any_tool_and_is_session_scoped(self):
         self.state("grok", "pending", "grok", "fixture", "task-a")
@@ -826,6 +836,10 @@ P1.1
                 self.assertEqual(self.state(provider, "skill-loaded", provider, "fixture", "check",
                                             check=False), "")
                 self.state(provider, "skill-loaded", provider, "fixture", "clear")
+                combined = f"cat {skill_md} && {self.action(provider, 'bind')}"
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", combined).get("decision"), {"block", "deny"})
+                self.run_command(["bash", "-c", combined], provider)
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", "touch app.py").get("decision"), {"block", "deny"})
 
     def assertRunnablePathsAbsolute(self, text, where):
         for token in RUNNABLE_MENTION.findall(text or ""):
@@ -851,7 +865,7 @@ P1.1
                 (self.project / ".plan-files").write_text("task-a\n")
                 self.own(provider)
                 first = self.hook(provider, "post-tool-use.sh").get("additionalContext", "")
-                self.assertIn("FINALIZATION ACTION REQUIRED", first)
+                self.assertNotIn("FINALIZATION ACTION REQUIRED", first)
                 self.assertEqual(self.hook(provider, "post-tool-use.sh").get("additionalContext", ""), "")
                 denied = self.hook(provider, "pre-tool-use.sh", "touch app.py")
                 self.assertIn(denied.get("decision"), {"block", "deny"})
@@ -992,5 +1006,23 @@ P1.1
             findings.write_text(saved_findings)
 
 
+def run_case(name):
+    output = io.StringIO()
+    result = unittest.TextTestRunner(stream=output).run(OwnershipFlow(name))
+    return name, result.wasSuccessful(), output.getvalue()
+
+
 if __name__ == "__main__":
-    unittest.main()
+    if len(sys.argv) > 1:
+        unittest.main()
+    else:
+        # Each case owns its TemporaryDirectory. Parallel processes reduce
+        # shell-adapter regression time without sharing fixtures or leases.
+        names = unittest.defaultTestLoader.getTestCaseNames(OwnershipFlow)
+        with concurrent.futures.ProcessPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(run_case, names))
+        for name, ok, output in results:
+            print(f"{'PASS' if ok else 'FAIL'} {name}")
+            if not ok:
+                print(output)
+        raise SystemExit(not all(ok for _, ok, _ in results))

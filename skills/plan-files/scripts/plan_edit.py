@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import hashlib
 import json
 import os
@@ -16,6 +15,7 @@ from pathlib import Path
 from typing import Iterable
 
 import plan_checkpoint
+from session_state import authorize_edit, plan_transaction
 from plan_state import (
     CURRENT_PHASE_BYTE_LIMIT,
     CURRENT_PHASE_ITEM_LIMIT,
@@ -37,7 +37,6 @@ from plan_state import (
 
 PHASE_HIGH_WATER_RE = re.compile(r"<!-- Phase ID high-water:\s*(\d+) -->")
 TRANSACTION_FILE = ".plan-edit-transaction.json"
-LOCK_FILE = ".plan-edit.lock"
 TRANSACTION_MAX_BYTES = 64 * 1024
 
 
@@ -71,14 +70,8 @@ def _atomic_write(path: Path, text: str) -> None:
 
 @contextmanager
 def _plan_lock(plan: Path):
-    lock = plan.parent / LOCK_FILE
-    descriptor = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        with os.fdopen(descriptor, "r+") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            yield
-    finally:
-        pass
+    with plan_transaction(plan):
+        yield
 
 
 def _transaction_path(plan: Path) -> Path:
@@ -920,7 +913,7 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help=(
             "path to the plan's tasks.md file (not the task directory); omit it to use "
-            "the task named by this workspace's .plan-files pointer"
+            "the task owned by this provider/session in .sessions/"
         ),
     )
     parser.add_argument(
@@ -1972,6 +1965,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     try:
         args.plan = resolve_plan_argument(args.plan)
         with _plan_lock(args.plan):
+            authorize_edit(args.plan, args.command, getattr(args, "file", ""), args.dry_run)
             _recover_transaction(args.plan)
             return _main_locked(args)
     except (EditError, OSError, ValueError) as error:

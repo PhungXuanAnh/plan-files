@@ -7,7 +7,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 INPUT=$(cat)
 printf '%s' "$INPUT" | grok_input_has_verified_session || { printf '{}'; exit 0; }
 
-# State updates (including first-write auto-claim) are required on every Grok
+# State updates (including confirmation of first-write reservations) are required on every Grok
 # version. Newer builds also deliver the emitted additionalContext; older
 # builds safely ignore it, so correctness never depends on that delivery.
 printf '%s' "$INPUT" \

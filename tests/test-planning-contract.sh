@@ -250,7 +250,7 @@ assert_contains "$(current_phase_pointer "$PLAN_DIR/tasks.md")" "Phase 2" "check
 python3 "$CHECKPOINT_TOOL" --plan "$PLAN_DIR/tasks.md" complete P2.1 --evidence "regression check passed" >/dev/null
 python3 "$CHECKPOINT_TOOL" --plan "$PLAN_DIR/tasks.md" complete V2.1 --evidence "final review passed" --deactivate-pointer >/dev/null
 assert_eq "$(planning_assert_finalizable "$PLAN_DIR/tasks.md" "$PROJECT")" "FINALIZABLE" "final checkpoint settles and deactivates plan"
-assert_eq "$(cat "$PROJECT/.plan-files")" "" "final checkpoint clears owned pointer"
+assert_eq "$(cat "$PROJECT/.plan-files")" "test-task" "final checkpoint preserves workspace marker"
 printf '%s\n' test-task > "$PROJECT/.plan-files"
 
 # Restore validation diagnoses every context-bearing field with a targeted
@@ -677,6 +677,8 @@ bash -n "$REPO_ROOT"/.codex/hooks/plan-files/scripts/*.sh \
     "$REPO_ROOT"/.claude/hooks/plan-files/scripts/*.sh \
     "$REPO_ROOT"/.github/hooks/scripts/*.sh
 
+# Shared policy uses one Codex fixture; all four adapter envelopes are exercised
+# by test-ownership-flow.py and the provider installer suites.
 # Compaction gate: observations stay possible, mutations stay in planning scope.
 printf '%s' '{"tool_name":"rg","tool_input":{"command":"rg Phase ."}}' | python3 "$REPO_ROOT/skills/plan-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR" || fail "compaction allows read search"
 printf '%s' '{"tool_name":"mcp__serena__search_for_pattern","tool_input":{"substring_pattern":"Phase","relative_path":"src"}}' | python3 "$REPO_ROOT/skills/plan-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR" || fail "compaction allows Serena read search"
@@ -709,9 +711,9 @@ fi
 # The actual blocked PreToolUse response tells the model what remains allowed.
 write_valid_plan
 head -c 33000 /dev/zero | tr '\0' x > "$PLAN_DIR/findings.md"
-PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" pending codex codex-compaction >/dev/null
-PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=codex PWF_SESSION_ID=codex-compaction "$STATE_TOOL" bind test-task >/dev/null
-COMPACTION_BLOCK=$(cd "$PROJECT" && printf '%s\n' '{"session_id":"codex-compaction","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"npm test"}}' | "$REPO_ROOT/.codex/hooks/plan-files/scripts/pre-tool-use.sh")
+PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" pending codex codex-contract >/dev/null
+PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=codex PWF_SESSION_ID=codex-contract "$STATE_TOOL" bind test-task >/dev/null
+COMPACTION_BLOCK=$(cd "$PROJECT" && printf '%s\n' '{"session_id":"codex-contract","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"npm test"}}' | "$REPO_ROOT/.codex/hooks/plan-files/scripts/pre-tool-use.sh")
 assert_contains "$COMPACTION_BLOCK" "read-only diagnosis" "compaction block explains project reads"
 assert_contains "$COMPACTION_BLOCK" "native Edit/Write with an explicit file_path inside" "compaction block explains scoped plan mutations"
 assert_contains "$COMPACTION_BLOCK" "even as arguments: switch to native Edit/Write or a supported helper" "compaction block gives an actionable opaque-shell repair"
@@ -721,30 +723,23 @@ assert_contains "$COMPACTION_LOG" "tool_call tool_name=Bash" "pre-tool log recor
 assert_not_contains "$COMPACTION_LOG" 'tool_input=' "pre-tool log does not retain raw tool parameters"
 assert_not_contains "$COMPACTION_LOG" 'command=npm test' "pre-tool log does not retain command previews"
 assert_contains "$COMPACTION_LOG" "decision=block-compaction tool=Bash" "pre-tool log correlates blocked decision"
-CHECKPOINT_PAYLOAD=$(printf '{"session_id":"codex-compaction","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"python3 %s --plan %s progress P1.1 --evidence checkpoint"}}\n' "$CHECKPOINT_TOOL" "$PLAN_DIR/tasks.md")
+CHECKPOINT_PAYLOAD=$(printf '{"session_id":"codex-contract","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"python3 %s --plan %s progress P1.1 --evidence checkpoint"}}\n' "$CHECKPOINT_TOOL" "$PLAN_DIR/tasks.md")
 assert_eq "$(cd "$PROJECT" && printf '%s\n' "$CHECKPOINT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/plan-files/scripts/pre-tool-use.sh")" "{}" "pre-tool gate permits owned structured checkpoint"
 
+export PWF_SESSION_ADAPTER=codex PWF_SESSION_ID=codex-contract
 CODEX_PAYLOAD='{"session_id":"codex-contract","hook_event_name":"Stop","stop_hook_active":false}'
-CLAUDE_PAYLOAD='{"session_id":"claude-contract","hook_event_name":"Stop","stop_hook_active":false}'
-COPILOT_PAYLOAD='{"session_id":"copilot-contract","hook_event_name":"Stop","stop_hook_active":false}'
 CODEX_REPEAT_PAYLOAD='{"session_id":"codex-contract","hook_event_name":"Stop","stop_hook_active":true}'
-CLAUDE_REPEAT_PAYLOAD='{"session_id":"claude-contract","hook_event_name":"Stop","stop_hook_active":true}'
-COPILOT_REPEAT_PAYLOAD='{"session_id":"copilot-contract","hook_event_name":"Stop","stop_hook_active":true}'
 
-CODEX_CANDIDATE=$(cd "$PROJECT" && printf '%s\n' '{"session_id":"codex-contract","hook_event_name":"UserPromptSubmit","prompt":"continue contract-fixture"}' | "$REPO_ROOT/.codex/hooks/plan-files/scripts/user-prompt-submit.sh")
-CLAUDE_CANDIDATE=$(cd "$PROJECT" && printf '%s\n' '{"session_id":"claude-contract","hook_event_name":"UserPromptSubmit","prompt":"continue contract-fixture"}' | "$REPO_ROOT/.claude/hooks/plan-files/scripts/user-prompt-submit.sh")
-COPILOT_CANDIDATE=$(cd "$PROJECT" && printf '%s\n' '{"sessionId":"copilot-contract","transformedPrompt":"continue contract-fixture"}' | "$REPO_ROOT/.github/hooks/scripts/user-prompt-transformed.py")
-for OUTPUT in "$CODEX_CANDIDATE" "$CLAUDE_CANDIDATE" "$COPILOT_CANDIDATE"; do
+CODEX_CANDIDATE=$(cd "$PROJECT" && printf '%s\n' '{"session_id":"codex-contract","hook_event_name":"UserPromptSubmit","prompt":"continue tmp/plan-files/test-task/tasks.md"}' | "$REPO_ROOT/.codex/hooks/plan-files/scripts/user-prompt-submit.sh")
+for OUTPUT in "$CODEX_CANDIDATE"; do
     assert_contains "$OUTPUT" "Candidate task" "compact candidate identity injection"
     assert_contains "$OUTPUT" "Goal:" "compact candidate goal preview"
 done
 PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=codex PWF_SESSION_ID=codex-contract "$STATE_TOOL" bind test-task >/dev/null
-PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=claude PWF_SESSION_ID=claude-contract "$STATE_TOOL" bind test-task >/dev/null
-PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=copilot PWF_SESSION_ID=copilot-contract "$STATE_TOOL" bind test-task >/dev/null
 
 write_contracted_plan
 sed -i '/^## Active Item$/{n;/^P1\.1$/d;}' "$PLAN_DIR/tasks.md"
-for SPEC in 'codex codex-contract' 'claude claude-contract' 'copilot copilot-contract'; do
+for SPEC in 'codex codex-contract'; do
     set -- $SPEC
     assert_contains "$(pre_hook "$1" "$2" "npm test")" "OUTCOME-ITEM CONTRACT VIOLATION" "$1 PreTool blocks operation with missing Active Item"
     assert_eq "$(pre_hook "$1" "$2" "rg Phase .")" "{}" "$1 PreTool allows read-only item repair diagnosis"
@@ -753,14 +748,14 @@ done
 write_valid_plan
 write_contracted_plan
 sed -i 's#^- `make test`: pending#- [external-state observed=2020-01-01T00:00:00Z reverify-after=2020-01-01T00:05:00Z] staging smoke: PASS#' "$PLAN_DIR/tasks.md"
-for SPEC in 'codex codex-contract' 'claude claude-contract' 'copilot copilot-contract'; do
+for SPEC in 'codex codex-contract'; do
     set -- $SPEC
     RESTORE_BLOCK=$(pre_hook "$1" "$2" "npm test")
     assert_contains "$RESTORE_BLOCK" "RESTORE STATE ACTION REQUIRED" "$1 PreTool blocks operational work with stale restore evidence"
     assert_contains "$RESTORE_BLOCK" "EXTERNAL_EVIDENCE_STALE" "$1 PreTool names stale evidence code"
     assert_contains "$RESTORE_BLOCK" "re-run the external check" "$1 PreTool gives targeted restore repair"
     assert_eq "$(pre_hook "$1" "$2" "rg Phase .")" "{}" "$1 PreTool allows bounded restore diagnosis"
-    RESTORE_SESSION="$2-restore"
+    RESTORE_SESSION="$2"
     PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" pending "$1" "$RESTORE_SESSION" >/dev/null
     PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER="$1" PWF_SESSION_ID="$RESTORE_SESSION" "$STATE_TOOL" bind test-task >/dev/null
     assert_contains "$(post_hook "$1" "$RESTORE_SESSION" Read)" "RESTORE STATE ACTION REQUIRED" "$1 PostTool injects bounded restore repair"
@@ -769,8 +764,10 @@ assert_contains "$(python3 "$REPO_ROOT/skills/plan-files/scripts/plan_state.py" 
     '"code":"EXTERNAL_EVIDENCE_STALE"' "bounded overview carries targeted restore issue"
 write_valid_plan
 write_contracted_plan
-for SPEC in 'codex codex-contract' 'claude claude-contract' 'copilot copilot-contract'; do
+for SPEC in 'codex codex-contract'; do
     set -- $SPEC
+    PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" pending "$1" "$2" >/dev/null
+    PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER="$1" PWF_SESSION_ID="$2" "$STATE_TOOL" bind test-task >/dev/null
     assert_contains "$(post_hook "$1" "$2" Read)" "Active Item P1.1" "$1 PostTool initial item context"
     assert_not_contains "$(post_hook "$1" "$2" Read)" "Active Item P1.1" "$1 PostTool keeps repeated Stop advisory compact"
     assert_contains "$(post_hook "$1" "$2" Bash "pytest -q")" "structured checkpoint before any unrelated tool" "$1 PostTool checkpoint barrier after likely evidence"
@@ -798,12 +795,8 @@ assert_contains "$POST_LOG" "bytes=" "PostTool telemetry records exact injection
 assert_not_contains "$POST_LOG" "codex-contract" "PostTool telemetry does not log raw session identity"
 
 CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_PAYLOAD" | "$REPO_ROOT/.codex/hooks/plan-files/scripts/agent-stop.sh")
-CLAUDE_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CLAUDE_PAYLOAD" | "$REPO_ROOT/.claude/hooks/plan-files/scripts/agent-stop.sh")
-GITHUB_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$COPILOT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")
 assert_contains "$CODEX_OUTPUT" "Task incomplete" "Codex Stop adapter"
-assert_contains "$CLAUDE_OUTPUT" "Task incomplete" "Claude Stop adapter"
-assert_contains "$GITHUB_OUTPUT" "Task incomplete" "Copilot Stop adapter"
-for OUTPUT in "$CODEX_OUTPUT" "$CLAUDE_OUTPUT" "$GITHUB_OUTPUT"; do
+for OUTPUT in "$CODEX_OUTPUT"; do
     assert_contains "$OUTPUT" "progress, not a stopping boundary" "phase persistence rejects item-level Stop"
     assert_contains "$OUTPUT" "every unchecked item in every non-settled phase" "phase persistence covers every phase"
     assert_contains "$OUTPUT" "advance Current Phase" "phase persistence advances later phases"
@@ -812,9 +805,7 @@ for OUTPUT in "$CODEX_OUTPUT" "$CLAUDE_OUTPUT" "$GITHUB_OUTPUT"; do
     assert_contains "$OUTPUT" "Active Item P1.1" "Stop targets contracted Active Item"
 done
 CODEX_REPEAT_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/plan-files/scripts/agent-stop.sh")
-CLAUDE_REPEAT_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CLAUDE_REPEAT_PAYLOAD" | "$REPO_ROOT/.claude/hooks/plan-files/scripts/agent-stop.sh")
-COPILOT_REPEAT_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$COPILOT_REPEAT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")
-for OUTPUT in "$CODEX_REPEAT_OUTPUT" "$CLAUDE_REPEAT_OUTPUT" "$COPILOT_REPEAT_OUTPUT"; do
+for OUTPUT in "$CODEX_REPEAT_OUTPUT"; do
     assert_contains "$OUTPUT" "Task incomplete" "active Stop remains blocked"
     assert_contains "$OUTPUT" "No structured plan progress" "repeated Stop reports no progress"
     assert_contains "$OUTPUT" "Do not answer this hook with another summary" "repeated Stop demands operational recovery"
@@ -844,11 +835,7 @@ assert_contains "$CODEX_PROGRESS_OUTPUT" "Structured plan progress occurred" "it
 write_valid_plan
 sed -i 's/in_progress/blocked (external dependency unavailable)/; s/pending/deferred (user postponed validation)/' "$PLAN_DIR/tasks.md"
 CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/plan-files/scripts/agent-stop.sh")
-CLAUDE_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CLAUDE_REPEAT_PAYLOAD" | "$REPO_ROOT/.claude/hooks/plan-files/scripts/agent-stop.sh")
-GITHUB_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$COPILOT_REPEAT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")
 assert_eq "$CODEX_OUTPUT" "{}" "Codex repeated Stop allows blocked/deferred phases"
-assert_eq "$CLAUDE_OUTPUT" "{}" "Claude repeated Stop allows blocked/deferred phases"
-assert_eq "$GITHUB_OUTPUT" "{}" "Copilot repeated Stop allows blocked/deferred phases"
 
 write_valid_plan
 sed -i 's/in_progress/blocked (external dependency unavailable)/' "$PLAN_DIR/tasks.md"
@@ -859,9 +846,7 @@ write_valid_plan
 
 sed -i '/\*\*Status:\*\* pending/d' "$PLAN_DIR/tasks.md"
 CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_PAYLOAD" | "$REPO_ROOT/.codex/hooks/plan-files/scripts/agent-stop.sh")
-CLAUDE_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CLAUDE_PAYLOAD" | "$REPO_ROOT/.claude/hooks/plan-files/scripts/agent-stop.sh")
-GITHUB_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$COPILOT_PAYLOAD" | "$REPO_ROOT/.github/hooks/scripts/agent-stop.sh")
-for OUTPUT in "$CODEX_OUTPUT" "$CLAUDE_OUTPUT" "$GITHUB_OUTPUT"; do
+for OUTPUT in "$CODEX_OUTPUT"; do
     assert_contains "$OUTPUT" "exactly one recognized" "phase-status adapter routing"
 done
 
@@ -936,9 +921,9 @@ EOF
 
 write_settled_plan
 rm -f "$PLAN_DIR/handoff.md"
-PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" pending codex codex-settled >/dev/null
-PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=codex PWF_SESSION_ID=codex-settled "$STATE_TOOL" bind test-task >/dev/null
-SETTLED_BLOCK=$(pre_hook codex codex-settled 'git commit -m "ship it"')
+PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" pending codex codex-contract >/dev/null
+PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER=codex PWF_SESSION_ID=codex-contract "$STATE_TOOL" bind test-task >/dev/null
+SETTLED_BLOCK=$(pre_hook codex codex-contract 'git commit -m "ship it"')
 assert_contains "$SETTLED_BLOCK" "SETTLED PLAN REOPEN REQUIRED" "settled plan blocks operational mutation"
 assert_contains "$SETTLED_BLOCK" "reopen --title" "reopen block names the one-call repair"
 assert_contains "$SETTLED_BLOCK" "--supersede <OLD-ID>" "reopen block names the decision it retires"
@@ -946,24 +931,24 @@ assert_not_contains "${SETTLED_BLOCK%%If no new work was authorized*}" "--plan $
     "reopen uses the still-active pointer"
 assert_contains "$SETTLED_BLOCK" "--plan $PLAN_DIR/tasks.md assert-finalizable" \
     "final check retains the path after pointer deactivation"
-assert_not_contains "$(post_hook codex codex-settled Read)" "SETTLED PLAN REOPEN REQUIRED" \
+assert_not_contains "$(post_hook codex codex-contract Read)" "SETTLED PLAN REOPEN REQUIRED" \
     "reopen diagnosis stays quiet after a read"
 REOPEN_CMD="python3 $EDIT_TOOL reopen --title Deliver --decision \"| D2 | Implement and hand off | user authorized implementation | 2026-09-06 |\" --supersede D1 --item \"Implementation lands.\""
 # The prescribed repair carries a decisions table row, so its pipes must read as
 # data. Splitting the command text before lexing it blocked exactly this call.
-assert_eq "$(pre_hook codex codex-settled "$REOPEN_CMD")" "{}" \
+assert_eq "$(pre_hook codex codex-contract "$REOPEN_CMD")" "{}" \
     "reopen gate permits the repair it demands, table row and all"
-assert_eq "$(pre_hook codex codex-settled "python3 $EDIT_TOOL phase-add --title Deliver")" "{}" \
+assert_eq "$(pre_hook codex codex-contract "python3 $EDIT_TOOL phase-add --title Deliver")" "{}" \
     "gate permits a helper that resolves the plan from the pointer"
 # Redirection and a reader are part of running the repair, not other work.
-assert_eq "$(pre_hook codex codex-settled "python3 $EDIT_TOOL phase-add --title Deliver 2>&1 | head -5")" "{}" \
+assert_eq "$(pre_hook codex codex-contract "python3 $EDIT_TOOL phase-add --title Deliver 2>&1 | head -5")" "{}" \
     "gate permits a helper whose output is merged and paged"
-assert_contains "$(pre_hook codex codex-settled "python3 $EDIT_TOOL --plan $PROJECT/tmp/plan-files/other-task/tasks.md phase-add --title Deliver")" \
+assert_contains "$(pre_hook codex codex-contract "python3 $EDIT_TOOL --plan $PROJECT/tmp/plan-files/other-task/tasks.md phase-add --title Deliver")" \
     "SETTLED PLAN REOPEN REQUIRED" "a helper aimed at another plan is not owned-plan maintenance"
 SETTLED_LOG=$(cat "$PROJECT/tmp/hook-logs/plan-files/pre-tool-use.log")
 assert_contains "$SETTLED_LOG" "decision=block-settled-plan tool=Bash" "pre-tool log correlates the reopen denial"
 # PostTool repeats it only for work that reached execution, never after a read.
-SETTLED_POST=$(post_hook codex codex-settled Bash 'git commit -m "ship it"')
+SETTLED_POST=$(post_hook codex codex-contract Bash 'git commit -m "ship it"')
 assert_contains "$SETTLED_POST" "SETTLED PLAN REOPEN REQUIRED" "PostTool repeats the reopen diagnosis after a mutation"
 
 # Reopening the plan clears the gate; the ordinary integrity gate takes over.
@@ -981,7 +966,7 @@ assert_not_contains "$(sed -n '/## Active Decisions/,/## Superseded/p' "$PLAN_DI
     "reopen retires what the authorization replaced"
 assert_eq "$(sed -n '/## Active Decisions/,/## Superseded/p' "$PLAN_DIR/decisions.md" | grep -c '^$')" "1" \
     "the decisions ledger stays one table, not two"
-assert_not_contains "$(pre_hook codex codex-settled 'git commit -m "ship it"')" "SETTLED PLAN REOPEN REQUIRED" \
+assert_not_contains "$(pre_hook codex codex-contract 'git commit -m "ship it"')" "SETTLED PLAN REOPEN REQUIRED" \
     "reopened plan clears the settled gate"
 # reopen is for settled plans only; an actionable one already has somewhere to record work.
 assert_contains "$(cd "$PROJECT" && python3 "$EDIT_TOOL" --expected-fingerprint "$(file_sha "$PLAN_DIR/tasks.md")" \
@@ -989,15 +974,15 @@ assert_contains "$(cd "$PROJECT" && python3 "$EDIT_TOOL" --expected-fingerprint 
     "is still actionable" "reopen refuses a plan that can already record work"
 
 # The reopen gate must not trap a plan that really is finished: its only
-# remaining action is pointer cleanup, which lives outside the plan directory.
+# remaining action is session finalization, which preserves the workspace marker.
 write_settled_plan
 printf 'test-task\n' > "$PROJECT/.plan-files"
 POINTER_CMD="python3 $CHECKPOINT_TOOL --plan $PLAN_DIR/tasks.md deactivate-pointer --project-root $PROJECT"
-assert_eq "$(pre_hook codex codex-settled "$POINTER_CMD")" "{}" "reopen gate permits pointer cleanup on a finished plan"
-assert_contains "$(cd "$PROJECT" && eval "$POINTER_CMD")" '"cleared":true' "deactivate-pointer clears an owned pointer"
-assert_eq "$(cat "$PROJECT/.plan-files")" "" "finished plan stops nominating itself"
+assert_eq "$(pre_hook codex codex-contract "$POINTER_CMD")" "{}" "reopen gate permits session finalization on a finished plan"
+assert_contains "$(cd "$PROJECT" && eval "$POINTER_CMD")" '"cleared":false' "legacy finalization flag preserves workspace marker"
+assert_eq "$(cat "$PROJECT/.plan-files")" "test-task" "finished plan does not rewrite shared marker"
 assert_contains "$(python3 "$CHECKPOINT_TOOL" --plan "$PLAN_DIR/tasks.md" assert-finalizable --project-root "$PROJECT")" \
-    '"finalizable":true' "cleared pointer finalizes the plan"
+    '"finalizable":true' "retained marker permits plan finalization"
 assert_contains "$(cd "$PROJECT" && eval "$POINTER_CMD")" '"cleared":false' "deactivate-pointer is idempotent"
 printf 'test-task\n' > "$PROJECT/.plan-files"
 
@@ -1010,7 +995,7 @@ write_settled_plan
 cp "$PLAN_DIR/tasks.md" "$LEGACY_ROOT/tmp/plan-with-files/legacy-task/tasks.md"
 LEGACY_ISSUES=$(python3 "$REPO_ROOT/skills/plan-files/scripts/plan_state.py" assert-finalizable \
     "$LEGACY_ROOT/tmp/plan-with-files/legacy-task/tasks.md" --project-root "$LEGACY_ROOT" || true)
-assert_contains "$LEGACY_ISSUES" ".plan-with-files still names this task" "legacy pointer is named as it exists"
+assert_not_contains "$LEGACY_ISSUES" "still names this task" "legacy marker does not gate finalization"
 assert_not_contains "$LEGACY_ISSUES" ".plan-files still names" "legacy workspace is not sent to the current pointer name"
 
 printf 'planning contract tests: PASS\n'

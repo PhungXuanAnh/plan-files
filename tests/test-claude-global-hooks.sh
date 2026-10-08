@@ -196,7 +196,7 @@ printf 'demo\n' > "$LINKED/.plan-files"
 printf '## Task Identity\ndemo\n' > "$STORE/tmp/plan-files/demo/tasks.md"
 state() { PWF_PROJECT_ROOT="$LINKED" PWF_SESSION_ADAPTER=claude PWF_SESSION_ID=drift \
     bash "$REPO_ROOT/skills/plan-files/scripts/session-state.sh" "$@"; }
-state pending claude drift >/dev/null
+state pending claude drift demo >/dev/null
 state discuss demo >/dev/null
 output=$(cd "$DRIFTED" && printf '%s' '{"session_id":"drift","hook_event_name":"UserPromptSubmit","prompt":"go"}' \
     | CLAUDE_PROJECT_DIR="$LINKED" HOME="$MERGE_HOME" bash -c "$PROMPT_COMMAND")

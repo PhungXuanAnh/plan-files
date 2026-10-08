@@ -95,7 +95,7 @@ assert_eq "$(CLAUDE_PROJECT_DIR="$WS9" bash "$RESOLVER" "$PHYS9")" "$WS9" \
 assert_eq "$(CLAUDE_PROJECT_DIR="$WS9" bash "$RESOLVER" "$WS2/repoA")" "$WS2" \
     "a cwd with its own pointer ancestor must ignore the host hint"
 
-# --- plan_checkpoint.py's --deactivate-pointer must clear .plan-files at
+# --- plan_checkpoint.py's --deactivate-pointer must preserve .plan-files at
 #     the true (resolved) project root, not a hardcoded parent-count guess —
 #     even when invoked with cwd inside a nested submodule. ------------------
 WS8="$TEST_DIR/ws8"
@@ -124,7 +124,7 @@ EOF
 printf 'DEMO\n' > "$WS8/.plan-files"
 (cd "$WS8/viralize" && python3 "$CHECKPOINT_TOOL" --plan "$WS8/tmp/plan-files/DEMO/tasks.md" \
     complete V1.1 --evidence "verified" --deactivate-pointer >/dev/null)
-assert_eq "$(cat "$WS8/.plan-files")" "" \
-    "deactivate-pointer must clear .plan-files at the superproject root even when run from inside a submodule"
+assert_eq "$(cat "$WS8/.plan-files")" "DEMO" \
+    "deactivate-pointer must preserve .plan-files at the superproject root even when run from inside a submodule"
 
 echo "project root resolution tests: PASS"

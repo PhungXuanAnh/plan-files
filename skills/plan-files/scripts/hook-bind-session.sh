@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Translate a provider's verified session identity into the shared bind interface.
+# Translate verified provider/session identity into shared routing, including handoff.
 
 set -u
 
