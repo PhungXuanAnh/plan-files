@@ -3,7 +3,7 @@
 ## Active task
 
 ```markdown
-# Tasks: Fix Login Bug
+# Plan: Fix Login Bug
 
 ## Goal
 Fix the failed login flow without changing unrelated authentication behavior.
@@ -70,7 +70,7 @@ python3 <skill-dir>/scripts/plan_edit.py --compact --expected-fingerprint <file_
   --verify "The redirect regression passes." --start
 ```
 
-For distinct new work when every earlier phase is complete/blocked/deferred, use `reopen --title ... --decision ... --item ...`; it records the authorization and keeps unrelated deferred work unchanged. When the user instead resumes an existing paused phase, use `resume N --decision ...` to preserve its IDs and evidence. Add work explicitly postponed by the user with `phase-add --status deferred --reason ...`; leaving it pending makes it eligible for automatic continuation. Use `complete Pn.m --evidence ...` when the active outcome is true, or `pause --status blocked --reason ...` for an external dependency. Short findings prose can be edited directly; do not create a second copy of each item evidence there. After finishing the session lease, pass the known `--plan <tasks.md>` to `assert-finalizable`.
+For distinct new work when every earlier phase is complete/blocked/deferred, use `reopen --title ... --decision ... --item ...`; it records the authorization and keeps unrelated deferred work unchanged. When the user instead resumes an existing paused phase, use `resume N --decision ...` to preserve its IDs and evidence. Add work explicitly postponed by the user with `phase-add --status deferred --reason ...`; leaving it pending makes it eligible for automatic continuation. Use `complete Pn.m --evidence ...` when the active outcome is true, or `pause --status blocked --reason ...` for an external dependency. Short findings prose can be edited directly; do not create a second copy of each item evidence there. After finishing the session lease, pass the known `--plan <plan.md>` to `assert-finalizable`.
 
 ## Archive during compaction
 
@@ -84,7 +84,7 @@ Before:
 - Phase 2 required check: `pytest tests/auth/test_login.py`
 ```
 
-After `tasks.md`:
+After `plan.md`:
 
 ```markdown
 ## Verification
@@ -117,11 +117,11 @@ Use the returned file fingerprint for a routine edit:
 
 ```bash
 python3 <skill-dir>/scripts/plan_edit.py --expected-fingerprint <sha256> \
-  entry-append --file tasks.md \
+  entry-append --file plan.md \
   --heading "Files Touched" --entry '- src/auth/login.ts: await fix'
 ```
 
-These commands resolve this session’s owned plan. Pass `--plan <task-dir>/tasks.md` (or the positional path for `plan_state.py`) for explicit reads or offline unowned work; an explicit path cannot authorize writes to another session’s task. Read `references/plan-operations.md` for structural, archival, decision, and handoff commands. Directly read or patch the Markdown when the intended repair is too unusual for those safe primitives.
+These commands resolve this session’s owned plan. Pass `--plan <task-dir>/plan.md` (or the positional path for `plan_state.py`) for explicit reads or offline unowned work; an explicit path cannot authorize writes to another session’s task. Read `references/plan-operations.md` for structural, archival, decision, and handoff commands. Directly read or patch the Markdown when the intended repair is too unusual for those safe primitives.
 
 When the hot window already has 12 phase headings, add the next phase with both current fingerprints. The editor archives and evicts the oldest eligible complete phase before writing the new monotonic ID:
 
@@ -157,7 +157,7 @@ Reverify after: 2026-08-09T19:00:00+07:00
 - **State captured at:** 2026-08-09T18:30:00+07:00; reverify before acting
 ```
 
-Overwrite the file at the next pause. Ignore and re-verify it after `Reverify after` or when a required planning file is newer. For a volatile result kept in `tasks.md`, use `- [external-state observed=2026-08-09T18:30:00+07:00 reverify-after=2026-08-09T19:00:00+07:00] staging smoke: PASS`.
+Overwrite the file at the next pause. Ignore and re-verify it after `Reverify after` or when a required planning file is newer. For a volatile result kept in `plan.md`, use `- [external-state observed=2026-08-09T18:30:00+07:00 reverify-after=2026-08-09T19:00:00+07:00] staging smoke: PASS`.
 
 ## Changed user decision
 
@@ -179,7 +179,7 @@ Read the ledger before editing it; never silently delete the earlier choice.
 
 If a plan has `Phase 99` as Current Phase without such a phase, a missing status, and `**Profile:** [A | B | C]`, the next PreTool blocks operational work. Read the owned plan and fix all three fields; reads and owned-plan edits still pass. PostTool repeats the unresolved diagnosis even when the plan has not changed. Once repaired, that diagnosis disappears; a compact Stop warning remains while work is actionable.
 
-Every hook message names the absolute path of what it asks for, so copy the command as printed: `Run: python3 /abs/skill-dir/scripts/plan_state.py restore-check /abs/project/tmp/plan-files/<task>/tasks.md`. Do not re-derive the location; a background `find` across the home directory is never the recovery. If the host already returns a task id, wait/get that result before dependent work instead of launching the same command again.
+Every hook message names the absolute path of what it asks for, so copy the command as printed: `Run: python3 /abs/skill-dir/scripts/plan_state.py restore-check /abs/project/tmp/plan-files/<task>/plan.md`. Do not re-derive the location; a background `find` across the home directory is never the recovery. If the host already returns a task id, wait/get that result before dependent work instead of launching the same command again.
 
 If old findings contain `## Phase 5 Evidence`, preserve its useful detail in a linked findings file, then replace that exact section with a short summary and link. Native Edit/Write works, or use `plan_edit.py --expected-fingerprint <findings-sha> --compact section-replace --file findings.md --heading "Phase 5 Evidence" --content "<summary and link>"`. The heading must already exist exactly once. Leave room below the budget for the next discovery. For shell-only tools, `cat > <owned-plan>/findings-detail.md <<'MD'` with a literal body and closing `MD` is recognized; inline Python is not made maintenance-safe by including the same path in its arguments.
 
@@ -195,7 +195,7 @@ For a three-sentence correction within a complete phase, reuse the hash from `ov
 
 Give session A task `api-fix` and session B task `docs-update`. Each creates its own `tmp/plan-files/<task-id>/` files; the first recognized write reserves only that task. After binding, `plan_state.py overview` and `plan_checkpoint.py progress ...` without paths resolve that session’s own task. A third session doing ordinary code work receives no planning candidate merely because the other plans exist.
 
-To continue A’s unfinished work in B, first have A run its hook-supplied bind adapter with `handoff api-fix`. B must finish or explicitly hand off its own task before binding another. Then name `tmp/plan-files/api-fix/tasks.md` in B’s prompt and follow B’s supplied bind command. Do not copy A’s session id or edit `.sessions/`. Separate task folders do not coordinate simultaneous edits to the same source file.
+To continue A’s unfinished work in B, first have A run its hook-supplied bind adapter with `handoff api-fix`. B must finish or explicitly hand off its own task before binding another. Then name `tmp/plan-files/api-fix/plan.md` in B’s prompt and follow B’s supplied bind command. Do not copy A’s session id or edit `.sessions/`. Separate task folders do not coordinate simultaneous edits to the same source file.
 
 For “continue after approval,” first `pause --all-remaining --status blocked --reason 'Waiting for approval'`, then `plan_checkpoint.py park --reason 'Resume when approval arrives'`. The candidate stays discoverable and `assert-finalizable` succeeds without clearing it. Write a handoff last if needed. A later authorized `resume N --decision ...` clears the parked marker and preserves original IDs and partial evidence.
 

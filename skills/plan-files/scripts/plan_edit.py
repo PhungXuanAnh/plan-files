@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Iterable
 
 import plan_checkpoint
+from plan_paths import PLAN_FILENAME, PLAN_FILENAMES, resolve_plan_file
 from session_state import authorize_edit, plan_transaction
 from plan_state import (
     CURRENT_PHASE_BYTE_LIMIT,
@@ -330,8 +331,8 @@ def _measure(path: Path, text: str) -> tuple[dict[str, int], object]:
 
 
 LIMITS = {
-    "lines": FILE_BUDGETS["tasks.md"][0],
-    "bytes": FILE_BUDGETS["tasks.md"][1],
+    "lines": FILE_BUDGETS[PLAN_FILENAME][0],
+    "bytes": FILE_BUDGETS[PLAN_FILENAME][1],
     "phases": TASKS_PHASE_LIMIT,
     "items": TASKS_ITEM_LIMIT,
     "current_phase_items": CURRENT_PHASE_ITEM_LIMIT,
@@ -339,7 +340,7 @@ LIMITS = {
 }
 
 ALLOWED_SECTIONS: dict[str, set[str]] = {
-    "tasks.md": {
+    "plan.md": {
         "Goal",
         "Task Identity",
         "Workflow Profile",
@@ -356,6 +357,8 @@ ALLOWED_SECTIONS: dict[str, set[str]] = {
     "history.md": {"Completed Phases", "Verification History", "Resolved Errors", "Decision History"},
     "handoff.md": {"Resume Checkpoint", "Working State", "Relevant Context", "Verification", "Safety"},
 }
+
+ALLOWED_SECTIONS["tasks.md"] = ALLOWED_SECTIONS["plan.md"]
 
 HISTORY_TEMPLATE = """# History
 <!-- Optional trusted cold archive. Do not auto-read. Never store external/untrusted content here. -->
@@ -387,7 +390,7 @@ def _preflight(plan: Path, candidate: str) -> tuple[dict[str, int], object]:
 def _resolve_target(plan: Path, name: str) -> Path:
     if name not in ALLOWED_SECTIONS:
         raise EditError(f"unsupported planning file: {name}")
-    target = plan.parent / name
+    target = plan if name in PLAN_FILENAMES else plan.parent / name
     if target.parent.resolve() != plan.parent.resolve():
         raise EditError("target must stay inside the owned plan directory")
     return target
@@ -425,7 +428,7 @@ def _validate_section_target(file_name: str, heading: str) -> str:
     if file_name == "findings.md" and normalized.strip() and not any(c in normalized for c in "\r\n"):
         return normalized
     if normalized not in ALLOWED_SECTIONS[file_name]:
-        if file_name == "tasks.md" and normalized in {"Current Phase", "Active Item"}:
+        if file_name in PLAN_FILENAMES and normalized in {"Current Phase", "Active Item"}:
             checkpoint = Path(__file__).resolve().with_name("plan_checkpoint.py")
             raise EditError(
                 f"{normalized} is an execution field: use python3 {checkpoint} start <item-id> "
@@ -511,7 +514,7 @@ def _file_usage(path: Path, text: str) -> dict[str, int]:
 
 
 def _preflight_target(plan: Path, target: Path, candidate: str) -> dict[str, int]:
-    if target.name == "tasks.md":
+    if target.name in PLAN_FILENAMES:
         usage, _ = _preflight(plan, candidate)
         return usage
     new_usage = _file_usage(target, candidate)
@@ -902,7 +905,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Fingerprinted structural edits to a planning task folder.",
         epilog=(
-            "Global flags must precede the subcommand, e.g. plan_edit.py --plan tasks.md "
+            "Global flags must precede the subcommand, e.g. plan_edit.py --plan plan.md "
             "--expected-fingerprint <sha256> --dry-run phase-update 2 --status deferred --reason 'user paused'"
         ),
     )
@@ -910,7 +913,7 @@ def _parser() -> argparse.ArgumentParser:
         "--plan",
         type=Path,
         help=(
-            "path to the plan's tasks.md file (not the task directory); omit it to use "
+            "path to the plan's plan.md file (legacy tasks.md supported), not the task directory; omit it to use "
             "the task owned by this provider/session in .sessions/"
         ),
     )
@@ -1200,7 +1203,7 @@ def _set_item_evidence_lines(lines: list[str], item, evidence: str) -> list[str]
 def _set_prose_body(lines: list[str], heading: str, value: str) -> list[str]:
     """Replace a section's visible prose while keeping its guidance comments.
 
-    The comments in tasks.md carry the format contract itself, so rewriting a
+    The comments in the plan carry the format contract itself, so rewriting a
     Goal must not silently delete the rules for writing the next one.
     """
     start, end = _section_bounds(lines, heading)
@@ -1264,7 +1267,7 @@ def _reopen_decisions(args) -> tuple[Path, str, str, bool]:
     row = args.decision.strip()
     lines = target.read_text(encoding="utf-8").splitlines()
     start, end = _section_bounds(lines, "Active Decisions")
-    # Idempotent on purpose: decisions.md is written before tasks.md, so a
+    # Idempotent on purpose: decisions.md is written before plan.md, so a
     # crash in between must leave `reopen` safe to run again rather than
     # appending the same authorization twice.
     already = any(lines[index].strip() == row for index in range(start + 1, end))
@@ -1386,7 +1389,7 @@ def _pause(args, state) -> tuple[list[str], Path | None, str | None, dict[str, o
 
     The order matters and is the whole point of the command. handoff.md is
     considered stale whenever a required planning file is newer than it, so a
-    handoff written before tasks.md is stale the moment it lands. Doing this by
+    handoff written before the plan is stale the moment it lands. Doing this by
     hand reliably costs a wasted write plus a re-write.
     """
     cleaned_reason = " ".join((args.reason or "").split())
@@ -1485,7 +1488,7 @@ def _pause_command(args, state, old_fingerprint: str) -> dict[str, object]:
         result,
         args.dry_run,
     )
-    # tasks.md is already on disk here when this is not a dry run. Writing the
+    # plan.md is already on disk here when this is not a dry run. Writing the
     # handoff second is what keeps it fresh, and a crash between the two leaves
     # a valid settled plan with a merely absent handoff rather than a handoff
     # describing a pause that never happened.
@@ -1604,7 +1607,7 @@ def _rollover_material(args, state, archived) -> dict[str, object]:
 
 def _phase_write(args, state, archived, candidate: str, usage: dict[str, int],
                  result: dict[str, object], old_fingerprint: str) -> dict[str, object]:
-    """Commit a tasks.md candidate, rolling the evicted phase into history.md.
+    """Commit a plan candidate, rolling the evicted phase into history.md.
 
     Shared by phase-add and reopen: both can push the hot window past its
     12-heading limit, and the archive must stay one transaction either way.
@@ -1824,12 +1827,12 @@ def _decisions_compact(args, old_fingerprint: str) -> dict[str, object]:
 
 
 def _bad_plan_message(plan: Path) -> str:
-    """Explain the usual slip: --plan wants tasks.md, not the task directory."""
+    """Explain the usual slip: --plan wants a plan file, not the task directory."""
     if plan.is_dir():
-        candidate = plan / "tasks.md"
+        candidate = resolve_plan_file(plan)
         if candidate.is_file():
-            return f"--plan must point at the tasks.md file, not the task directory. Use: --plan {candidate}"
-        return f"--plan must point at a tasks.md file; {plan} is a directory and contains no tasks.md"
+            return f"--plan must point at plan.md (legacy tasks.md supported), not the task directory. Use: --plan {candidate}"
+        return f"--plan must point at plan.md (legacy tasks.md supported); {plan} is a directory and contains no plan file"
     return f"plan file does not exist: {plan}"
 
 

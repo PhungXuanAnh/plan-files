@@ -11,6 +11,8 @@ import tempfile
 from pathlib import Path
 from typing import Iterable
 
+from plan_paths import resolve_plan_file
+
 from session_state import guarded, identity, store_for_plan, SessionError
 
 from plan_state import (
@@ -331,7 +333,7 @@ def _parser() -> argparse.ArgumentParser:
         "--plan",
         type=Path,
         help=(
-            "path to the plan's tasks.md file (not the task directory); omit it to use "
+            "path to the plan's plan.md file (legacy tasks.md supported), not the task directory; omit it to use "
             "the task owned by this provider/session in .sessions/"
         ),
     )
@@ -384,11 +386,11 @@ def main(argv: Iterable[str] | None = None) -> int:
         except ValueError as error:
             raise CheckpointError(str(error)) from error
         if args.plan.is_dir():
-            candidate = args.plan / "tasks.md"
+            candidate = resolve_plan_file(args.plan)
             hint = (
-                f"--plan must point at the tasks.md file, not the task directory. Use: --plan {candidate}"
+                f"--plan must point at the plan.md file (legacy tasks.md supported), not the task directory. Use: --plan {candidate}"
                 if candidate.is_file()
-                else f"--plan must point at a tasks.md file; {args.plan} is a directory"
+                else f"--plan must point at plan.md (legacy tasks.md supported); {args.plan} is a directory"
             )
             raise CheckpointError(hint)
         if not args.plan.is_file():

@@ -135,7 +135,7 @@ install-hooks: install-hook-codex install-hook-claude-code install-hook-copilot 
 install-global install: install-skills install-hooks ## Install skills and available hook JSON/settings globally
 
 # ---------------------------------------------------------------------------
-injected-content: ## Show what the post-tool-use hook would inject from the active tasks.md
+injected-content: ## Show what the post-tool-use hook would inject from the active plan.md
 	@python3 "$(SKILL_SRC)/scripts/plan_state.py" context $(if $(PLAN),"$(PLAN)")
 
 plan-overview: ## Show bounded state, fingerprints, and budgets for the active plan

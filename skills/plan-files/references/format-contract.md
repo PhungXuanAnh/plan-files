@@ -1,4 +1,4 @@
-# Exact `tasks.md` Format Contract
+# Exact `plan.md` Format Contract
 
 Read this reference before creating or repairing a plan. Only this format is supported. Hooks use simple regular expressions, so preserve headings and field forms exactly.
 

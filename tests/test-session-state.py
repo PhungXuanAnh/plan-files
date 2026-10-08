@@ -35,7 +35,7 @@ def crash_before_rename(root, ready):
 
 def held_transaction(root, task, entered, release):
     with patch.dict(os.environ, {"PWF_PROJECT_ROOT": root, "PWF_SESSION_ADAPTER": "codex", "PWF_SESSION_ID": task}):
-        with plan_transaction(Path(root) / "tmp/plan-files" / task / "tasks.md"):
+        with plan_transaction(Path(root) / "tmp/plan-files" / task / "plan.md"):
             entered.set()
             if not release.wait(10):
                 raise RuntimeError("transaction barrier timed out")
@@ -54,7 +54,7 @@ class SessionIsolation(unittest.TestCase):
     def make_task(self, task):
         path = self.store.plans / task
         path.mkdir(parents=True, exist_ok=True)
-        (path / "tasks.md").write_text(f"# {task}\n")
+        (path / "plan.md").write_text(f"# {task}\n")
 
     def test_participation_prompt_and_handoff(self):
         self.assertEqual(self.store.pending("codex", "a"), "")
@@ -173,7 +173,7 @@ class SessionIsolation(unittest.TestCase):
         other = SessionStore(self.root / "nested")
         path = other.plans / "task-a"
         path.mkdir(parents=True)
-        (path / "tasks.md").write_text("# independent")
+        (path / "plan.md").write_text("# independent")
         other.claim("codex", "same", "task-a")
         self.store.claim("codex", "same", "task-a")
         self.assertNotEqual(other.route("codex", "same"), self.store.route("codex", "same"))
@@ -188,7 +188,7 @@ class SessionIsolation(unittest.TestCase):
         for provider in ("codex", "claude", "copilot", "grok"):
             task = f"settled-{provider}"
             self.make_task(task)
-            tasks = self.store.plans / task / "tasks.md"
+            tasks = self.store.plans / task / "plan.md"
             tasks.write_text("""## Task Identity
 Verify lifecycle in an isolated fixture.
 ## Goal
@@ -223,7 +223,7 @@ Phase 1
         classifier = runpy.run_path(str(Path(__file__).resolve().parents[1]
                                        / "skills/plan-files/scripts/maintenance-tool-allowed.py"))
         root = self.root / "obsolete"
-        old = root / "tmp/plan-with-files/task-a/tasks.md"
+        old = root / "tmp/plan-with-files/task-a/plan.md"
         old.parent.mkdir(parents=True)
         old.write_text("# Obsolete plan\n")
         (root / ".plan-with-files").write_text("task-a\n")
@@ -241,7 +241,7 @@ Phase 1
         self.assertEqual(list(classifier["_plan_file_arguments"]([str(old)])), [])
         self.assertTrue(classifier["outside_every_plan"]({"file_path": str(old)}, root))
         self.assertIsNone(_resolve_plan(root, None))
-        tasks = current / "task-a/tasks.md"
+        tasks = current / "task-a/plan.md"
         tasks.parent.mkdir(parents=True)
         tasks.write_text("# Current plan\n")
         store.claim("codex", "current", "task-a")
@@ -259,7 +259,7 @@ Phase 1
         env.pop("PLANNING_DISABLED", None)
         if disabled:
             env["PLANNING_DISABLED"] = "1"
-        target = self.store.plans / task / "tasks.md"
+        target = self.store.plans / task / "plan.md"
         payload = {"session_id": session, "sessionId": session, "reason": "end_turn",
                    "tool_name": tool, "toolName": tool,
                    "tool_use_id": event_id, "toolUseId": event_id,
@@ -384,8 +384,8 @@ Phase 1
                 result = subprocess.run(["bash", str(adapter / "error-occurred.sh")],
                                         input=json.dumps({"sessionId": "reader", "error": "fixture"}),
                                         text=True, capture_output=True, env=env, cwd=self.root, check=True)
-                self.assertIn("error-task/tasks.md", result.stdout)
-                self.assertNotIn("task-a/tasks.md", result.stdout)
+                self.assertIn("error-task/plan.md", result.stdout)
+                self.assertNotIn("task-a/plan.md", result.stdout)
         env_file = self.root / "claude-env"
         result = subprocess.run(["bash", str(repo / ".claude/hooks/plan-files/scripts/session-start.sh")],
                                 input=json.dumps({"session_id": "verified"}), text=True, capture_output=True,

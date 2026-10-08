@@ -22,7 +22,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKILL_ROOT="$(dirname "$SCRIPT_DIR")"
+source "$SCRIPT_DIR/common.sh"
+SKILL_ROOT=$(planning_skill_dir)
 TEMPLATE_DIR="$SKILL_ROOT/templates"
 
 echo "Initializing planning files for: $PROJECT_NAME (template: $TEMPLATE)"
@@ -53,7 +54,7 @@ copy_or_create() {
 if [ "$TEMPLATE" = "analytics" ] && [ -f "$TEMPLATE_DIR/analytics_tasks.md" ]; then
     TASKS_TEMPLATE="$TEMPLATE_DIR/analytics_tasks.md"
 else
-    TASKS_TEMPLATE="$TEMPLATE_DIR/tasks.md"
+    TASKS_TEMPLATE="$TEMPLATE_DIR/plan.md"
 fi
 
 if [ "$TEMPLATE" = "analytics" ] && [ -f "$TEMPLATE_DIR/analytics_findings.md" ]; then
@@ -64,7 +65,8 @@ fi
 
 DECISIONS_TEMPLATE="$TEMPLATE_DIR/decisions.md"
 
-copy_or_create "tasks.md" "$TASKS_TEMPLATE" "# Tasks: $PROJECT_NAME
+PLAN_FILE=$(planning_plan_file "$PWD")
+copy_or_create "$PLAN_FILE" "$TASKS_TEMPLATE" "# Plan: $PROJECT_NAME
 
 ## Goal
 [One sentence describing the end state]
@@ -129,5 +131,5 @@ copy_or_create "decisions.md" "$DECISIONS_TEMPLATE" "# Decisions
 
 echo ""
 echo "Planning files initialized!"
-echo "Files: tasks.md, findings.md, decisions.md"
+echo "Files: $(basename "$PLAN_FILE"), findings.md, decisions.md"
 echo "Optional templates: history.md (cold archive), handoff.md (intentional pause only)"

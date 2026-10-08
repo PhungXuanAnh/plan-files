@@ -22,6 +22,7 @@ import tempfile
 import uuid
 
 from feedback_transport import feedback_path, valid_file
+from plan_paths import PLAN_FILENAMES, conflicting_plan_files, resolve_plan_file
 
 SCRIPTS = Path(__file__).resolve().parent
 STATUSES = {"pending", "owned", "creating", "waiting", "discussing", "inactive", "disabled"}
@@ -108,7 +109,7 @@ class SessionStore:
         path = self.plans / task
         if path.resolve().parent != self.plans.resolve():
             raise SessionError("planning task resolves outside this project's plan root")
-        if exists and not (path / "tasks.md").is_file():
+        if exists and not resolve_plan_file(path).is_file():
             raise SessionError(f"invalid or missing planning task: {task}")
         return path
 
@@ -287,7 +288,7 @@ class SessionStore:
                 # The exclusive routing lock waits for every helper transaction.
                 # Revalidate here so a reopen cannot race the earlier Stop read.
                 from plan_state import parse_plan, finalizability_issues
-                state = parse_plan(self.task_path(task) / "tasks.md")
+                state = parse_plan(resolve_plan_file(self.task_path(task)))
                 if not state.phases or any(phase.status != "complete" for phase in state.phases):
                     raise SessionError("plan changed before finalization; restore its current state")
                 if finalizability_issues(state):
@@ -341,7 +342,7 @@ def store_for_plan(plan: Path) -> SessionStore:
     hint = os.environ.get("PWF_PROJECT_ROOT")
     if hint:
         store = SessionStore(project_root(Path(hint)))
-        if (store.plans / plan.parent.name / "tasks.md").resolve() == plan.resolve():
+        if plan.name in PLAN_FILENAMES and (store.plans / plan.parent.name / plan.name).resolve() == plan.resolve():
             return store
     return SessionStore(project_root(plan.parent))
 
@@ -363,6 +364,8 @@ def plan_transaction(plan: Path):
         fd = os.open(plan.parent / ".plan-edit.lock", os.O_CREAT | os.O_RDWR, 0o600)
         with os.fdopen(fd, "r+") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            if conflicting_plan_files(plan):
+                raise SessionError("PLAN_FILENAME_CONFLICT: preserve and reconcile plan.md and tasks.md before writing")
             row = store.read(file) if file else {}
             if before != row:
                 raise SessionError("session ownership changed while waiting; re-read the current prompt and plan")
@@ -403,11 +406,11 @@ def active_plan(root: Path | None = None) -> Path:
     directory = SessionStore(root or project_root()).resolve(*who)
     if not directory:
         raise SessionError("this session owns no plan for this prompt; bind its task or pass an explicit --plan")
-    return Path(directory) / "tasks.md"
+    return resolve_plan_file(Path(directory))
 
 
 def candidate_context(store: SessionStore, task: str, adapter: str, compact: bool) -> str:
-    plan = store.task_path(task) / "tasks.md"
+    plan = resolve_plan_file(store.task_path(task))
     content = re.sub(r"<!--.*?-->", "", plan.read_text(), flags=re.S)
     def section(name):
         found = re.search(r"^## " + re.escape(name) + r"\s*\n(.*?)(?=^## |\Z)", content, re.M | re.S)

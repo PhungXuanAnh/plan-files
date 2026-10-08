@@ -22,7 +22,7 @@ A failed click, selector, timeout, rejected execution route, or tool path is not
 
 Retain errors by future value:
 
-- unresolved/current operational errors stay in `tasks.md`;
+- unresolved/current operational errors stay in `plan.md`;
 - recurring root causes and workarounds move to `findings.md`;
 - audit-worthy resolved failures move to `history.md`;
 - resolved noise is removed after its phase settles.
@@ -79,6 +79,6 @@ For a user-requested clarification or discussion-only turn, follow the `clarify`
 After all in-scope work settles:
 
 1. Complete the final item with current evidence and `--deactivate-pointer`. When every item is already checked — a plan that finished in an earlier turn without the flag — run `plan_checkpoint.py deactivate-pointer --project-root <root>` instead. For an intentional pause with blocked/deferred work and no actionable phases, use `plan_checkpoint.py park --reason ...` to retain this session’s reservation for the next prompt. Write any handoff after parking. Neither command may hide actionable work. The compatibility deactivation name finishes only the current session; both leave the workspace marker and other sessions unchanged.
-2. Run `plan_state.py restore-check <known-tasks.md>` followed by `plan_checkpoint.py --plan <known-tasks.md> assert-finalizable --project-root <root>`. These check final freshness and settlement respectively; after finishing the lease the explicit plan path is required. No extra overview or full-file reread is needed.
+2. Run `plan_state.py restore-check <known-plan.md>` followed by `plan_checkpoint.py --plan <known-plan.md> assert-finalizable --project-root <root>`. These check final freshness and settlement respectively; after finishing the lease the explicit plan path is required. No extra overview or full-file reread is needed.
 3. If either names an issue, target-read and repair that issue before retrying.
 4. Preserve the task directory as history and return the user-facing outcome.

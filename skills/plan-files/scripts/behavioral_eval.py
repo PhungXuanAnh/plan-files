@@ -20,9 +20,9 @@ from plan_state import overview_payload, parse_plan, restore_payload, section_te
 SCHEMA_VERSION = 1
 FIXTURE_VERSION = "long-run-v2"
 REQUIRED_RESTORE_FIELDS = {
-    "goal": ("tasks.md", "Goal"),
-    "task_identity": ("tasks.md", "Task Identity"),
-    "resume_checkpoint": ("tasks.md", "Resume Checkpoint"),
+    "goal": ("plan.md", "Goal"),
+    "task_identity": ("plan.md", "Task Identity"),
+    "resume_checkpoint": ("plan.md", "Resume Checkpoint"),
     "open_decision_questions": ("decisions.md", "Open Decision Questions"),
     "findings_summary": ("findings.md", "Current Summary"),
 }
@@ -50,7 +50,7 @@ def _write_fixture(project: Path) -> Path:
     )
     tasks = "\n".join(
         [
-            "# Tasks: Behavioral Evaluation",
+            "# Plan: Behavioral Evaluation",
             "",
             "## Goal",
             "Preserve exact resumable state with bounded context.",
@@ -88,7 +88,7 @@ def _write_fixture(project: Path) -> Path:
             "",
         ]
     )
-    (task_dir / "tasks.md").write_text(tasks, encoding="utf-8")
+    (task_dir / "plan.md").write_text(tasks, encoding="utf-8")
     (task_dir / "decisions.md").write_text(
         "# Decisions\n\n## Active Decisions\n- "
         + "d" * 3000
@@ -102,7 +102,7 @@ def _write_fixture(project: Path) -> Path:
         encoding="utf-8",
     )
     (project / ".plan-files").write_text("eval-task\n", encoding="utf-8")
-    return task_dir / "tasks.md"
+    return task_dir / "plan.md"
 
 
 def _run(
@@ -285,7 +285,7 @@ def _grok_hook_probe(project: Path, scripts: Path) -> dict[str, object]:
         {
             "hookEventName": "user_prompt_submit",
             "sessionId": session,
-            "prompt": "resume tmp/plan-files/eval-task/tasks.md",
+            "prompt": "resume tmp/plan-files/eval-task/plan.md",
         },
     )
     pre_base = {
@@ -430,7 +430,7 @@ def evaluate() -> dict[str, object]:
                     not broken_restore["ok"]
                     and any(
                         issue.get("code") == "RESTORE_NEXT_ACTION_MISSING"
-                        and issue.get("source") == "tasks.md"
+                        and issue.get("source") == "plan.md"
                         and issue.get("heading") == "Resume Checkpoint"
                         and bool(issue.get("repair"))
                         for issue in broken_issues

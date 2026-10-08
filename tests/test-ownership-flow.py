@@ -36,8 +36,8 @@ class OwnershipFlow(unittest.TestCase):
         self.project = Path(self.temp.name)
         self.plan = self.project / "tmp/plan-files/task-a"
         self.plan.mkdir(parents=True)
-        self.tasks = self.plan / "tasks.md"
-        self.tasks.write_text("""# Tasks: Branded links
+        self.tasks = self.plan / "plan.md"
+        self.tasks.write_text("""# Plan: Branded links
 ## Goal
 Deliver branded links.
 ## Task Identity
@@ -108,16 +108,16 @@ P1.1
                 for pattern in ("tmp/*", ".plan-files"):
                     self.assertEqual(content.splitlines().count(pattern), 1)
                 ignored = self.run_command(
-                    ["git", "check-ignore", "tmp/plan-files/task-a/tasks.md", ".plan-files"],
+                    ["git", "check-ignore", "tmp/plan-files/task-a/plan.md", ".plan-files"],
                     "codex").stdout.splitlines()
-                self.assertEqual(ignored, ["tmp/plan-files/task-a/tasks.md", ".plan-files"])
+                self.assertEqual(ignored, ["tmp/plan-files/task-a/plan.md", ".plan-files"])
 
     def state(self, provider, *args, check=True):
         return self.run_command(["bash", str(SCRIPTS / "session-state.sh"), *args],
                                 provider, check=check).stdout.strip()
 
     def hook(self, provider, event, command="git status --short", tool=None, tool_input=None, expand=True,
-             prompt="continue tmp/plan-files/task-a/tasks.md"):
+             prompt="continue tmp/plan-files/task-a/plan.md"):
         if provider == "copilot" and event == "user-prompt-submit.sh":
             event = "user-prompt-transformed.py"
         camel = provider in {"grok", "copilot"}
@@ -149,6 +149,29 @@ P1.1
         """Claim as a session that has already loaded the skill, the normal case."""
         self.state(provider, "claim", provider, "fixture", task)
         self.state(provider, "skill-loaded", provider, "fixture", "mark")
+
+    def test_both_plan_filenames_across_provider_lifecycle(self):
+        original = self.tasks.read_text()
+        for provider in ADAPTERS:
+            for name in ("plan.md", "tasks.md"):
+                with self.subTest(provider=provider, name=name):
+                    self.tasks = self.tasks.rename(self.plan / name)
+                    self.tasks.write_text(original)
+                    prompt = f"continue tmp/plan-files/task-a/{name}"
+                    self.hook(provider, "user-prompt-submit.sh", prompt=prompt)
+                    self.run_command(["bash", str(ADAPTERS[provider] / "bind-session.sh"), "bind", "task-a"], provider)
+                    self.state(provider, "skill-loaded", provider, "fixture", "mark")
+                    pre = self.hook(provider, "pre-tool-use.sh", "touch result.txt")
+                    self.assertNotIn(pre.get("decision"), {"block", "deny"})
+                    post = self.hook(provider, "post-tool-use.sh")
+                    self.assertIn(str(self.tasks), post.get("additionalContext", ""))
+                    stop = self.hook(provider, "agent-stop.sh")
+                    self.assertEqual(stop["decision"], "block")
+                    self.run_command([sys.executable, str(SCRIPTS / "plan_checkpoint.py"), "complete", "P1.1",
+                                      "--evidence", "Filename lifecycle verified"], provider)
+                    self.assertNotIn(self.hook(provider, "agent-stop.sh").get("decision"), {"block", "deny"})
+                    self.assertEqual(self.state(provider, "resolve", provider, "fixture"), "")
+                    self.assertFalse((self.plan / ("tasks.md" if name == "plan.md" else "plan.md")).exists())
 
     def action(self, provider, verb):
         # Use the exact shell-quoted command supplied by the shared core.
@@ -336,7 +359,7 @@ P1.1
         """The discussing lease protects execution state, not the filesystem.
 
         It used to be the reverse of that: a checkbox tick, a checkpoint and a
-        full tasks.md rewrite all passed, while the read-only API query needed to
+        full plan.md rewrite all passed, while the read-only API query needed to
         answer the very question under discussion was refused. Recording is the
         product of a discussion turn and must pass; advancing waits for a bind.
         """
@@ -373,7 +396,7 @@ P1.1
                     ("Bash", {"command": f"python3 {edit} --plan {plan} --expected-fingerprint abc "
                                          f"phase-update 1 --status complete"}),
                     ("Bash", {"command": f"python3 {edit} --plan {plan} --expected-fingerprint abc "
-                                         f"entry-append --file tasks.md --heading Verification --entry 'x'"}),
+                                         f"entry-append --file plan.md --heading Verification --entry 'x'"}),
                     ("Bash", {"command": f"sed -i s/a/b/ {plan}"}),
                 ]
                 for tool, tool_input in advanced:
@@ -392,7 +415,7 @@ P1.1
                                   {"block", "deny"}, tool_input)
 
     def test_missing_identity_still_supplies_recovery(self):
-        self.tasks.write_text("# Tasks: empty identity\n")
+        self.tasks.write_text("# Plan: empty identity\n")
         for provider in ADAPTERS:
             with self.subTest(provider=provider):
                 self.state(provider, "pending", provider, "fixture", "task-a")
@@ -580,7 +603,7 @@ P1.1
             # fingerprint; an already delivered healthy reminder can stay quiet.
             self.assertEqual(healthy[1], "")
             self.assertNotIn("FORMAT CONTRACT VIOLATION", healthy[0])
-            # Companion state is rechecked even without a tasks.md change.
+            # Companion state is rechecked even without a plan.md change.
             findings = self.plan / "findings.md"
             saved = findings.read_text()
             findings.write_text("## Current Summary\n-\n")
@@ -597,7 +620,7 @@ P1.1
         for provider in ADAPTERS:
             with self.subTest(provider=provider):
                 prompt = self.hook(provider, "user-prompt-submit.sh",
-                                   prompt=f"Continue {old / 'task-a/tasks.md'}")
+                                   prompt=f"Continue {old / 'task-a/plan.md'}")
                 self.assertNotIn("task-a", json.dumps(prompt))
                 self.assertNotIn(self.hook(provider, "pre-tool-use.sh", "touch app.py").get("decision"),
                                  {"block", "deny"})
@@ -673,7 +696,7 @@ P1.1
         report = self.project / "tmp/hook-report.md"
         other = self.project / "tmp/plan-files/task-b"
         other.mkdir(parents=True, exist_ok=True)
-        (other / "tasks.md").write_text(self.tasks.read_text())
+        (other / "plan.md").write_text(self.tasks.read_text())
         for provider in ADAPTERS:
             with self.subTest(provider=provider):
                 self.own(provider)
@@ -682,7 +705,7 @@ P1.1
                                            tool_input={"file_path": str(report), "content": "x"}
                                            ).get("decision"), {"block", "deny"})
                 source = shlex.quote(str(self.plan / "findings.md"))
-                for target, allowed in ((report, True), (self.tasks, False), (other / "tasks.md", False)):
+                for target, allowed in ((report, True), (self.tasks, False), (other / "plan.md", False)):
                     for command in (f"cp {source} {shlex.quote(str(target))}",
                                     f"cat {source} > {shlex.quote(str(target))}"):
                         self.assertEqual(self.hook(provider, "pre-tool-use.sh", command).get("decision")
@@ -695,7 +718,7 @@ P1.1
                 # lease carried, and it cost read-only diagnosis. Recognizable
                 # destruction is still refused.
                 self.assertIn(self.hook(provider, "pre-tool-use.sh", tool="Write",
-                                        tool_input={"file_path": str(other / "tasks.md"), "content": "x"}
+                                        tool_input={"file_path": str(other / "plan.md"), "content": "x"}
                                         )["decision"], {"block", "deny"})
                 self.assertNotIn(self.hook(provider, "pre-tool-use.sh",
                                            "python3 -c 'open(\"/tmp/x\",\"w\")'").get("decision"),

@@ -11,8 +11,9 @@ This repository contains one host-neutral planning skill plus provider-specific 
   - `plan-operations.md` — bounded reads, fingerprinted edits, archival, schemas, and recovery.
   - `work-loop-and-maintenance.md` — continuation, waits, errors, compaction, and handoff.
   - `observing-runs.md` — privacy-safe telemetry and deterministic behavioral evaluation.
-- `skills/plan-files/templates/` defines new planning files. There is one authoritative `tasks.md` format; do not add `plan.md`, `tasks-long.md`, or an unbounded mode.
+- `skills/plan-files/templates/` defines new planning files. There is one authoritative `plan.md` format; retain legacy `tasks.md` compatibility until no legacy plans remain; do not add a second authoritative plan or an unbounded mode.
 - `skills/plan-files/scripts/` contains shared provider-neutral behavior:
+  - `plan_paths.py` — canonical `plan.md` resolution and temporary `tasks.md` compatibility.
   - `plan_state.py` — parsing, validation, budgets, bounded reads, overview/resume-pack, and restore checks.
   - `plan_checkpoint.py` — execution transitions (`start`, `progress`, `complete`, finalizability).
   - `plan_edit.py` — fingerprinted structural/section edits and transactional lifecycle operations.
@@ -34,7 +35,7 @@ Planning state is private and project-local:
 └── tmp/plan-files/
     ├── .sessions/                    # private prompt-scoped ownership state
     └── <task-id>/
-        ├── tasks.md                  # trusted authoritative hot plan
+        ├── plan.md                   # trusted authoritative hot plan
         ├── findings.md               # discoveries and untrusted external content
         ├── decisions.md              # trusted user-decision ledger
         ├── history.md                # optional trusted cold archive
@@ -54,7 +55,7 @@ Maintenance limits are enforcement boundaries, not reasons to truncate:
 
 | File/scope | Limit |
 |---|---:|
-| `tasks.md` | 300 lines / 24 KiB |
+| `plan.md` | 300 lines / 24 KiB |
 | `findings.md` | 250 lines / 32 KiB |
 | `decisions.md` | 150 lines / 12 KiB |
 | `handoff.md` | 50 lines / 6 KiB |
@@ -62,7 +63,7 @@ Maintenance limits are enforcement boundaries, not reasons to truncate:
 | visible items | about 100 |
 | Current Phase | 15 items / 4 KiB |
 
-- Keep one coherent goal in one bounded `tasks.md`. Add Phase 13+ only for the same goal.
+- Keep one coherent goal in one bounded `plan.md`. Add Phase 13+ only for the same goal.
 - `phase-add` and `compact-oldest` history-first archive the oldest eligible non-current complete phase and preserve a monotonic phase-id high-water mark.
 - Never evict pending/current/blocked/deferred work or delete evidenced work to meet a limit. Split only work with an independent goal or ownership boundary.
 - Rollover and phase/entry archival use `.plan-edit-transaction.json` under a plan-directory lock. The next `plan_edit.py` invocation automatically reconciles interrupted history/tasks writes; fingerprint conflicts fail closed. Do not edit the journal manually.

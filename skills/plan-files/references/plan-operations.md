@@ -6,20 +6,32 @@ Resolve all script paths relative to `SKILL.md`.
 
 ## Resolving the plan
 
-`plan_state.py`, `plan_edit.py`, and `plan_checkpoint.py` accept an optional plan path (`--plan` on editor/checkpoint, positional on reader). Omitted paths resolve only the current provider/session’s owned task through `.sessions/`; `.plan-files` is never a task default. The result reports the chosen `plan`. Missing or ambiguous identity and unbound sessions fail explicitly. Use a known path for reads after finalization or offline work. Explicit paths do not bypass a foreign reservation: checkpoint/editor mutations share routing and plan locks and revalidate ownership after waiting. Offline mutation without identity is allowed only for an unowned plan. `plan_state.py section decisions.md HEADING` resolves inside the owned task. `make plan-overview` and `make injected-content` use the same resolver, or accept `PLAN=<tasks.md>`.
+`plan_state.py`, `plan_edit.py`, and `plan_checkpoint.py` accept an optional plan path (`--plan` on editor/checkpoint, positional on reader). Omitted paths resolve only the current provider/session’s owned task through `.sessions/`; `.plan-files` is never a task default. The result reports the chosen `plan`. Missing or ambiguous identity and unbound sessions fail explicitly. Use a known path for reads after finalization or offline work. Explicit paths do not bypass a foreign reservation: checkpoint/editor mutations share routing and plan locks and revalidate ownership after waiting. Offline mutation without identity is allowed only for an unowned plan. `plan_state.py section decisions.md HEADING` resolves inside the owned task. `make plan-overview` and `make injected-content` use the same resolver, or accept `PLAN=<plan.md>`.
+
+## Filename compatibility
+
+New plans and the canonical template use `plan.md`. The shared `plan_paths.py` resolver uses an existing `plan.md`, otherwise an existing `tasks.md`, otherwise the new `plan.md` path. It never renames files or modifies session reservations. Existing leases store the task id, so renaming the file within the same task directory preserves ownership.
+
+Both names use the same Markdown format, budgets, checkpoint/editor operations, restore/finalization gates, handoff freshness checks, and provider hooks. Explicit paths to either name work; a missing path to one name resolves to the existing sibling name. The editor's `--file plan.md` and legacy `--file tasks.md` both target the selected authoritative file, preserving old commands without creating a second file. `templates/tasks.md` is a compatibility symlink to the single `templates/plan.md` template.
+
+When both names exist in one task, bounded diagnosis remains available but execution and helper mutations fail with `PLAN_FILENAME_CONFLICT`, including symlink or hard-link aliases. Preserve and reconcile their evidence into one authoritative filename before continuing. The compatibility template symlink is outside runtime task folders.
+
+Budget file keys and structural over-budget labels use the actual filename (`plan.md` for new plans, `tasks.md` for legacy plans); schema versions remain unchanged. Rename only between helper invocations, after finishing any pending archive transaction. When migrating a settled or paused plan, update command references and refresh any handoff after the final planning edit.
+
+Retain compatibility until **all supported workspaces have no runtime plans named `tasks.md`**, including unowned or paused plans. Inventory each workspace with `rg --files --hidden --no-ignore -g tasks.md <project-root>/tmp/plan-files`; do not infer global completion from one checkout or remove compatibility automatically. Template aliases and regression fixtures are not runtime plans.
 
 ## Bounded reads
 
 `restore-check` schema 1 includes additive `discussion_mode`: true for an unstarted plan with empty Current Phase/Active Item and all phases pending. Such a plan may pass restore checks and yield for discussion, but PreTool still requires starting an item before execution. `assert-finalizable` continues to require settled phases; discussion is not completion.
 
 ```bash
-python3 <skill-dir>/scripts/plan_state.py overview <task-dir>/tasks.md
-python3 <skill-dir>/scripts/plan_state.py resume-pack <task-dir>/tasks.md
-python3 <skill-dir>/scripts/plan_state.py phase <task-dir>/tasks.md 3
-python3 <skill-dir>/scripts/plan_state.py item <task-dir>/tasks.md P3.2
+python3 <skill-dir>/scripts/plan_state.py overview <task-dir>/plan.md
+python3 <skill-dir>/scripts/plan_state.py resume-pack <task-dir>/plan.md
+python3 <skill-dir>/scripts/plan_state.py phase <task-dir>/plan.md 3
+python3 <skill-dir>/scripts/plan_state.py item <task-dir>/plan.md P3.2
 python3 <skill-dir>/scripts/plan_state.py section <task-dir>/decisions.md "Active Decisions"
-python3 <skill-dir>/scripts/plan_state.py budgets <task-dir>/tasks.md
-python3 <skill-dir>/scripts/plan_state.py restore-check <task-dir>/tasks.md
+python3 <skill-dir>/scripts/plan_state.py budgets <task-dir>/plan.md
+python3 <skill-dir>/scripts/plan_state.py restore-check <task-dir>/plan.md
 ```
 
 `overview` and its `resume-pack` alias emit schema version 2 with a 4 KiB serialized-character ceiling by default. They prioritize restore-critical state, return only the current/actionable phase frontier plus lifecycle counts, and expose every shortened section under `view_meta.truncated_sections` with an exact targeted entry in `view_meta.next_read.targets`. `--max-chars` remains the per-section ceiling; use `--total-max-chars 0` only for legacy unbounded overview output.
@@ -56,16 +68,16 @@ Passing the 16-hex value to an edit is rejected with a message naming the mistak
 python3 <skill-dir>/scripts/plan_edit.py --compact --expected-fingerprint <sha> \
   phase-add --title "Verify migration" --item "The migration result is present." \
   --verify "The requested smoke check passes." --start
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <sha> \
+python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint <sha> \
   phase-add --title "Verify migration" --after 2 \
   --expected-history-fingerprint <history-sha-or-missing>
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <sha> \
+python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint <sha> \
   phase-update 3 --title "Verify production migration"
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <sha> \
+python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint <sha> \
   phase-update 3 --status deferred --reason "user paused pending quota"
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <sha> \
+python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint <sha> \
   item-add --phase 3 --kind P --text "The production smoke check passes."
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <sha> \
+python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint <sha> \
   item-move P3.2 --phase 4 --after P4.1
 ```
 
@@ -83,18 +95,18 @@ Direct removal is intentionally narrow: an item must be unchecked, non-active, a
 
 ## Pausing
 
-After `pause` settles every phase, `plan_checkpoint.py park --reason "user will resume after review"` permits finalization while retaining this session’s task reservation. At least one phase must be blocked/deferred; actionable or entirely complete plans cannot park. The reason is stored as `- **Parked:** ...` in Resume Checkpoint. `resume`, `reopen`, and checkpoint `start` clear it before execution, and it cannot exempt actionable work from finalization. Park before writing a handoff, because parking changes `tasks.md`. Other sessions and the workspace marker remain unchanged.
+After `pause` settles every phase, `plan_checkpoint.py park --reason "user will resume after review"` permits finalization while retaining this session’s task reservation. At least one phase must be blocked/deferred; actionable or entirely complete plans cannot park. The reason is stored as `- **Parked:** ...` in Resume Checkpoint. `resume`, `reopen`, and checkpoint `start` clear it before execution, and it cannot exempt actionable work from finalization. Park before writing a handoff, because parking changes `plan.md`. Other sessions and the workspace marker remain unchanged.
 
 When the user postpones work, one call settles the phase and stages its handoff:
 
 ```bash
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <file_fingerprint> \
+python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint <file_fingerprint> \
   pause --phase 13 --reason "user paused pending quota" \
   --evidence "18 of 20 Selenium steps ran; stopped at the onboarding regression" \
   --handoff-content '<handoff body>'
 ```
 
-It records the partial evidence on the Active Item, writes the exact status grammar with its reason, moves Active Item to whatever is still actionable (or clears it when nothing is), syncs Resume Checkpoint, and writes `handoff.md` **last**. That order matters: `handoff.md` is stale whenever a required planning file is newer, so a handoff written before `tasks.md` is stale on arrival, and doing this by hand reliably costs a wasted write plus a rewrite.
+It records the partial evidence on the Active Item, writes the exact status grammar with its reason, moves Active Item to whatever is still actionable (or clears it when nothing is), syncs Resume Checkpoint, and writes `handoff.md` **last**. That order matters: `handoff.md` is stale whenever a required planning file is newer, so a handoff written before `plan.md` is stale on arrival, and doing this by hand reliably costs a wasted write plus a rewrite.
 
 Use `--all-remaining` instead of `--phase` to settle every non-settled phase when the whole task pauses. `--status blocked` records an external dependency instead of a user postponement, and also sets the Resume Checkpoint blocker. `--handoff-content` and `--evidence` are optional.
 
@@ -111,23 +123,23 @@ Use semantic section names, not line numbers:
 `findings.md` accepts any existing, uniquely named level-2 section, including legacy names such as `Phase 5 Evidence`. Missing or duplicate headings fail without writing. Task, decision, history, and handoff fields retain their explicit section allowlists. Preserve detailed external evidence in a linked findings file before replacing its hot section with a summary; external content must not move into trusted history.
 
 ```bash
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <sha> \
-  section-replace --file tasks.md --heading "Resume Checkpoint" --content '<new body>'
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <sha> \
+python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint <sha> \
+  section-replace --file plan.md --heading "Resume Checkpoint" --content '<new body>'
+python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint <sha> \
   entry-append --file findings.md --heading Discoveries --entry '- New durable discovery.'
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <sha> \
-  entry-replace --file tasks.md --heading "Files Touched" --entry '- old.py: old' --replacement '- new.py: new'
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <sha> \
+python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint <sha> \
+  entry-replace --file plan.md --heading "Files Touched" --entry '- old.py: old' --replacement '- new.py: new'
+python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint <sha> \
   entry-remove --file decisions.md --heading "Open Decision Questions" --entry '- [ ] Resolved question'
 ```
 
-The expected fingerprint belongs to the file named by `--file`, not always `tasks.md`. The editor allows only known planning filenames and sections, matches replacement/removal entries exactly once, rejects entries or section bodies that escape into another `##` section, preflights that file's budget, and atomically replaces it. `entry-append` separates prose entries with a blank line but appends a Markdown table row directly under the row above it, because a blank line between two rows ends the table and starts a second one.
+The expected fingerprint belongs to the file named by `--file`, not always `plan.md`. The editor allows only known planning filenames and sections, matches replacement/removal entries exactly once, rejects entries or section bodies that escape into another `##` section, preflights that file's budget, and atomically replaces it. `entry-append` separates prose entries with a blank line but appends a Markdown table row directly under the row above it, because a blank line between two rows ends the table and starts a second one.
 
 Common targets:
 
 | File | Repeatedly edited sections |
 |---|---|
-| `tasks.md` | Resume Checkpoint, Key Questions, Verification, Progress Notes, Errors Encountered, Files Touched |
+| `plan.md` | Resume Checkpoint, Key Questions, Verification, Progress Notes, Errors Encountered, Files Touched |
 | `decisions.md` | Active Decisions, Superseded Decisions, Open Decision Questions |
 | `findings.md` | Current Summary, Requirements, Discoveries, Known Gotchas, Sources, Detail Index |
 | `history.md` | Completed Phases, Verification History, Resolved Errors |
@@ -135,7 +147,7 @@ Common targets:
 
 Keep using `plan_checkpoint.py` for `start`, `progress`, and `complete`. Do not emulate execution transitions with generic section edits. `plan_checkpoint.py deactivate-pointer --project-root <root>` is the compatibility finalizer for work completed without `--deactivate-pointer`. It retains `operation`, `pointer`, and `cleared` fields, now returning `cleared: false` and `reason: "session_scoped"`: the root marker is always preserved. The CLI finishes only the caller’s fully complete lease, with generation and completion rechecked under the routing lock. Repeated calls with an explicit path are safe. Blocked/deferred work retains ownership; use `park` for a pause or explicit `handoff` for another session. `POINTER_ACTIVE` is no longer a finalizability issue.
 
-After the session’s lease finishes, omitted-path commands no longer resolve its plan. Keep its known path for subsequent reads and `python3 <skill-dir>/scripts/plan_checkpoint.py --plan <tasks.md> assert-finalizable --project-root <root>`.
+After the session’s lease finishes, omitted-path commands no longer resolve its plan. Keep its known path for subsequent reads and `python3 <skill-dir>/scripts/plan_checkpoint.py --plan <plan.md> assert-finalizable --project-root <root>`.
 
 ## Lifecycle operations
 
@@ -152,12 +164,12 @@ python3 <skill-dir>/scripts/plan_edit.py --expected-fingerprint <decisions-sha> 
 
 The command requires each selected ID exactly once and a new replacement ID. Review the summary for every still-active requirement; the tool cannot judge semantic equivalence. It archives the exact originals and replacement in Decision History before replacing selected rows, preserving unrelated active rows, superseded rows, and open questions. It uses the same fingerprinted, history-first recovery journal as `decisions-compact`; `--dry-run` preflights the candidate without publishing. Active decisions are never automatically evicted or budgets raised.
 
-Checkpoint transitions validate their temporary candidate before replacing `tasks.md`. Unsupported `phase-update` execution transitions fail before any write. This is intentionally not a blanket requirement that every prose repair pass full `restore-check`: repairing an already-invalid plan may require several targeted edits. Run the semantic restore check before operational work.
+Checkpoint transitions validate their temporary candidate before replacing `plan.md`. Unsupported `phase-update` execution transitions fail before any write. This is intentionally not a blanket requirement that every prose repair pass full `restore-check`: repairing an already-invalid plan may require several targeted edits. Run the semantic restore check before operational work.
 
 ```bash
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <tasks-sha> \
+python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint <tasks-sha> \
   resume 3 --decision '| D3 | Resume postponed verification | User authorized resumption | 2026-10-05 |'
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <decisions-sha> \
+python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint <decisions-sha> \
   decisions-compact --expected-history-fingerprint <history-sha-or-missing>
 python3 <skill-dir>/scripts/plan_edit.py --expected-fingerprint <tasks-sha> \
   reopen --title "Vanity domain aliases" \
@@ -166,22 +178,22 @@ python3 <skill-dir>/scripts/plan_edit.py --expected-fingerprint <tasks-sha> \
   --item "The alias resolver ships behind the existing redirect service." \
   --verify "The alias e2e suite passes." \
   --non-goals "analytics dashboards; per-user custom domains"
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <decisions-sha> \
+python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint <decisions-sha> \
   decision-supersede D1 --replacement D2 --reason "User changed the requirement"
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <tasks-sha> \
+python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint <tasks-sha> \
   archive-phase 2 --expected-history-fingerprint missing
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <tasks-sha> \
+python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint <tasks-sha> \
   compact-oldest --expected-history-fingerprint <history-sha-or-missing>
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <tasks-sha> \
+python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint <tasks-sha> \
   archive-entry --source-section Verification --entry '<exact hot entry>' \
   --archive-entry '<concise cold entry>' --expected-history-fingerprint <history-sha>
-python3 <skill-dir>/scripts/plan_edit.py --plan <tasks.md> --expected-fingerprint <handoff-sha-or-missing> \
+python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint <handoff-sha-or-missing> \
   handoff-write --content '<complete handoff snapshot>'
 ```
 
 `resume` continues an existing blocked/deferred phase, retaining its phase/item IDs, checked outcomes, and partial evidence. It records the required authorizing decision, starts the first unchecked item using the shared checkpoint transition, and synchronizes Current Phase, Active Item, and Resume Checkpoint. It neither adds nor archives phases and refuses to displace active work. Record the user's renewed authorization or the resolved external dependency in `--decision`. A completed phase or a phase without unchecked items cannot be resumed. `phase-update` rejects reactivation and starting execution without writing; use `resume` for paused work or `plan_checkpoint.py start <id>` for an existing pending item. Direct checkpoint start also rejects settled phases before writing.
 
-`reopen` adds distinct newly authorized work to a settled plan. It appends the authorizing row to Active Decisions, optionally retires what that row replaces, reconciles whichever scope fields you name, adds the phase that carries the work with its items, and starts the first one — validating everything before writing anything, and writing `decisions.md` before `tasks.md` so a crash can leave a recorded authorization with no phase, never a phase nothing authorized. Re-running it after such a crash does not duplicate the decision row. It refuses a plan that still has an actionable phase: that plan needs `phase-add`/`item-add` and `plan_checkpoint.py start` instead. Both `resume` and `reopen` return `phase`, `items`, `item` (the started one), `decision`, `decision_already_recorded`, `superseded`, and the `decisions_file`/`decisions_old_fingerprint`/`decisions_fingerprint`/`decisions_usage` fields, alongside the usual tasks.md fingerprints, context, and budgets. Like `phase-add`, `reopen` needs `--expected-history-fingerprint` only when the new phase pushes the hot window past 12 headings; place that flag after the subcommand.
+`reopen` adds distinct newly authorized work to a settled plan. It appends the authorizing row to Active Decisions, optionally retires what that row replaces, reconciles whichever scope fields you name, adds the phase that carries the work with its items, and starts the first one — validating everything before writing anything, and writing `decisions.md` before `plan.md` so a crash can leave a recorded authorization with no phase, never a phase nothing authorized. Re-running it after such a crash does not duplicate the decision row. It refuses a plan that still has an actionable phase: that plan needs `phase-add`/`item-add` and `plan_checkpoint.py start` instead. Both `resume` and `reopen` return `phase`, `items`, `item` (the started one), `decision`, `decision_already_recorded`, `superseded`, and the `decisions_file`/`decisions_old_fingerprint`/`decisions_fingerprint`/`decisions_usage` fields, alongside the usual plan.md fingerprints, context, and budgets. Like `phase-add`, `reopen` needs `--expected-history-fingerprint` only when the new phase pushes the hot window past 12 headings; place that flag after the subcommand.
 
 `decisions-compact` moves the complete Superseded Decisions body into `history.md` under Decision History, preserving active decisions and open questions byte-for-byte. Supply the decisions fingerprint as the global `--expected-fingerprint` and the history fingerprint after the subcommand. It uses the same history-first journal and recovery as phase archival, returns `archived_decisions` and both file fingerprints, and supports `--dry-run`. It refuses when no superseded decision rows exist. If active decisions alone fill the budget, consolidate them with judgment or explicitly supersede obsolete choices first; the tool never chooses active decisions to discard.
 

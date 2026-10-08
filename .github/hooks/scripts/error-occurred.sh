@@ -1,6 +1,6 @@
 #!/bin/bash
 # plan-files: Error hook for GitHub Copilot
-# Logs errors to tasks.md when the agent encounters an error.
+# Logs errors to the authoritative plan when the agent encounters an error.
 # Always exits 0 — outputs JSON to stdout. Debug log written to
 #   tmp/hook-logs/plan-files/error-occurred.log
 #
@@ -13,6 +13,7 @@ INPUT=$(cat)
 PROVIDER=copilot
 REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
 STATE_TOOL="$REPO_ROOT/skills/plan-files/scripts/session-state.sh"
+source "$REPO_ROOT/skills/plan-files/scripts/hook-common.sh"
 
 # Copilot invokes this script directly with whatever cwd the editor last set,
 # with no wrapper to correct it first. A submodule's own toplevel is not the
@@ -44,7 +45,7 @@ json_escape() {
 }
 
 PLAN_SOURCE="$PROVIDER session lease -> $PLAN_DIR"
-PLAN_FILE="$PLAN_DIR/tasks.md"
+PLAN_FILE=$(planning_plan_file "$PLAN_DIR")
 
 # --- Logging setup (flock-protected against parallel hook processes) --------
 LOG_DIR="tmp/hook-logs/plan-files"
@@ -80,7 +81,7 @@ log "plan source: $PLAN_SOURCE -> $PLAN_FILE"
 log "event=ErrorOccurred input_bytes=${#INPUT}"
 
 if [ ! -f "$PLAN_FILE" ]; then
-    log "${PLAN_FILE:-tasks.md}: ABSENT -> emitting {} (no-op)"
+    log "${PLAN_FILE:-plan.md}: ABSENT -> emitting {} (no-op)"
     echo '{}'
     exit 0
 fi
@@ -92,7 +93,7 @@ log "${PLAN_FILE}: present"
 #   {"error":"..."}              -> top-level string
 # Limitation: does NOT decode escaped quotes inside the message (\" mid-value
 # would split early). Acceptable for a 200-char preview that is itself meant
-# only to nudge the agent to log the error in tasks.md.
+# only to nudge the agent to log the error in the authoritative plan.
 ERROR_MSG=$(printf '%s' "$INPUT" \
     | grep -oE '"message"[[:space:]]*:[[:space:]]*"[^"]*"' \
     | head -1 \

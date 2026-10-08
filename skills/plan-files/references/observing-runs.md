@@ -8,7 +8,7 @@ python3 <plan-files-skill>/scripts/observe.py --project-root <project>
 
 The canonical reporter is recognized as read-only, including through an installed skill symlink, so it remains usable after finalization. A different script named `observe.py` or a reporter call chained to a mutation does not inherit that allowance.
 
-Omitted `--plan` resolves only the current session's owned task, matching the planning helpers. After finalization, pass `--plan <known-task-dir>/tasks.md` to include that plan's state. Workspace-marker contents never select a report plan; without an owned or explicit plan, the report still summarizes hook logs.
+Omitted `--plan` resolves only the current session's owned task, matching the planning helpers. After finalization, pass `--plan <known-task-dir>/plan.md` to include that plan's state. Workspace-marker contents never select a report plan; without an owned or explicit plan, the report still summarizes hook logs.
 
 Run the deterministic isolated comparison with either output format:
 

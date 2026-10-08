@@ -39,7 +39,7 @@ Binding once per prompt is intentional: UserPromptSubmit suspends the prior leas
 
 ## Creation and binding
 
-For a new task, choose a distinct task id and create `tasks.md`, `findings.md`, and `decisions.md` from the templates. Before a recognized first plan write, PreTool atomically reserves the task with status `creating`; PostTool confirms only the matching reservation after `tasks.md` exists. For an existing unowned task, a recognized plan mutation can claim it before writing. Neither path switches an existing task/candidate, and a competing claim fails before mutation. Do not rerun bind for reassurance; use `resolve` within the same prompt.
+For a new task, choose a distinct task id and create `plan.md`, `findings.md`, and `decisions.md` from the templates. Before a recognized first plan write, PreTool atomically reserves the task with status `creating`; PostTool confirms only the matching reservation after `plan.md` exists. For an existing unowned task, a recognized plan mutation can claim it before writing. Neither path switches an existing task/candidate, and a competing claim fails before mutation. Do not rerun bind for reassurance; use `resolve` within the same prompt.
 
 Without hooks, pass explicit plan paths for offline work. Default helper resolution requires a verified provider/session identity and an owned or discussing lease. Preserve old task directories when switching.
 

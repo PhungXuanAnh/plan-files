@@ -2,7 +2,7 @@
 # plan-files: Canonical PostToolUse hook core.
 # Runs AFTER every tool call. Injects bounded current context plus semantic-risk
 # checkpoint, restore-readiness, and maintenance guidance.
-# No-op when tasks.md does not exist - zero pollution on non-planning sessions.
+# No-op when the authoritative plan does not exist - zero pollution on non-planning sessions.
 # Always exits 0 - outputs JSON to stdout. Debug log written to
 #   tmp/hook-logs/plan-files/post-tool-use.log
 #
@@ -84,7 +84,7 @@ $(planning_bounded_warning "$OWNERSHIP_WARN")"
 fi
 
 PLAN_SOURCE="$PROVIDER session lease -> $PLAN_DIR"
-PLAN_FILE="$PLAN_DIR/tasks.md"
+PLAN_FILE=$(planning_plan_file "$PLAN_DIR")
 TOOL_CLASS=unknown
 TOOL_WEIGHT=1
 TOOL_CLASS_FIELDS=$(printf '%s' "$INPUT" \
@@ -130,7 +130,7 @@ log "plan source: $PLAN_SOURCE -> $PLAN_FILE"
 log "stdin bytes=${#INPUT}"
 
 if [ ! -f "$PLAN_FILE" ]; then
-    log "${PLAN_FILE:-tasks.md}: ABSENT -> emitting {} (no-op, zero pollution)"
+    log "${PLAN_FILE:-plan.md}: ABSENT -> emitting {} (no-op, zero pollution)"
     echo '{}'
     exit 0
 fi
@@ -525,7 +525,7 @@ if [ "$CONTRACTED" = "true" ] && [ -n "$ACTIVE_ITEM" ]; then
 [plan-files] CHECKPOINT REVIEW: no plan change for ${CHECKPOINT_LAG_SECS}s with ${UNCHANGED_UNKNOWN_COUNT} unclassified tool result(s). Their effect is unknown. Check whether ${ACTIVE_ITEM} has new evidence; if so, record it with 'python3 $(planning_script_path plan_checkpoint.py) progress ${ACTIVE_ITEM} --evidence ...' or complete the item when its predicate is true. Otherwise continue the same item. This review repeats at most every ${STALE_REPEAT_SECS}s until the plan changes."
     fi
 else
-    NUDGE="[plan-files] Update tasks.md with what you just did. If a phase is now complete, update ${PLAN_FILE} status. If the plan-files skill rules are no longer in your context (post-/compact, or you have forgotten them), reload them by reading $(planning_doc_path SKILL.md) before continuing."
+    NUDGE="[plan-files] Update ${PLAN_FILE} with what you just did. If a phase is now complete, update ${PLAN_FILE} status. If the plan-files skill rules are no longer in your context (post-/compact, or you have forgotten them), reload them by reading $(planning_doc_path SKILL.md) before continuing."
 fi
 fi
 for WARNING in "$STOP_RISK" "$REOPEN_WARN" "$COMPACTION_WARN" "$RESTORE_WARN" "$FINALIZE_WARN" "$BACKGROUND_WARN"; do

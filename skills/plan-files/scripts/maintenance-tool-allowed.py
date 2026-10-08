@@ -17,6 +17,8 @@ import sys
 from pathlib import Path
 from typing import NamedTuple
 
+from plan_paths import PLAN_FILENAMES, resolve_plan_file
+
 from session_state import (RECORD_FILES as PLAN_RECORD_FILES, EDIT_RECORD_OPS,
                            EDIT_FILE_OPS, EDIT_ADVANCE_OPS, edit_operation_class)
 
@@ -285,7 +287,7 @@ def text_plan_paths(value: object) -> list[str]:
     return list(dict.fromkeys(paths))
 
 
-REQUIRED_PLAN_FILES = {"tasks.md", "findings.md", "decisions.md"}
+REQUIRED_PLAN_FILES = {*PLAN_FILENAMES, "findings.md", "decisions.md"}
 
 
 def plan_id_for_path(path: str, project_root: Path) -> str | None:
@@ -306,16 +308,16 @@ def plan_id_for_path(path: str, project_root: Path) -> str | None:
     task_id = relative.parts[0]
     if not TASK_ID_RE.fullmatch(task_id) or task_id in {".", "..", ".sessions"}:
         return None
-    # A task is a recognized mutation target once its tasks.md already
+    # A task is a recognized mutation target once its plan.md already
     # exists on disk, OR when this write is itself creating one of the three
-    # required plan files for a brand-new task — tasks.md necessarily doesn't
+    # required plan files for a brand-new task — plan.md necessarily doesn't
     # exist yet precisely because this very call is the one creating it.
     # Without this second branch, a new plan's very first Write is never
-    # auto-claimed (tasks.md can't already exist before it's written), so the
+    # auto-claimed (plan.md can't already exist before it's written), so the
     # session stays unowned until some later edit happens to touch an
     # already-existing file — silently defeating auto-claim for exactly the
     # moment it matters most: task creation.
-    if (plan_root / task_id / "tasks.md").is_file():
+    if resolve_plan_file(plan_root / task_id).is_file():
         return task_id
     if candidate.name.lower() in REQUIRED_PLAN_FILES:
         return task_id
@@ -1083,7 +1085,7 @@ def routing_verb(tool_input: object, bind_tool: Path, project_root: Path, task_i
     return verb
 
 
-# The plan's execution state lives in tasks.md and handoff.md; a discussion turn
+# The plan's execution state lives in plan.md and handoff.md; a discussion turn
 # may record into the other planning files. Subcommand names come from the
 # helpers' own --help surfaces, so the classification follows the tools rather
 # than a guess about what a call writes.
@@ -1169,8 +1171,8 @@ def _shell_plan_op_class(command: str, plan_dir: Path) -> str:
             classes.add("read")
         else:
             # A command whose targets cannot be parsed still declares one when it
-            # names a planning file -- as a whole argument (`sed -i … tasks.md`)
-            # or inside inline code (`python3 -c "…tasks.md…"`). Naming the plan
+            # names a planning file -- as a whole argument (`sed -i … plan.md`)
+            # or inside inline code (`python3 -c "…plan.md…"`). Naming the plan
             # cannot grant this call anything, so reading a mention as a reason
             # to refuse is the safe direction and the only one taken here.
             named = {_plan_file_op_class(word, plan_dir)

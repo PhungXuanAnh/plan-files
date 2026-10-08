@@ -12,6 +12,7 @@ Thumbs.db
 
 # Development planning files (meta: I used this skill to build this skill!)
 .plan-files
+plan.md
 tasks.md
 findings.md
 decisions.md

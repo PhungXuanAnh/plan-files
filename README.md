@@ -14,7 +14,7 @@ For each complex task, the agent uses a workspace marker, per-session routing, a
 └── tmp/plan-files/
     ├── .sessions/       # private session → task reservations
     └── <task-id>/
-        ├── tasks.md
+        ├── plan.md
         ├── findings.md
         ├── decisions.md
         ├── history.md       # optional cold archive
@@ -25,11 +25,11 @@ Session hooks add `tmp/*` and `.plan-files` to the project root's `.git/info/exc
 
 Only this layout and the [current tasks format](skills/plan-files/references/format-contract.md) are supported. The former `tmp/plan-with-files/` directory and `.plan-with-files` markers are ignored. Every plan requires `## Active Item`; every phase uses one `- **Status:**` body line, and every phase checkbox retains its ID and evidence, including completed work. Inline phase statuses are rejected.
 
-- `tasks.md` is the single authoritative plan: task identity, goal, current phase, phases/items/evidence, concise progress, errors, and verification. Its maintenance ceiling is 300 lines/24 KiB, 12 phases, about 100 visible items, and 15 items/4 KiB in Current Phase.
+- `plan.md` is the single authoritative plan: task identity, goal, current phase, phases/items/evidence, concise progress, errors, and verification. Its maintenance ceiling is 300 lines/24 KiB, 12 phases, about 100 visible items, and 15 items/4 KiB in Current Phase.
 - `findings.md` stores research, discoveries, and untrusted external content.
 - `decisions.md` stores user decisions, changed direction, superseded choices, and open decision questions.
 - `history.md` stores trusted completed-work summaries and is read only when needed.
-- `handoff.md` is overwritten only for an intentional pause whose volatile state does not fit in `tasks.md`.
+- `handoff.md` is overwritten only for an intentional pause whose volatile state does not fit in `plan.md`.
 
 All plan-owned temporary artifacts also belong inside that same task folder: research, downloads, extracted sources, generated outputs, logs, reports, backups, scratch scripts and temporary Git worktrees. Never scatter them into sibling `tmp/<topic>` folders or leave a root `handoff.md`. Maintained repository source remains in its repository. Where local-only data must live under `.vscode/local_files/`, use the workspace's ignored `tmp` symlink to that storage rather than duplicating plans. Explicitly requested container exports go only to a dedicated plan-contained output volume; do not copy container files back into host source trees.
 
@@ -37,7 +37,9 @@ Bounded `overview`/`resume-pack` output is capped at 4 KiB and supplies targeted
 
 Create explicitly postponed work with `phase-add --status deferred --reason ...`; ordinary pending work participates in automatic continuation. Small authorized followups can use `reopen --append N` to reuse a complete phase without losing evidence. `decisions-compact` archives superseded decisions; `decisions-consolidate` archives explicitly selected active rows while retaining a requirement-preserving summary. `park --reason ...` finalizes settled paused work while retaining its own task reservation. During discussion, requested reports can be written inside the owned plan's `artifacts/` directory or copied to explicit report targets outside plans. `hook_explain.py` previews the real shared gate without executing the proposed command or writing state.
 
-There is no `progress.md`. Keep current progress and verification in `tasks.md`; archive completed detail in `history.md` when needed.
+There is no `progress.md`. Keep current progress and verification in `plan.md`; archive completed detail in `history.md` when needed.
+
+New plans use `plan.md`. Existing `tasks.md` plans keep working in place with the same format, limits, ownership, checkpoints, and hooks. Do not create `plan.md` beside an existing `tasks.md`; two distinct files block execution until their state is reconciled. Compatibility will be removed only after no legacy runtime plans remain. See [filename compatibility](skills/plan-files/references/plan-operations.md#filename-compatibility).
 
 ## Project Root Resolution
 
@@ -82,7 +84,7 @@ plan-files/
 │       ├── references/              # Focused routing, format, operations, evaluation details
 │       ├── scripts/                 # Canonical planning tools and shared shell hook cores
 │       └── templates/
-│           ├── tasks.md
+│           ├── plan.md
 │           ├── findings.md
 │           ├── decisions.md
 │           ├── history.md

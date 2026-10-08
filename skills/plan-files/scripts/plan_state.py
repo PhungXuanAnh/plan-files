@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from plan_paths import PLAN_FILENAME, PLAN_FILENAMES, conflicting_plan_files, resolve_plan_file
+
 
 PHASE_RE = re.compile(r"^### Phase\s+(\d+):\s+(?!.*\[(?:complete|in_progress|pending)\]\s*$)(.+?)\s*$")
 CHECKBOX_RE = re.compile(r"^- \[([ xX])\](?: \[([PV]\d+\.\d+)\])?\s+(.+)$")
@@ -60,11 +62,15 @@ def active_plan_path(project_root: Path | None = None) -> Path:
 
 def resolve_plan_argument(explicit: Path | None, project_root: Path | None = None) -> Path:
     """Use the explicit plan when given, else the workspace's active plan."""
-    return explicit if explicit is not None else active_plan_path(project_root)
+    if explicit is None:
+        return active_plan_path(project_root)
+    if explicit.name in PLAN_FILENAMES and not explicit.exists():
+        return resolve_plan_file(explicit.parent)
+    return explicit
 
 
 FILE_BUDGETS: dict[str, tuple[int, int]] = {
-    "tasks.md": (300, 24 * 1024),
+    **dict.fromkeys(PLAN_FILENAMES, (300, 24 * 1024)),
     "findings.md": (250, 32 * 1024),
     "decisions.md": (150, 12 * 1024),
     "handoff.md": (50, 6 * 1024),
@@ -229,7 +235,7 @@ def handoff_freshness_payload(plan_dir: Path, now: datetime | None = None) -> di
         reasons.append("HANDOFF_EXPIRED")
     newer_files = [
         name
-        for name in ("tasks.md", "findings.md", "decisions.md")
+        for name in (*PLAN_FILENAMES, "findings.md", "decisions.md")
         if (plan_dir / name).is_file() and (plan_dir / name).stat().st_mtime_ns > handoff.stat().st_mtime_ns
     ]
     if newer_files:
@@ -333,13 +339,13 @@ def budget_payload(plan: Path) -> dict[str, object]:
         "current_phase_byte_limit": CURRENT_PHASE_BYTE_LIMIT,
     }
     if structure["phases"] > TASKS_PHASE_LIMIT:
-        over.append("tasks.md:phases")
+        over.append(f"{plan.name}:phases")
     if structure["items"] > TASKS_ITEM_LIMIT:
-        over.append("tasks.md:items")
+        over.append(f"{plan.name}:items")
     if structure["current_phase_items"] > CURRENT_PHASE_ITEM_LIMIT:
-        over.append("tasks.md:current-phase-items")
+        over.append(f"{plan.name}:current-phase-items")
     if structure["current_phase_bytes"] > CURRENT_PHASE_BYTE_LIMIT:
-        over.append("tasks.md:current-phase-bytes")
+        over.append(f"{plan.name}:current-phase-bytes")
     return {
         "plan": str(plan),
         "fingerprint": file_fingerprint(plan),
@@ -363,14 +369,14 @@ def budget_warning(plan: Path) -> str:
             )
     structure = payload["structure"]
     labels = {
-        "tasks.md:phases": ("phases", "phase_limit", "phase entries"),
-        "tasks.md:items": ("items", "item_limit", "item entries"),
-        "tasks.md:current-phase-items": (
+        f"{plan.name}:phases": ("phases", "phase_limit", "phase entries"),
+        f"{plan.name}:items": ("items", "item_limit", "item entries"),
+        f"{plan.name}:current-phase-items": (
             "current_phase_items",
             "current_phase_item_limit",
             "current-phase items",
         ),
-        "tasks.md:current-phase-bytes": (
+        f"{plan.name}:current-phase-bytes": (
             "current_phase_bytes",
             "current_phase_byte_limit",
             "current-phase bytes",
@@ -380,7 +386,7 @@ def budget_warning(plan: Path) -> str:
         if issue not in labels:
             continue
         actual_key, limit_key, label = labels[issue]
-        parts.append(f"tasks.md={structure[actual_key]}/{structure[limit_key]} {label}")
+        parts.append(f"{plan.name}={structure[actual_key]}/{structure[limit_key]} {label}")
     detail = ", ".join(parts)
     return (
         f"[plan-files] COMPACTION NEEDED (actual/target): {detail}. "
@@ -458,6 +464,8 @@ def _phase_items(lines: list[str], phase_num: int, start: int, end: int) -> list
 def parse_plan(path: Path) -> PlanState:
     lines = path.read_text(encoding="utf-8").splitlines()
     issues: list[str] = []
+    if conflicting_plan_files(path):
+        issues.append("PLAN_FILENAME_CONFLICT")
 
     current_sections = _section_indices(lines, "## Current Phase")
     active_sections = _section_indices(lines, "## Active Item")
@@ -645,7 +653,7 @@ def restore_payload(plan: Path) -> dict[str, object]:
         "RESTORE_FORMAT_INVALID",
         plan,
         "Phases",
-        "repair the current tasks format: " + "; ".join(state.issues),
+        "repair the plan format: " + explain_issues(state.issues),
     )
     goal = _section_or_empty(plan, "Goal")
     record(
@@ -1067,6 +1075,10 @@ def item_payload(plan: Path, item_id: str, max_chars: int) -> dict[str, object]:
 # PROFILE_MISSING, PROFILE_UNFILLED) never reach this Python path and are not
 # listed here; see common.sh's task_plan_format_message for those.
 ISSUE_EXPLANATIONS: dict[str, str] = {
+    "PLAN_FILENAME_CONFLICT": (
+        "plan.md and tasks.md both exist in one task; preserve and reconcile "
+        "both into a single authoritative plan before continuing"
+    ),
     "PHASE_HEADING_INVALID": 'use "### Phase N: Title" and a separate "- **Status:**" body line',
     "ACTIVE_ITEM_SECTION_INVALID": (
         '"## Active Item" must appear exactly once, after "## Current Phase" and before '
@@ -1151,7 +1163,7 @@ COMMAND_HELP = {
     "budgets": "report line/byte usage against every file and structural limit",
     "budget-warning": "print the single-line budget warning the hooks inject, or nothing",
 }
-PLAN_ARG_HELP = ("path to the plan's tasks.md file (not the task directory); "
+PLAN_ARG_HELP = ("path to the plan's plan.md file (legacy tasks.md supported), not the task directory; "
                  "omit it to use the task owned by this provider/session in .sessions/")
 
 
@@ -1223,7 +1235,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             if not target.is_file() and target.parent == Path("."):
                 # A bare planning filename belongs to the active plan; reading
                 # decisions.md should not require retyping its directory.
-                target = active_plan_path().parent / target.name
+                owned = active_plan_path()
+                target = owned if target.name in PLAN_FILENAMES else owned.parent / target.name
             text = section_text(target, args.heading)
             print(json.dumps(_view_payload(target, {"heading": args.heading}, text, args.max_chars), separators=(",", ":")))
             return 0

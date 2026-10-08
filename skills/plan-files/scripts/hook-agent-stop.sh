@@ -1,6 +1,6 @@
 #!/bin/bash
 # plan-files: Canonical Stop hook core.
-# Checks if all phases in tasks.md are complete.
+# Checks if all phases in the authoritative plan are complete.
 # Injects continuation context if phases are incomplete.
 # Always exits 0 — outputs JSON to stdout. Debug log written to
 #   tmp/hook-logs/plan-files/agent-stop.log
@@ -107,7 +107,7 @@ gcount()  { local n; n=$(grep -c  "$1" "$2" 2>/dev/null || true); printf '%d' "$
 gcountF() { local n; n=$(grep -cF "$1" "$2" 2>/dev/null || true); printf '%d' "${n:-0}"; }
 
 PLAN_SOURCE="$PROVIDER session lease -> $PLAN_DIR"
-PLAN_FILE="$PLAN_DIR/tasks.md"
+PLAN_FILE=$(planning_plan_file "$PLAN_DIR")
 
 # --- Logging setup (flock-protected against parallel hook processes) --------
 LOG_DIR="tmp/hook-logs/plan-files"
@@ -146,7 +146,7 @@ log "plan source: $PLAN_SOURCE -> $PLAN_FILE"
 log "stdin bytes=${#INPUT}"
 
 if [ ! -f "$PLAN_FILE" ]; then
-    log "${PLAN_FILE:-tasks.md}: ABSENT -> emitting {} (no-op)"
+    log "${PLAN_FILE:-plan.md}: ABSENT -> emitting {} (no-op)"
     echo '{}'
     exit 0
 fi

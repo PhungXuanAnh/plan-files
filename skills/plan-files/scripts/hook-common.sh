@@ -70,6 +70,11 @@ planning_doc_path() {
     printf '%s/%s' "$_dir" "${1:-}"
 }
 
+# Shared filename selection for canonical and legacy plans; policy stays in Python.
+planning_plan_file() {
+    python3 "$(planning_script_path plan_paths.py)" "${1:-.}"
+}
+
 # planning_prepare_log_dir DIR — create a cwd-relative hook log directory only
 # when the resolved root accepts plan state, so a stray fallback root stays
 # clean. On failure a caller points its log at /dev/null: a redirect into a
@@ -392,7 +397,7 @@ $1"
 # Keep one model-facing explanation per format rule so hook adapters stay aligned.
 # ---------------------------------------------------------------------------
 task_plan_format_message() {
-    local _issue="${1:-}" _plan_file="${2:-tasks.md}" _total="${3:-0}"
+    local _issue="${1:-}" _plan_file="${2:-plan.md}" _total="${3:-0}"
     case "$_issue" in
         SECTION_LAYOUT_INVALID)
             printf 'FORMAT CONTRACT VIOLATION in %s: include exactly one "## Current Phase" followed later by exactly one "## Phases", and keep every "### Phase N: Title" heading inside the Phases section.' "$_plan_file"
@@ -446,7 +451,7 @@ task_plan_format_message() {
             printf 'OUTCOME-ITEM CONTRACT VIOLATION in %s: an item is checked "[x]" but its Evidence line is still a placeholder (empty, "pending", "none", "n/a", "todo", or "tbd"). Replace it with concrete non-placeholder evidence — a command result, UI/API state, test result, or artifact reference — before the item may stay checked, or uncheck it if the work is not actually done.' "$_plan_file"
             ;;
         ITEM_STATE_TOOL_UNAVAILABLE)
-            printf 'ENVIRONMENT ISSUE while validating outcome items in %s: python3 or %s could not be run (missing python3 on PATH, or the skill scripts directory is not intact). This is not a plan-content problem — fix the environment and retry; do not edit tasks.md to work around it.' "$_plan_file" "$(planning_script_path plan_state.py)"
+            printf 'ENVIRONMENT ISSUE while validating outcome items in %s: python3 or %s could not be run (missing python3 on PATH, or the skill scripts directory is not intact). This is not a plan-content problem — fix the environment and retry; do not edit the plan to work around it.' "$_plan_file" "$(planning_script_path plan_state.py)"
             ;;
     esac
 }
@@ -460,7 +465,7 @@ task_plan_format_message() {
 # (no numbering added) so existing single-issue behavior is unchanged.
 # ---------------------------------------------------------------------------
 task_plan_format_messages() {
-    local _issues="${1:-}" _plan_file="${2:-tasks.md}" _total="${3:-0}"
+    local _issues="${1:-}" _plan_file="${2:-plan.md}" _total="${3:-0}"
     local _count _index=0 _code _rendered=""
     [ -n "$_issues" ] || return 0
     _count=$(printf '%s\n' "$_issues" | grep -c .)
@@ -582,11 +587,13 @@ check_non_phase_work() {
 # Warns on line, byte, or hot-plan phase-count budgets. Advisory only.
 # ---------------------------------------------------------------------------
 planning_file_budget_warning() {
-    local _plan_dir="${1:-}" _tool
-    [ -n "$_plan_dir" ] && [ -f "$_plan_dir/tasks.md" ] || return 0
+    local _plan_dir="${1:-}" _tool _plan_file
+    [ -n "$_plan_dir" ] || return 0
+    _plan_file=$(planning_plan_file "$_plan_dir")
+    [ -f "$_plan_file" ] || return 0
     _tool=$(planning_state_tool 2>/dev/null) || return 0
     command -v python3 >/dev/null 2>&1 || return 0
-    python3 "$_tool" budget-warning "$_plan_dir/tasks.md" 2>/dev/null || true
+    python3 "$_tool" budget-warning "$_plan_file" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -600,7 +607,7 @@ planning_handoff_warning() {
     _handoff="$_plan_dir/handoff.md"
     [ -f "$_handoff" ] || return 0
 
-    for _name in tasks.md findings.md decisions.md; do
+    for _name in plan.md tasks.md findings.md decisions.md; do
         _path="$_plan_dir/$_name"
         if [ -f "$_path" ] && [ "$_path" -nt "$_handoff" ]; then
             [ -n "$_newer" ] && _newer="${_newer}, ${_name}" || _newer="${_name}"
@@ -620,15 +627,17 @@ planning_handoff_warning() {
 # Pass "with-discussion" where an unstarted plan must be reported instead of
 # treated as clean; PreTool needs it, PostTool does not.
 planning_restore_warning() {
-    local _plan_dir="${1:-}" _mode="${2:-}" _tool _payload
-    [ -n "$_plan_dir" ] && [ -f "$_plan_dir/tasks.md" ] || return 0
+    local _plan_dir="${1:-}" _mode="${2:-}" _tool _payload _plan_file
+    [ -n "$_plan_dir" ] || return 0
+    _plan_file=$(planning_plan_file "$_plan_dir")
+    [ -f "$_plan_file" ] || return 0
     _tool=$(planning_state_tool 2>/dev/null) || return 0
     command -v python3 >/dev/null 2>&1 || return 0
-    _payload=$(python3 "$_tool" restore-check "$_plan_dir/tasks.md" 2>/dev/null) || true
+    _payload=$(python3 "$_tool" restore-check "$_plan_file" 2>/dev/null) || true
     [ -n "$_payload" ] || return 0
     printf '%s' "$_payload" | PWF_STATE_TOOL="$_tool" \
         PWF_CHECKPOINT_TOOL="$(planning_script_path plan_checkpoint.py)" \
-        PWF_PLAN_FILE="$_plan_dir/tasks.md" PWF_RESTORE_MODE="$_mode" \
+        PWF_PLAN_FILE="$_plan_file" PWF_RESTORE_MODE="$_mode" \
         python3 -c 'import json,os,sys
 try: p=json.load(sys.stdin)
 except Exception: raise SystemExit(0)
@@ -664,8 +673,9 @@ print("[plan-files] RESTORE STATE ACTION REQUIRED: " + "; ".join(parts) +
 planning_settled_plan_warning() {
     local _plan_dir="${1:-}" _root="${2:-}" _plan_file _edit _checkpoint _sha _plan_arg _root_arg
     local TOTAL COMPLETE IN_PROGRESS PENDING BLOCKED DEFERRED
-    [ -n "$_plan_dir" ] && [ -f "$_plan_dir/tasks.md" ] || return 0
-    _plan_file="$_plan_dir/tasks.md"
+    [ -n "$_plan_dir" ] || return 0
+    _plan_file=$(planning_plan_file "$_plan_dir")
+    [ -f "$_plan_file" ] || return 0
     count_phases "$_plan_file"
     [ "$TOTAL" -gt 0 ] && [ $((COMPLETE + BLOCKED + DEFERRED)) -eq "$TOTAL" ] || return 0
     printf -v _edit '%q' "$(planning_script_path plan_edit.py)"
@@ -766,7 +776,7 @@ planning_integrity_warning() {
 planning_bounded_warning() {
     local _text="$1" _limit=3000
     if [ "${#_text}" -gt "$_limit" ]; then
-        printf '%s… [diagnosis shortened; read the owned tasks.md and %s for repair]' "${_text:0:$_limit}" "$(planning_doc_path references/format-contract.md)"
+        printf '%s… [diagnosis shortened; read the owned plan and %s for repair]' "${_text:0:$_limit}" "$(planning_doc_path references/format-contract.md)"
     else
         printf '%s' "$_text"
     fi

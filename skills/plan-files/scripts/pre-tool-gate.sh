@@ -119,9 +119,9 @@ if isinstance(v,str): sys.stdout.write(v)' 2>/dev/null || true)
 
 budget_warning() {
     local plan_dir=$1
-    [ -f "$plan_dir/tasks.md" ] || return 0
+    [ -f "$(planning_plan_file "$plan_dir")" ] || return 0
     command -v python3 >/dev/null 2>&1 || return 0
-    python3 "$PLAN_STATE_TOOL" budget-warning "$plan_dir/tasks.md" 2>/dev/null || true
+    python3 "$PLAN_STATE_TOOL" budget-warning "$(planning_plan_file "$plan_dir")" 2>/dev/null || true
 }
 
 # PreTool reports unstarted discussion state; the shared core owns the wording.
@@ -269,7 +269,7 @@ if [ -n "$MUTATION_PLAN" ]; then
             log "session=$SESSION_ID owned=$OWNED_PLAN target=$MUTATION_PLAN decision=block-plan-conflict tool=$TOOL_NAME"
             block "$REASON_TEXT"
         fi
-    elif [ ! -f "$PWD/tmp/plan-files/$MUTATION_PLAN/tasks.md" ]; then
+    elif [ ! -f "$(planning_plan_file "$PWD/tmp/plan-files/$MUTATION_PLAN")" ]; then
         EVENT_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" event-id 2>/dev/null || true)
         if ! RESERVATION=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" reserve "$PROVIDER" "$SESSION_ID" \
             "$MUTATION_PLAN" --event "$EVENT_ID" "${CLAIM_OPTIONS[@]}" 2>&1); then
@@ -361,7 +361,7 @@ OWNED_ROUTING=$(routing_verb "$(basename "$PLAN_DIR")")
 BACKGROUND_WARN=$(printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" planning-background-warning)
 [ -z "$BACKGROUND_WARN" ] || block "$BACKGROUND_WARN"
 
-printf -v plan_arg '%q' "$PLAN_DIR/tasks.md"
+printf -v plan_arg '%q' "$(planning_plan_file "$PLAN_DIR")"
 printf -v state_arg '%q' "$PLAN_STATE_TOOL"
 MAINTENANCE_ACTION="Run: python3 $state_arg budgets $plan_arg. Then archive/consolidate completed material in the owned plan; preserve unfinished work."
 if [ "$OWNED_ROUTING" = "discuss" ] || [ "$OWNED_ROUTING" = "handoff" ]; then
@@ -376,7 +376,7 @@ if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION
     # plan's execution state, not the filesystem, so the decision or finding the
     # turn produces must be writable or the answer is lost -- while checking an
     # item off, moving a phase, writing a checkpoint or handoff, or writing
-    # tasks.md directly is work that Stop and PostTool deliberately stop
+    # plan.md directly is work that Stop and PostTool deliberately stop
     # accounting for under this lease, and would land unrecorded.
     if [ "$(plan_op_class "$PLAN_DIR")" = "advance" ]; then
         log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=block-discussion-advance tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
@@ -415,7 +415,7 @@ DISCUSSION_HINT="If the user requested only discussion of this plan/workflow, ru
 ALLOWED_HINT="Still allowed: read-only diagnosis; native Edit/Write with an explicit file_path inside $PLAN_DIR; and scoped helpers in $(planning_script_path '' | sed 's:/$::'). For direct Markdown shell writes, a cat heredoc with a quoted delimiter and one literal .md target inside the plan is recognized; any trailing commands must be read-only. Inline Python/custom shell cannot prove its write scope merely by including plan paths, even as arguments: switch to native Edit/Write or a supported helper. Chaining unrelated work onto a repair blocks the whole command."
 
 # Invalid format/profile/status blocks execution before Stop, including legacy plans.
-INTEGRITY_WARN=$(planning_integrity_warning "$PLAN_DIR/tasks.md")
+INTEGRITY_WARN=$(planning_integrity_warning "$(planning_plan_file "$PLAN_DIR")")
 if [ -n "$INTEGRITY_WARN" ]; then
     if maintenance_tool_allowed "$PLAN_DIR"; then
         log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") integrity=required decision=allow-integrity-repair tool=$TOOL_NAME"

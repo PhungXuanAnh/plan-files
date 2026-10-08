@@ -1,12 +1,14 @@
 #!/bin/bash
-# Check if all phases in tasks.md are complete
+# Check if all phases in the authoritative plan are complete
 # Always exits 0 — uses stdout for status reporting
 # Used by Stop hook to report task completion status
 
-PLAN_FILE="${1:-tasks.md}"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+source "$SCRIPT_DIR/common.sh"
+PLAN_FILE="${1:-$(planning_plan_file "$PWD")}"
 
 if [ ! -f "$PLAN_FILE" ]; then
-    echo "[plan-files] No tasks.md found - no active planning session."
+    echo "[plan-files] No plan.md or legacy tasks.md found - no active planning session."
     exit 0
 fi
 
@@ -35,12 +37,12 @@ SETTLED=$((COMPLETE + BLOCKED + DEFERRED))
 # Report status (always exit 0 — incomplete task is a normal state)
 if [ "$SETTLED" -eq "$TOTAL" ] && [ "$TOTAL" -gt 0 ]; then
     if [ "$BLOCKED" -gt 0 ] || [ "$DEFERRED" -gt 0 ]; then
-        echo "[plan-files] ALL PHASES SETTLED ($COMPLETE complete + $BLOCKED blocked + $DEFERRED deferred / $TOTAL). If the user has additional work, add new phases to tasks.md before starting."
+        echo "[plan-files] ALL PHASES SETTLED ($COMPLETE complete + $BLOCKED blocked + $DEFERRED deferred / $TOTAL). If the user has additional work, add new phases to $PLAN_FILE before starting."
     else
-        echo "[plan-files] ALL PHASES COMPLETE ($COMPLETE/$TOTAL). If the user has additional work, add new phases to tasks.md before starting."
+        echo "[plan-files] ALL PHASES COMPLETE ($COMPLETE/$TOTAL). If the user has additional work, add new phases to $PLAN_FILE before starting."
     fi
 else
-    echo "[plan-files] Task in progress ($SETTLED/$TOTAL phases settled - $COMPLETE complete, $BLOCKED blocked, $DEFERRED deferred). Update tasks.md before stopping."
+    echo "[plan-files] Task in progress ($SETTLED/$TOTAL phases settled - $COMPLETE complete, $BLOCKED blocked, $DEFERRED deferred). Update $PLAN_FILE before stopping."
     if [ "$IN_PROGRESS" -gt 0 ]; then
         echo "[plan-files] $IN_PROGRESS phase(s) still in progress."
     fi

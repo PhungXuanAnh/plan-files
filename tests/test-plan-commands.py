@@ -83,8 +83,8 @@ class PlanCommands(unittest.TestCase):
         self.project = Path(self.temp.name)
         self.plan = self.project / "tmp/plan-files/work"
         self.plan.mkdir(parents=True)
-        self.tasks = self.plan / "tasks.md"
-        self.tasks.write_text("""# Tasks: Verification
+        self.tasks = self.plan / "plan.md"
+        self.tasks.write_text("""# Plan: Verification
 ## Goal
 Verify the requested result.
 ## Task Identity
@@ -135,6 +135,59 @@ Phase 1
     def sha(self):
         return hashlib.sha256(self.tasks.read_bytes()).hexdigest()
 
+    def test_plan_filename_compatibility_and_owned_rename(self):
+        for name, alias in (("plan.md", "tasks.md"), ("tasks.md", "plan.md")):
+            with self.subTest(name=name):
+                self.tasks = self.tasks.rename(self.plan / name)
+                overview = json.loads(self.call("plan_state.py", "overview").stdout)
+                self.assertEqual(Path(overview["plan"]), self.tasks)
+                self.assertTrue(overview["restore"]["ok"])
+                self.assertIn(name, overview["budgets"]["files"])
+                self.assertEqual(Path(json.loads(self.call("plan_state.py", "overview",
+                                 self.plan / alias).stdout)["plan"]), self.tasks)
+                self.edit("section-replace", "--file", alias, "--heading", "Verification",
+                          "--content", "- Verify filename compatibility.")
+                self.edit("reopen", "--title", "Filename compatibility",
+                          "--decision", f"| D-{name} | Verify compatibility | User request | 2026-10-08 |",
+                          "--item", "Both filename conventions work.")
+                item = parse_plan(self.tasks).active_item
+                self.call("plan_checkpoint.py", "complete", item, "--evidence", "Compatibility verified")
+                self.call("plan_checkpoint.py", "assert-finalizable")
+                self.assertFalse((self.plan / alias).exists())
+
+    def test_duplicate_plan_filenames_block_mutation_without_data_loss(self):
+        legacy = self.plan / "tasks.md"
+        legacy.write_bytes(self.tasks.read_bytes())
+        before = {path: path.read_bytes() for path in (self.tasks, legacy)}
+        for path in before:
+            self.assertIn("PLAN_FILENAME_CONFLICT", parse_plan(path).issues)
+            self.assertFalse(restore_payload(path)["ok"])
+            result = self.call("plan_checkpoint.py", "--plan", path, "start", "P2.1", check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("PLAN_FILENAME_CONFLICT", result.stdout + result.stderr)
+        result = self.edit("section-replace", "--file", "plan.md", "--heading", "Verification",
+                           "--content", "- Attempted overwrite.", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PLAN_FILENAME_CONFLICT", result.stdout)
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+
+    def test_initializer_uses_new_name_and_preserves_legacy_plan(self):
+        initializer = SCRIPTS.parents[2] / ".codex/hooks/plan-files/scripts/init-session.sh"
+        template = SCRIPTS.parent / "templates/plan.md"
+        self.assertEqual(template.read_bytes(), (template.parent / "tasks.md").read_bytes())
+        for name in ("plan.md", "tasks.md"):
+            directory = self.plan.parent / f"init-{name}"
+            directory.mkdir()
+            if name == "tasks.md":
+                (directory / name).write_bytes(self.tasks.read_bytes())
+            before = (directory / name).read_bytes() if (directory / name).exists() else template.read_bytes()
+            subprocess.run(["bash", str(initializer), "Compatibility"], cwd=directory,
+                           capture_output=True, check=True)
+            self.assertEqual((directory / name).read_bytes(), before)
+            self.assertFalse((directory / ("tasks.md" if name == "plan.md" else "plan.md")).exists())
+            self.assertTrue((directory / "findings.md").is_file())
+            self.assertTrue((directory / "decisions.md").is_file())
+
     def test_obsolete_tasks_format_is_rejected_without_mutation(self):
         original = self.tasks.read_text()
         cases = (
@@ -159,13 +212,13 @@ Phase 1
         store = SessionStore(self.project)
         store.claim("claude", "other-session", "other")
         (self.project / ".plan-files").write_text("other\n")
-        saved = (other / "tasks.md").read_bytes()
+        saved = (other / "plan.md").read_bytes()
         self.edit("reopen", "--title", "More", "--decision", "| D2 | Continue | User request | 2026-10-08 |",
                   "--item", "New result")
         result = json.loads(self.call("plan_checkpoint.py", "progress", "P3.1", "--evidence", "Own result").stdout)
         self.assertEqual(Path(result["plan"]), self.tasks)
-        self.assertEqual((other / "tasks.md").read_bytes(), saved)
-        denied = self.call("plan_checkpoint.py", "--plan", other / "tasks.md", "progress", "P3.1",
+        self.assertEqual((other / "plan.md").read_bytes(), saved)
+        denied = self.call("plan_checkpoint.py", "--plan", other / "plan.md", "progress", "P3.1",
                            "--evidence", "Foreign result", check=False)
         self.assertNotEqual(denied.returncode, 0)
         self.assertIn("reserved by another session", denied.stdout)
@@ -183,7 +236,7 @@ Phase 1
             with self.subTest(providers=(a, b)):
                 shutil.rmtree(self.plan.parent / ".sessions")
                 self.tasks.write_bytes(original)
-                (other / "tasks.md").write_bytes(original)
+                (other / "plan.md").write_bytes(original)
                 store = SessionStore(self.project)
                 store.bind(a, "a", "work")
                 store.bind(b, "b", "other")
@@ -194,10 +247,10 @@ Phase 1
                     self.edit("reopen", "--title", "Own work", "--decision", "| D2 | Continue | User request | 2026-10-08 |",
                               "--item", "Own result")
                     self.call("plan_checkpoint.py", "complete", "P3.1", "--evidence", "Own result verified")
-                    self.assertEqual((other / "tasks.md").read_bytes(), original)
+                    self.assertEqual((other / "plan.md").read_bytes(), original)
                 with patch.dict(os.environ, {"PWF_SESSION_ADAPTER": b, "PWF_SESSION_ID": "b"}):
                     overview = json.loads(self.call("plan_state.py", "overview").stdout)
-                    self.assertEqual(Path(overview["plan"]), other / "tasks.md")
+                    self.assertEqual(Path(overview["plan"]), other / "plan.md")
                     denied = self.call("plan_edit.py", "--plan", self.tasks, "--expected-fingerprint", self.sha(),
                                        "phase-add", "--title", "Foreign", check=False)
                     self.assertNotEqual(denied.returncode, 0)
@@ -523,7 +576,7 @@ Phase 1
                     (helper + " && touch app.py", 1),
                     (helper + " && pytest tests", 2),
                     (shlex.join(["python3", str(SCRIPTS / "plan_state.py"), "overview",
-                                 str(self.plan.parent / "other/tasks.md")]), 1)]
+                                 str(self.plan.parent / "other/plan.md")]), 1)]
         for command, weight in commands:
             with self.subTest(command=command):
                 result = subprocess.run([sys.executable, str(SCRIPTS / "maintenance-tool-allowed.py"),
@@ -545,7 +598,7 @@ Phase 1
         self.assertIn("Current result retained", findings.read_text())
         self.assertLess(findings.stat().st_size, 32768)
         self.assertEqual(self.tasks.read_bytes(), saved_tasks)
-        for file, heading in (("findings.md", "Missing section"), ("tasks.md", "Current Phase")):
+        for file, heading in (("findings.md", "Missing section"), ("plan.md", "Current Phase")):
             target = self.plan / file
             before = target.read_bytes()
             failed = self.edit("section-replace", "--file", file, "--heading", heading, "--content", "replacement",
