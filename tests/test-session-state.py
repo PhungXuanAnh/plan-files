@@ -106,6 +106,20 @@ class SessionIsolation(unittest.TestCase):
         with self.assertRaises(SessionError):
             self.store.resolve("codex", "legacy")
 
+    def test_abandoned_leases_need_authorized_reclaim(self):
+        for n in range(2):
+            stale = self.store.route("codex", f"closed-{n}")
+            stale.parent.mkdir(parents=True, exist_ok=True)
+            stale.write_text("status=owned\ntask=task-a\n")
+        self.store.pending("codex", "new", "task-a")
+        with self.assertRaisesRegex(SessionError, r"2 other session\(s\).*reclaim task-a --reason"):
+            self.store.bind("codex", "new", "task-a")
+        with self.assertRaises(SessionError):
+            self.store.reclaim("codex", "new", "task-a", " ")
+        self.assertIn("2 other lease(s)", self.store.reclaim("codex", "new", "task-a", "user confirmed closed"))
+        self.assertEqual(self.store.owners("task-a"), [self.store.route("codex", "new")])
+        self.assertEqual(self.store.read(stale).get("last_task"), "task-a")
+
     def test_process_claims_and_provider_namespaces(self):
         context = multiprocessing.get_context("fork")
         # A TCP manager avoids the Unix socket path limit for long workspace TMPDIRs.

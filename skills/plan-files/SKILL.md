@@ -39,6 +39,8 @@ If a denial names a feedback file, read it first. **Any tool call containing tha
 4. For `AMBIGUOUS`, run the supplied `clarify` command, then ask and wait. It preserves the candidate and allows question tools or a text-only question, while blocking plan reads and work. Never release just to wait for clarification.
 5. For a new task, choose a distinct task id and create the three required files. PreTool reserves that task before a recognized plan write; PostTool confirms creation. Never reuse another session’s task id. Without hooks, use explicit plan paths and do not claim equivalent session isolation.
 
+If the message says `RESERVED` (or bind fails because another session holds the task), do not retry bind. Run `clarify`, ask whether those sessions are closed, and only with the user's authorization run the supplied `reclaim <task-id> --reason "..."`.
+
 An ownership denial requires routing, not an environment-blocker report. Resolve it before exploring, then retry. Never release a continuing plan just to unlock tools. Within an owned prompt, use `resolve` if uncertain; do not bind again.
 
 For `DISCUSSION ONLY`, run the supplied `discuss` command; it works on an owned plan and on a pending candidate. Reads, questions, plan maintenance, reports under the owned plan's `artifacts/`, and writes outside the plan root remain allowed; Stop may yield with unfinished work. If the user already authorized execution in this prompt, explicitly upgrade the same task with `bind <task-id> --reason "<user authorization>"`; never infer authorization from needing a tool. Otherwise bind a new prompt before execution. Discussion neither completes the plan nor excuses stopping authorized implementation.

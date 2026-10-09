@@ -220,12 +220,13 @@ fi
 TOOL_COMMAND=$(extract_tool_command)
 
 # Corrupt/duplicate legacy ownership cannot silently become a nonparticipant.
-# Diagnosis and the owning session's explicit handoff remain available.
+# Diagnosis, the owning session's explicit handoff, and a user-authorized
+# reclaim of duplicate leases remain available.
 if ! HEALTH=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" health "$PROVIDER" "$SESSION_ID" 2>&1); then
     RECOVERY_TASK=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" owned-task "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
-    if [ -n "$RECOVERY_TASK" ] && [ "$(routing_verb "$RECOVERY_TASK")" = "handoff" ]; then
-        printf '{}'; exit 0
-    fi
+    case "$([ -n "$RECOVERY_TASK" ] && routing_verb "$RECOVERY_TASK")" in
+        handoff|reclaim) printf '{}'; exit 0 ;;
+    esac
     REPAIR_PLAN=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" repair-path "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
     if [ -n "$REPAIR_PLAN" ] && maintenance_tool_allowed "$REPAIR_PLAN"; then
         printf '{}'; exit 0
@@ -333,7 +334,7 @@ if [ -z "$PLAN_DIR" ]; then
         log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-question-while-waiting tool=$TOOL_NAME"
         printf '{}'; exit 0
     fi
-    if [ "$ROUTING_VERB" = "bind" ] || [ "$ROUTING_VERB" = "release" ]; then
+    if [ "$ROUTING_VERB" = "bind" ] || [ "$ROUTING_VERB" = "reclaim" ] || [ "$ROUTING_VERB" = "release" ]; then
         log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-routing-$ROUTING_VERB tool=$TOOL_NAME"
         printf '{}'; exit 0
     fi

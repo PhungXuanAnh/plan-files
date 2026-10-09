@@ -312,6 +312,24 @@ P1.1
                                            f'{self.action(provider, "discuss")} 2>&1 | tail -1').get("decision"),
                                  {"block", "deny"})
 
+    def test_reserved_candidate_offers_authorized_reclaim(self):
+        """An abandoned lease made every bind fail while the gate kept offering bind."""
+        for provider in ADAPTERS:
+            with self.subTest(provider=provider):
+                self.state(provider, "pending", provider, "fixture", "task-a")
+                stale = self.project / f"tmp/plan-files/.sessions/{provider}/closed.state"
+                stale.write_text("status=owned\ntask=task-a\n")
+                reason = self.hook(provider, "pre-tool-use.sh")["reason"]
+                self.assertIn("RESERVED: task 'task-a' is held by 1 other session(s)", reason)
+                reclaim = re.search(r"`([^`]+ reclaim task-a --reason [^`]+)`", reason).group(1)
+                bare = reclaim.split(" --reason")[0]
+                self.assertIn(self.hook(provider, "pre-tool-use.sh", bare)["decision"], {"block", "deny"})
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", reclaim).get("decision"), {"block", "deny"})
+                self.assertEqual(self.run_command(["bash", "-c", bare], provider, check=False).returncode, 2)
+                self.run_command(["bash", "-c", reclaim], provider)
+                self.assertEqual(self.state(provider, "resolve", provider, "fixture"), str(self.plan))
+                self.assertIn("status=inactive", stale.read_text())
+
     def discuss(self, provider):
         """Put this provider's session into the discussing lease."""
         self.own(provider)

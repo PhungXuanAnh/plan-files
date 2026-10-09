@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 
 from feedback_transport import feedback_path, valid_file
@@ -205,9 +206,23 @@ class SessionStore:
                 return True
             return receipts.get(key) == generation
 
+    def holders(self, file: Path | None, task: str) -> list[Path]:
+        return [other for other in self.owners(task) if other != file]
+
+    def holder_summary(self, holders: list[Path]) -> str:
+        """Count and newest activity only; holder identities stay private."""
+        stamps = [max(path.stat().st_mtime for path in other.parent.glob(other.stem + ".*"))
+                  for other in holders]
+        hours = (time.time() - max(stamps)) / 3600
+        return f"{len(holders)} other session(s), most recent activity {hours:.1f}h ago"
+
     def exclusive(self, file: Path, task: str) -> None:
-        if any(other != file for other in self.owners(task)):
-            raise SessionError(f"task '{task}' is reserved by another session; its owner must handoff first")
+        holders = self.holders(file, task)
+        if holders:
+            raise SessionError(
+                f"task '{task}' is reserved by {self.holder_summary(holders)}; its owner must handoff first. "
+                "Do not retry bind. If those sessions may be closed, ask the user; only with their "
+                f"authorization run the bind adapter with: reclaim {task} --reason \"user confirmed the other sessions are closed\"")
 
     def pending(self, provider: str, session: str, preferred: str = "") -> str:
         file = self.route(provider, session)
@@ -271,6 +286,25 @@ class SessionStore:
             self.exclusive(file, task)
             self.write(file, "owned", task=task)
         return f"planning task bound for this prompt: {task}"
+
+    def reclaim(self, provider: str, session: str, task: str, reason: str) -> str:
+        """User-authorized recovery of a task whose other owners are no longer running."""
+        self.enabled()
+        self.task_path(task)
+        if not reason.strip():
+            raise SessionError('reclaim requires --reason "<user authorization>"')
+        file = self.route(provider, session)
+        with self.lock():
+            row = self.read(file)
+            current = row.get("task") or row.get("candidate")
+            if current and current != task:
+                raise SessionError("this session must release/handoff its existing task before reclaiming another")
+            holders = self.holders(file, task)
+            for other in holders:
+                self.write(other, "inactive", last_task=task)
+            if not (row.get("status") == "owned" and row.get("task") == task):
+                self.write(file, "owned", task=task)
+        return f"planning task reclaimed for this prompt: {task}; {len(holders)} other lease(s) made inactive"
 
     def transition(self, provider: str, session: str, verb: str, task: str,
                    generation: str | None = None) -> str:
@@ -424,10 +458,19 @@ def candidate_context(store: SessionStore, task: str, adapter: str, compact: boo
                             text=True, capture_output=True, check=True).stdout.split("\0")
     root_arg, adapter_arg, skill, state, target = quoted[:5]
     command = f"PWF_PROJECT_ROOT={root_arg} bash {adapter_arg}"
+    # Bind cannot succeed while another lease holds the task; say so up front
+    # instead of offering a bind the agent would retry forever.
+    who = identity()
+    holders = store.holders(store.route(*who), task) if who else []
+    reserved = (f"RESERVED: task '{task}' is held by {store.holder_summary(holders)}, so bind will fail; do not retry it. "
+                f"For SAME, run `{command} clarify {task}` and ask the user whether those sessions are closed. Only with their authorization run "
+                f"`{command} reclaim {task} --reason \"user confirmed the other sessions are closed\"`, which makes the other leases inactive and binds this session.\n"
+                if holders else "")
     if compact:
-        return (f"[plan-files] Candidate task '{task}'; text-only chat may yield without routing. Before tools, read {skill} and classify the request.\n"
+        return (f"[plan-files] Candidate task '{task}'; text-only chat may yield without routing. Before tools, read {skill} and classify the request.\n{reserved}"
                 f"Run {command} <verb> {task}: SAME=bind, DIFFERENT=release, AMBIGUOUS=clarify, DISCUSSION ONLY=discuss. Never release continuing work.\nGoal: {goal[:180]}")
     return ("[plan-files] OWNERSHIP ACTION REQUIRED for this prompt. Continue/implement this plan = SAME, even after research. Resolve ownership before other tools; this is not an external blocker.\n"
+            f"{reserved}"
             f"- SAME: run `{command} bind {task}`.\n"
             f"- DIFFERENT: first run `{command} release {task}` only for a separate goal. This releases only your session.\n"
             f"- AMBIGUOUS: run `{command} clarify {task}`, then ask and wait. This keeps the candidate and blocks work; do not release it.\n"
@@ -455,12 +498,14 @@ def main(argv=None) -> int:
     output = ""
     if op == "candidate-context":
         output = candidate_context(store, args[0], args[1], "--compact" in args)
-    elif op in {"bind", "release", "clarify", "discuss", "handoff"}:
+    elif op in {"bind", "reclaim", "release", "clarify", "discuss", "handoff"}:
         who = identity()
         if who is None:
             raise SessionError("no verified planning session identity is available")
-        output = (store.bind(*who, args[0], args[2] if len(args) == 3 and args[1] == "--reason" else "")
-                  if op == "bind" else store.transition(*who, op, args[0]))
+        reason = args[2] if len(args) == 3 and args[1] == "--reason" else ""
+        output = (store.bind(*who, args[0], reason) if op == "bind"
+                  else store.reclaim(*who, args[0], reason) if op == "reclaim"
+                  else store.transition(*who, op, args[0]))
     else:
         provider, session = args[:2]
         file = store.route(provider, session)

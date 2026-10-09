@@ -963,7 +963,7 @@ def shell_runs_planning_helper(tool_input: object, plan_dir: Path | None = None)
     return maintains
 
 
-ROUTING_VERBS = {"bind", "release", "clarify", "discuss", "handoff"}
+ROUTING_VERBS = {"bind", "reclaim", "release", "clarify", "discuss", "handoff"}
 # PWF_SESSION_ID would rewrite another session's lease and a foreign
 # PWF_PROJECT_ROOT would route a different project, so the routing command
 # carries at most the one assignment the gate's own message prescribes.
@@ -1033,8 +1033,10 @@ def _segment_routing_verb(segment: Segment, bind_tool: Path, project_root: Path,
         return None
     if os.path.realpath(script) != str(bind_tool):
         return None
-    if len(operands) == 4 and operands[0] == "bind" and operands[2] == "--reason" and operands[3].strip():
+    if len(operands) == 4 and operands[0] in {"bind", "reclaim"} and operands[2] == "--reason" and operands[3].strip():
         operands = operands[:2]
+    elif operands[:1] == ["reclaim"]:
+        return None  # Reclaim always carries the user's authorization.
     if len(operands) != 2 or operands[0] not in ROUTING_VERBS or operands[1] != task_id:
         return None
     return operands[0]
