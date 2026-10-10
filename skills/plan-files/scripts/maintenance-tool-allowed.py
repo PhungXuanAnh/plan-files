@@ -181,7 +181,7 @@ TASK_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 TEXT_PLAN_PATH_RE = re.compile(
     r"(?P<path>(?:[A-Za-z]:)?[^\s\"'`<>|]*?tmp[\\/]+plan(?:-with)?-files[\\/]"
     r"[A-Za-z0-9._-]+[\\/]+[^\s\"'`<>|]*?\.md)"
-    r"(?=$|[\s\"'`<>|)\]},;:])"
+    r"(?=$|[\s\"'`<>|)\]},;:]|[.!?](?:\s|$))"
 )
 
 
@@ -963,7 +963,7 @@ def shell_runs_planning_helper(tool_input: object, plan_dir: Path | None = None)
     return maintains
 
 
-ROUTING_VERBS = {"bind", "reclaim", "release", "clarify", "discuss", "handoff"}
+ROUTING_VERBS = {"bind", "reclaim", "release", "clarify", "discuss", "handoff", "tools", "ack-rejected"}
 # PWF_SESSION_ID would rewrite another session's lease and a foreign
 # PWF_PROJECT_ROOT would route a different project, so the routing command
 # carries at most the one assignment the gate's own message prescribes.
@@ -981,11 +981,29 @@ def _routing_words(segment: Segment) -> list[str] | None:
     """
     if segment.substitutions:
         return None
-    probe = segment.text
-    for token in DISCARD_REDIRECTS:
-        probe = probe.replace(token, " ")
-    if ">" in probe or "<" in probe:
-        return None
+    # Quoted commands passed to receipt diagnosis are data, including their
+    # redirects. Reject only shell redirects outside quotes; never rewrite the
+    # command being matched against the recorded input hash.
+    parts, quote, index = [], None, 0
+    while index < len(segment.text):
+        char = segment.text[index]
+        if char == "\\" and quote != "'" and index + 1 < len(segment.text):
+            parts.append(segment.text[index:index + 2])
+            index += 2
+            continue
+        if char in "\"'":
+            quote = None if quote == char else char if quote is None else quote
+        if quote is None:
+            discard = next((token for token in DISCARD_REDIRECTS if segment.text.startswith(token, index)), "")
+            if discard:
+                parts.append(" ")
+                index += len(discard)
+                continue
+            if char in "<>":
+                return None
+        parts.append(char)
+        index += 1
+    probe = "".join(parts)
     try:
         return shlex.split(probe)
     except ValueError:
@@ -1033,6 +1051,13 @@ def _segment_routing_verb(segment: Segment, bind_tool: Path, project_root: Path,
         return None
     if os.path.realpath(script) != str(bind_tool):
         return None
+    if operands[:1] in (["tools"], ["ack-rejected"]):
+        flags = operands[2:]
+        required = {"--command"} if operands[0] == "tools" else {"--command", "--receipt", "--generation", "--reason"}
+        if (len(flags) != 2 * len(required) or set(flags[::2]) != required
+                or not all(value.strip() for value in flags[1::2])):
+            return None
+        operands = operands[:2]
     if len(operands) == 4 and operands[0] in {"bind", "reclaim"} and operands[2] == "--reason" and operands[3].strip():
         operands = operands[:2]
     elif operands[:1] == ["reclaim"]:

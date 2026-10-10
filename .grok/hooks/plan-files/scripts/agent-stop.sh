@@ -8,8 +8,12 @@ INPUT=$(cat)
 printf '%s' "$INPUT" | grok_input_has_verified_session || { printf '{}'; exit 0; }
 REASON=$(printf '%s' "$INPUT" | grok_input_string reason reason 2>/dev/null || true)
 
-# Grok also emits observe-only Stop events while closing a session. Do not let
-# those mutate finish/no-progress state; only a genuine turn end is gateable.
+# Shutdown is observe-only: release authority through the shared lifecycle core.
+if [ "$REASON" = "shutdown" ] || [ "$REASON" = "channel_closed" ]; then
+    printf '%s' "$INPUT" | bash "$GROK_REPO_ROOT/skills/plan-files/scripts/hook-session-end.sh" grok
+    exit 0
+fi
+# Only a genuine turn end is gateable.
 if [ "$REASON" != "end_turn" ]; then
     printf '{}'
     exit 0

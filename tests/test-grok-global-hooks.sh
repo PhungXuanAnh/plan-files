@@ -204,12 +204,13 @@ post_patch grok-new "$NEW_PATCH" >/dev/null
 assert_eq "$(state resolve grok grok-new)" "$PROJECT/tmp/plan-files/$NEW_TASK" "PostToolUse auto-claims new plan"
 
 # Stop gates genuine end_turn only, keeps pending recovery self-contained,
-# allows a complete plan, and does nothing on shutdown/channel-close.
+# allows a complete plan, and releases execution on shutdown/channel-close.
 INCOMPLETE_STOP=$(stop_hook grok-a end_turn false)
 assert_eq "$(printf '%s' "$INCOMPLETE_STOP" | json_value '["decision"]')" block "incomplete end_turn is blocked"
 assert_contains "$INCOMPLETE_STOP" 'Task incomplete' "incomplete Stop explains continuation"
-assert_eq "$(stop_hook grok-a shutdown true)" '{}' "shutdown Stop is a no-op"
-assert_eq "$(state resolve grok grok-a)" "$PROJECT/tmp/plan-files/task-a" "shutdown preserves lease"
+assert_eq "$(stop_hook grok-a shutdown true)" '{}' "shutdown releases execution"
+assert_empty "$(state resolve grok grok-a)" "shutdown drops exclusive authority"
+assert_eq "$(state pending grok grok-a)" task-a "shutdown preserves resume association"
 printf 'task-a\n' > "$PROJECT/.plan-files"
 state pending grok grok-pending task-a >/dev/null
 assert_eq "$(stop_hook grok-pending end_turn false)" '{}' "text-only pending Stop may yield"

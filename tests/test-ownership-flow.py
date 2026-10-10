@@ -448,7 +448,6 @@ P1.1
                 command = self.action(provider, "clarify")
                 self.assertNotIn(self.hook(provider, "pre-tool-use.sh", command).get("decision"), {"block", "deny"})
                 self.run_command(["bash", "-c", command], provider)
-                self.assertEqual(self.hook(provider, "agent-stop.sh"), {})
                 self.assertEqual((self.project / ".plan-files").read_text().strip(), "task-a")
                 self.assertEqual(self.state(provider, "resolve", provider, "fixture", check=False), "")
                 for tool in ("AskUserQuestion", "ask_user_question", "request_user_input_async",
@@ -457,6 +456,8 @@ P1.1
                 for cmd in ("git status --short", "touch generated", command + "; touch generated"):
                     self.assertIn(self.hook(provider, "pre-tool-use.sh", cmd)["decision"], {"block", "deny"})
                 self.assertEqual(self.state(provider, "claim", provider, "fixture", "task-a", check=False), "")
+                self.assertEqual(self.hook(provider, "agent-stop.sh"), {})
+                self.assertEqual(self.state(provider, "route-status", provider, "fixture"), "idle")
                 # An async answer can explicitly bind, without claiming a different task.
                 self.run_command(["bash", "-c", self.action(provider, "bind")], provider)
                 self.assertEqual(self.state(provider, "resolve", provider, "fixture"), str(self.plan))
@@ -486,11 +487,11 @@ P1.1
                 self.assertIn(command, self.hook(provider, "pre-tool-use.sh", "touch outside")["reason"])
                 self.assertNotIn(self.hook(provider, "pre-tool-use.sh", command).get("decision"), {"block", "deny"})
                 self.run_command(["bash", "-c", command], provider)
-                self.assertEqual(self.hook(provider, "agent-stop.sh"), {})
                 self.assertEqual(self.hook(provider, "post-tool-use.sh"), {})
                 self.assertIn("[ ] [P1.1]", self.tasks.read_text())
                 self.assertNotIn(self.hook(provider, "pre-tool-use.sh").get("decision"), {"block", "deny"})
                 self.assertIn(self.hook(provider, "pre-tool-use.sh", "touch outside")["decision"], {"block", "deny"})
+                self.assertEqual(self.hook(provider, "agent-stop.sh"), {})
                 self.hook(provider, "user-prompt-submit.sh")
                 self.assertEqual(self.state(provider, "pending-candidate", provider, "fixture"), "task-a")
 
@@ -504,9 +505,9 @@ P1.1
         for provider in ADAPTERS:
             with self.subTest(provider=provider):
                 self.state(provider, "claim", provider, "fixture", "task-a")
-                self.assertEqual(self.hook(provider, "agent-stop.sh"), {})
                 self.assertNotIn(self.hook(provider, "pre-tool-use.sh").get("decision"), {"block", "deny"})
                 self.assertIn(self.hook(provider, "pre-tool-use.sh", "touch outside")["decision"], {"block", "deny"})
+                self.assertEqual(self.hook(provider, "agent-stop.sh"), {})
 
     def test_research_implementation_discussion_resume(self):
         provider = "grok"
@@ -525,6 +526,7 @@ P1.1
         (self.plan / "decisions.md").write_text("## Active Decisions\n- User authorized implementation after lead answers.\n")
         self.tasks.write_text(original.replace("Research and implementation proposal", "Implemented branded links")
                               .replace("implementation until user authorization", "unrelated features"))
+        self.run_command(["python3", str(SCRIPTS / "plan_state.py"), "overview", str(self.tasks)], provider)
         self.assertNotIn(self.hook(provider, "pre-tool-use.sh", "touch implementation").get("decision"), {"block", "deny"})
         # Turn 3: workflow question with an oversized handoff; no implementation.
         (self.plan / "handoff.md").write_text("old handoff\n" * 62)

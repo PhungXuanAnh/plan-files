@@ -35,6 +35,20 @@
         "bash": "/home/xuananh/repo/plan-files/.github/hooks/scripts/error-occurred.sh",
         "timeout": 5
       }
+    ],
+    "SessionEnd": [
+      {
+        "type": "command",
+        "bash": "/home/xuananh/repo/plan-files/.github/hooks/scripts/session-end.sh",
+        "timeout": 3
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "type": "command",
+        "bash": "/home/xuananh/repo/plan-files/.github/hooks/scripts/post-tool-use.sh",
+        "timeout": 5
+      }
     ]
   }
 }

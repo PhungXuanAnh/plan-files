@@ -23,6 +23,8 @@ fi
 
 PROMPT_CANDIDATE=$(printf '%s' "$INPUT" \
     | python3 "$TARGET_TOOL" prompt-plan-id "$PWD" 2>/dev/null || true)
+export PWF_TURN_ID
+PWF_TURN_ID=$(printf '%s' "$INPUT" | python3 -c 'import hashlib,json,sys; p=json.load(sys.stdin); t=p.get("turn_id") or p.get("turnId"); print(hashlib.sha256(str(t).encode()).hexdigest() if t else "")')
 CANDIDATE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" pending \
     "$ADAPTER_ID" "$SESSION_ID" "$PROMPT_CANDIDATE" 2>/dev/null || true)
 if [ -z "$CANDIDATE" ]; then

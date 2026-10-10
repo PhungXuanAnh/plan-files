@@ -15,6 +15,9 @@ fail() {
 }
 
 mkdir -p "$PROJECT"
+# An existing global hook at the same event must survive installing SessionEnd.
+printf '%s\n' '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo unrelated"}]}]}}' > "$TMP_DIR/shared.json"
+ln -s "$TMP_DIR/shared.json" "$DEST"
 
 python3 "$REPO_ROOT/scripts/install-codex-hooks.py" "$SOURCE" "$DEST"
 python3 "$REPO_ROOT/scripts/install-codex-hooks.py" "$SOURCE" "$DEST"
@@ -29,8 +32,11 @@ with open(sys.argv[1], encoding="utf-8") as handle:
     hooks = json.load(handle)["hooks"]
 repo_root = sys.argv[2]
 
-for event in ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"):
-    command = hooks[event][0]["hooks"][0]["command"]
+assert __import__('pathlib').Path(sys.argv[1]).is_symlink()
+assert hooks['Stop'][0]['hooks'][0]['command'] == 'echo unrelated'
+assert len(hooks['Stop']) == 2
+for event in ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"):
+    command = next(h['command'] for group in hooks[event] for h in group['hooks'] if 'plan-files/scripts/' in h['command'])
     assert repo_root in command, command
     assert "skills/plan-files/scripts/resolve-project-root.sh" in command, command
 

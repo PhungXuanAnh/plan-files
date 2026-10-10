@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+from hook_install import merge_event_groups
+
 
 def normalize_global_commands(hooks: dict, source: Path) -> None:
     """Convert repo-local hook commands into global commands.
@@ -23,6 +25,7 @@ def normalize_global_commands(hooks: dict, source: Path) -> None:
         "PostToolUse": "post-tool-use.sh",
         "Stop": "agent-stop.sh",
         "PreToolUse": "pre-tool-use.sh",
+        "SessionEnd": "session-end.sh",
     }
     for event, script in scripts.items():
         groups = hooks.get(event)
@@ -46,17 +49,18 @@ def main() -> int:
     source, dest = map(Path, sys.argv[1:])
     with source.open() as fh:
         incoming = json.load(fh)
-    if dest.exists() and not dest.is_symlink():
+    if dest.is_symlink() and dest.resolve() != source.resolve():
+        dest = dest.resolve()  # Preserve user-managed configuration links.
+    if dest.exists():
         with dest.open() as fh:
             current = json.load(fh)
     else:
         current = {"hooks": {}}
 
+    normalize_global_commands(incoming.get("hooks", {}), source)
     hooks = current.setdefault("hooks", {})
     for event, value in incoming.get("hooks", {}).items():
-        hooks[event] = value
-
-    normalize_global_commands(hooks, source)
+        hooks[event] = merge_event_groups(hooks.get(event), value, event, source)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".tmp")

@@ -372,7 +372,7 @@ def _parser() -> argparse.ArgumentParser:
         help="finish the caller's complete lease; compatibility name, workspace marker is preserved",
     )
     pointer_parser.add_argument("--project-root", type=Path, help="workspace root that owns .plan-files")
-    park_parser = subparsers.add_parser("park", help="finalize an intentional pause while retaining this session reservation")
+    park_parser = subparsers.add_parser("park", help="record an intentional pause; valid Stop yields execution and retains the resume association")
     park_parser.add_argument("--reason", required=True, help="why the settled blocked/deferred task should remain discoverable")
     park_parser.add_argument("--project-root", type=Path, help="workspace root that owns .plan-files")
     return parser

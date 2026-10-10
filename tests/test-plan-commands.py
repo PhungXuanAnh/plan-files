@@ -263,6 +263,7 @@ Phase 1
         for iteration in range(20):
             with self.subTest(iteration=iteration):
                 self.tasks.write_bytes(saved)
+                self.call("plan_state.py", "overview")
                 self.checkpoint_race("progress" if iteration % 2 == 0 else "edit")
 
     def checkpoint_race(self, second_operation):
@@ -607,6 +608,7 @@ Phase 1
             self.assertEqual(target.read_bytes(), before)
 
         findings.write_text(findings.read_text() + "\n## Phase 5 Evidence\n- Duplicate legacy heading.\n")
+        self.call("plan_state.py", "overview")
         before = findings.read_bytes()
         failed = self.edit("section-replace", "--file", "findings.md", "--heading", "Phase 5 Evidence",
                            "--content", "replacement", fingerprint=hashlib.sha256(before).hexdigest(), check=False)

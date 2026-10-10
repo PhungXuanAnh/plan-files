@@ -10,6 +10,10 @@
 set -u
 set -o pipefail 2>/dev/null || true
 
+if [ "${PWF_LIFECYCLE_EVENT:-}" != "stop" ]; then
+    exec python3 "$(dirname -- "${BASH_SOURCE[0]}")/hook_lifecycle.py" stop "$@"
+fi
+
 # shellcheck source=hook-common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/hook-common.sh"
 
@@ -54,6 +58,16 @@ SESSION_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" session-id 2>/dev/null || true
 [ -n "$SESSION_ID" ] || { printf '{}'; exit 0; }
 export PWF_SESSION_ADAPTER="$PROVIDER" PWF_SESSION_ID="$SESSION_ID"
 LEASE_GENERATION=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" generation "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+export PWF_TURN_ID
+PWF_TURN_ID=$(printf '%s' "$INPUT" | python3 -c 'import hashlib,json,sys; p=json.load(sys.stdin); t=p.get("turn_id") or p.get("turnId"); print(hashlib.sha256(str(t).encode()).hexdigest() if t else "")')
+PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" event-current "$PROVIDER" "$SESSION_ID" || { printf '{}'; exit 0; }
+yield_execution() {
+    local error
+    if ! error=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" yield "$PROVIDER" "$SESSION_ID" "$LEASE_GENERATION" 2>&1); then
+        render_stop_block "[plan-files] $error"
+        exit 0
+    fi
+}
 if ! HEALTH=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" health "$PROVIDER" "$SESSION_ID" 2>&1); then
     render_stop_block "[plan-files] Invalid session ownership: $HEALTH. Diagnose the state; an owning session can explicitly handoff a duplicate legacy reservation."
     exit 0
@@ -61,6 +75,7 @@ fi
 # Explicit ambiguity is allowed to wait without clearing the candidate or plan.
 ROUTE_STATUS=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
 if [ "$ROUTE_STATUS" = "waiting" ] || [ "$ROUTE_STATUS" = "discussing" ]; then
+    yield_execution
     printf '{}'; exit 0
 fi
 PLAN_DIR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" resolve "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
@@ -84,6 +99,7 @@ if [ -z "$PLAN_DIR" ]; then
         render_stop_block "$REASON"
         exit 0
     fi
+    yield_execution
     printf '{}'
     exit 0
 fi
@@ -196,8 +212,7 @@ if [ -n "$INTEGRITY_WARN" ]; then
 fi
 
 if [ $((COMPLETE + BLOCKED + DEFERRED)) -ge "$TOTAL" ]; then
-    # Finish only this generation of a fully complete lease. The core rechecks
-    # under the routing lock; paused tasks keep their reservation for resumption.
+    # Both relinquish execution; paused tasks retain their resume association.
     if [ "$BLOCKED" -eq 0 ] && [ "$DEFERRED" -eq 0 ] && [ "$TOTAL" -gt 0 ]; then
         if ! FINALIZE_ERROR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" finish "$PROVIDER" "$SESSION_ID" "$(basename "$PLAN_DIR")" "$LEASE_GENERATION" 2>&1); then
             render_stop_block "[plan-files] $FINALIZE_ERROR"
@@ -205,7 +220,8 @@ if [ $((COMPLETE + BLOCKED + DEFERRED)) -ge "$TOTAL" ]; then
         fi
         log "decision: ALL COMPLETE ($COMPLETE/$TOTAL) -> lease finished, pointer untouched, allow stop"
     else
-        log "decision: ALL SETTLED with blocked=$BLOCKED deferred=$DEFERRED -> lease retained for resume, allow stop"
+        yield_execution
+        log "decision: ALL SETTLED with blocked=$BLOCKED deferred=$DEFERRED -> execution yielded, association retained, allow stop"
     fi
     log "stop continuation=false output_chars=2"
     echo '{}'
@@ -216,6 +232,7 @@ fi
 # The agent is reviewing / discussing the plan with the user, not implementing.
 # Allow stop — do not demand continuation.
 if [ "$COMPLETE" -eq 0 ] && [ "$IN_PROGRESS" -eq 0 ] && [ "$BLOCKED" -eq 0 ] && [ "$DEFERRED" -eq 0 ]; then
+    yield_execution
     log "decision: PLANNING MODE (all phases pending) -> emitting {} (allow stop)"
     log "stop continuation=false output_chars=2"
     echo '{}'
@@ -231,6 +248,7 @@ fi
 # phase (see SKILL.md FORMAT CONTRACT). When Current Phase is truly empty,
 # we treat the session as still in discussion mode and allow stop.
 if [ -z "${PHASE_NUM:-}" ] && [ "$COMPLETE" -eq 0 ] && [ "$BLOCKED" -eq 0 ] && [ "$DEFERRED" -eq 0 ]; then
+    yield_execution
     log "decision: DISCUSSION MODE (Current Phase empty, no settled phase) -> emitting {} (allow stop)"
     log "stop continuation=false output_chars=2"
     echo '{}'

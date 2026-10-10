@@ -54,6 +54,39 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(bash \"$HOME/.claude/hooks/plan-files/scripts/resolve-project-root.sh\")\" && cd \"$ROOT\" && bash \"$HOME/.claude/hooks/plan-files/scripts/session-end.sh\"",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(bash \"$HOME/.claude/hooks/plan-files/scripts/resolve-project-root.sh\")\" && cd \"$ROOT\" && bash \"$HOME/.claude/hooks/plan-files/scripts/post-tool-use.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(bash \"$HOME/.claude/hooks/plan-files/scripts/resolve-project-root.sh\")\" && cd \"$ROOT\" && bash \"$HOME/.claude/hooks/plan-files/scripts/post-tool-use.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }

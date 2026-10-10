@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+
+# The Python core surrounds this policy with correlated tool lifecycle checks.
+if [ "${PWF_LIFECYCLE_EVENT:-}" != "pre" ]; then
+    exec python3 "$(dirname -- "${BASH_SOURCE[0]}")/hook_lifecycle.py" pre "$@"
+fi
+unset PWF_LIFECYCLE_EVENT
 # Shared PreToolUse ownership, restore-readiness, and maintenance gate.
 
 set -u
@@ -318,7 +324,8 @@ if [ -z "$PLAN_DIR" ]; then
             routing-skill-read "$SKILL_DOC" "$BIND_TOOL" "$PWD" "$CANDIDATE"; then
         PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" skill-loaded "$PROVIDER" "$SESSION_ID" mark 2>/dev/null || true
     fi
-    if [ "$ROUTING_VERB" = "clarify" ] || [ "$ROUTING_VERB" = "discuss" ]; then
+    if [ "$ROUTING_VERB" = "clarify" ] || [ "$ROUTING_VERB" = "discuss" ] \
+        || [ "$ROUTING_VERB" = "tools" ] || [ "$ROUTING_VERB" = "ack-rejected" ]; then
         log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-routing-$ROUTING_VERB tool=$TOOL_NAME"
         printf '{}'; exit 0
     fi
@@ -365,7 +372,8 @@ BACKGROUND_WARN=$(printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-a
 printf -v plan_arg '%q' "$(planning_plan_file "$PLAN_DIR")"
 printf -v state_arg '%q' "$PLAN_STATE_TOOL"
 MAINTENANCE_ACTION="Run: python3 $state_arg budgets $plan_arg. Then archive/consolidate completed material in the owned plan; preserve unfinished work."
-if [ "$OWNED_ROUTING" = "discuss" ] || [ "$OWNED_ROUTING" = "handoff" ]; then
+if [ "$OWNED_ROUTING" = "discuss" ] || [ "$OWNED_ROUTING" = "handoff" ] \
+    || [ "$OWNED_ROUTING" = "tools" ] || [ "$OWNED_ROUTING" = "ack-rejected" ]; then
     log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=allow-routing-discuss tool=$TOOL_NAME"
     printf '{}'; exit 0
 fi

@@ -6,7 +6,7 @@ Resolve all script paths relative to `SKILL.md`.
 
 ## Resolving the plan
 
-`plan_state.py`, `plan_edit.py`, and `plan_checkpoint.py` accept an optional plan path (`--plan` on editor/checkpoint, positional on reader). Omitted paths resolve only the current provider/session’s owned task through `.sessions/`; `.plan-files` is never a task default. The result reports the chosen `plan`. Missing or ambiguous identity and unbound sessions fail explicitly. Use a known path for reads after finalization or offline work. Explicit paths do not bypass a foreign reservation: checkpoint/editor mutations share routing and plan locks and revalidate ownership after waiting. Offline mutation without identity is allowed only for an unowned plan. `plan_state.py section decisions.md HEADING` resolves inside the owned task. `make plan-overview` and `make injected-content` use the same resolver, or accept `PLAN=<plan.md>`.
+`plan_state.py`, `plan_edit.py`, and `plan_checkpoint.py` accept an optional plan path (`--plan` on editor/checkpoint, positional on reader). Omitted paths resolve only the current provider/session’s executing or discussing task through `.sessions/`; `.plan-files` is never a task default. The result reports the chosen `plan`. Missing or ambiguous identity and unbound sessions fail explicitly. Use a known path for reads after finalization or offline work. Explicit paths do not bypass a foreign reservation: checkpoint/editor mutations share routing and plan locks and revalidate ownership after waiting. Offline mutation without identity is allowed only for an unowned plan. `plan_state.py section decisions.md HEADING` resolves inside the owned task. `make plan-overview` and `make injected-content` use the same resolver, or accept `PLAN=<plan.md>`.
 
 ## Filename compatibility
 
@@ -95,7 +95,7 @@ Direct removal is intentionally narrow: an item must be unchecked, non-active, a
 
 ## Pausing
 
-After `pause` settles every phase, `plan_checkpoint.py park --reason "user will resume after review"` permits finalization while retaining this session’s task reservation. At least one phase must be blocked/deferred; actionable or entirely complete plans cannot park. The reason is stored as `- **Parked:** ...` in Resume Checkpoint. `resume`, `reopen`, and checkpoint `start` clear it before execution, and it cannot exempt actionable work from finalization. Park before writing a handoff, because parking changes `plan.md`. Other sessions and the workspace marker remain unchanged.
+After `pause` settles every phase, `plan_checkpoint.py park --reason "user will resume after review"` permits finalization while retaining this session’s resume association after valid Stop releases execution. At least one phase must be blocked/deferred; actionable or entirely complete plans cannot park. The reason is stored as `- **Parked:** ...` in Resume Checkpoint. `resume`, `reopen`, and checkpoint `start` clear it before execution, and it cannot exempt actionable work from finalization. Park before writing a handoff, because parking changes `plan.md`. Other sessions and the workspace marker remain unchanged.
 
 When the user postpones work, one call settles the phase and stages its handoff:
 
@@ -145,7 +145,7 @@ Common targets:
 | `history.md` | Completed Phases, Verification History, Resolved Errors |
 | `handoff.md` | whole overwrite-only resume snapshot |
 
-Keep using `plan_checkpoint.py` for `start`, `progress`, and `complete`. Do not emulate execution transitions with generic section edits. `plan_checkpoint.py deactivate-pointer --project-root <root>` is the compatibility finalizer for work completed without `--deactivate-pointer`. It retains `operation`, `pointer`, and `cleared` fields, now returning `cleared: false` and `reason: "session_scoped"`: the root marker is always preserved. The CLI finishes only the caller’s fully complete lease, with generation and completion rechecked under the routing lock. Repeated calls with an explicit path are safe. Blocked/deferred work retains ownership; use `park` for a pause or explicit `handoff` for another session. `POINTER_ACTIVE` is no longer a finalizability issue.
+Keep using `plan_checkpoint.py` for `start`, `progress`, and `complete`. Do not emulate execution transitions with generic section edits. `plan_checkpoint.py deactivate-pointer --project-root <root>` is the compatibility finalizer for work completed without `--deactivate-pointer`. It retains `operation`, `pointer`, and `cleared` fields, now returning `cleared: false` and `reason: "session_scoped"`: the root marker is always preserved. The CLI finishes only the caller’s fully complete lease, with generation and completion rechecked under the routing lock. Repeated calls with an explicit path are safe. Blocked/deferred work yields execution at valid Stop; use `park` to record the pause or explicit `handoff` to transfer before Stop. `POINTER_ACTIVE` is no longer a finalizability issue.
 
 After the session’s lease finishes, omitted-path commands no longer resolve its plan. Keep its known path for subsequent reads and `python3 <skill-dir>/scripts/plan_checkpoint.py --plan <plan.md> assert-finalizable --project-root <root>`.
 
@@ -202,6 +202,8 @@ python3 <skill-dir>/scripts/plan_edit.py --plan <plan.md> --expected-fingerprint
 Archive command JSON adds `transaction_id` on committed writes (`null` for dry runs). This is additive to the existing fingerprints/context/budgets response. `.plan-edit-transaction.json` is private internal schema version 1; its optional `source_file` selects tasks or decisions (older journals default to tasks). Callers must not edit it or depend on its fields.
 
 ## Limits and recovery
+
+The bind adapter's `tools TASK --command ...` diagnostic returns schema 1: `matches` (at most 16 receipt/generation pairs), total `match_count`, `command_sha256`, and recovery instructions. It reads only this session's pending receipts. `ack-rejected` requires the same command and one inspected receipt/generation plus a reason asserting a received native pre-execution denial; it returns `acknowledged_rejection`, `remaining_tools`, and `authority_changed: false`. This explicit recovery is not automatic host evidence. Both work before binding without granting execution. See [rejected-call recovery](routing-and-hooks.md#rejected-call-recovery) for the required evidence and exclusions.
 
 The maintenance ceilings are 300 lines, 24 KiB, 12 hot phase headings, about 100 visible items, and at most 15 items or 4 KiB in Current Phase. Crossing a ceiling is not malformed state: reads and plan-local repair remain allowed, while unrelated mutation waits for compaction or task splitting.
 

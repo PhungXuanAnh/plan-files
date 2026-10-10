@@ -9,6 +9,7 @@ help: ## Show this help
 
 test: ## Run planning contract tests
 	@python3 tests/test-session-state.py
+	@python3 tests/test-turn-lifecycle.py
 	@python3 tests/test-plan-commands.py
 	@python3 tests/test-ownership-flow.py
 	@bash tests/test-planning-contract.sh

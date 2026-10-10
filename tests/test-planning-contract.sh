@@ -852,6 +852,8 @@ CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_R
 assert_eq "$CODEX_OUTPUT" "{}" "Codex repeated Stop allows blocked/deferred phases"
 
 write_valid_plan
+PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" pending codex codex-contract >/dev/null
+PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" bind test-task >/dev/null
 sed -i 's/in_progress/blocked (external dependency unavailable)/' "$PLAN_DIR/tasks.md"
 sed -i '/^## Active Item$/{n;/^P1\.1$/d;}' "$PLAN_DIR/tasks.md"
 CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_REPEAT_PAYLOAD" | "$REPO_ROOT/.codex/hooks/plan-files/scripts/agent-stop.sh")
@@ -872,6 +874,8 @@ CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_PAYLOAD" | "$REPO_ROOT/.co
 assert_eq "$CODEX_OUTPUT" "{}" "Codex discussion mode"
 
 write_valid_plan
+PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" pending codex codex-contract >/dev/null
+PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" bind test-task >/dev/null
 sed -i 's/^- \[ \] \[P1\.1\]/- [x] [P1.1]/; s/in_progress/complete/; s/Evidence: pending/Evidence: fixture checked/' "$PLAN_DIR/tasks.md"
 sed -i '/^## Active Item$/{n;/^P1\.1$/d;}' "$PLAN_DIR/tasks.md"
 CODEX_OUTPUT=$(cd "$PROJECT" && printf '%s\n' "$CODEX_PAYLOAD" | "$REPO_ROOT/.codex/hooks/plan-files/scripts/agent-stop.sh")
@@ -993,6 +997,7 @@ assert_contains "$(cd "$PROJECT" && python3 "$EDIT_TOOL" --expected-fingerprint 
 # The reopen gate must not trap a plan that really is finished: its only
 # remaining action is session finalization, which preserves the workspace marker.
 write_settled_plan
+python3 "$REPO_ROOT/skills/plan-files/scripts/plan_state.py" overview "$PLAN_DIR/tasks.md" >/dev/null
 printf 'test-task\n' > "$PROJECT/.plan-files"
 POINTER_CMD="python3 $CHECKPOINT_TOOL --plan $PLAN_DIR/tasks.md deactivate-pointer --project-root $PROJECT"
 assert_eq "$(pre_hook codex codex-contract "$POINTER_CMD")" "{}" "reopen gate permits session finalization on a finished plan"

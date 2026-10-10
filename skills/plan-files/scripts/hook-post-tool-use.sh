@@ -1,4 +1,10 @@
 #!/bin/bash
+
+# The Python core surrounds this policy with correlated tool lifecycle checks.
+if [ "${PWF_LIFECYCLE_EVENT:-}" != "post" ]; then
+    exec python3 "$(dirname -- "${BASH_SOURCE[0]}")/hook_lifecycle.py" post "$@"
+fi
+unset PWF_LIFECYCLE_EVENT
 # plan-files: Canonical PostToolUse hook core.
 # Runs AFTER every tool call. Injects bounded current context plus semantic-risk
 # checkpoint, restore-readiness, and maintenance guidance.

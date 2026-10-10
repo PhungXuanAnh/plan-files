@@ -1,6 +1,6 @@
 # Plan: [Brief Description]
 <!-- Private runtime file. Session hooks add local Git excludes when the project root has a .git directory. -->
-<!-- One task has one session owner; bind/reserve via .sessions/. Do not select it by rewriting .plan-files. -->
+<!-- One task has one executor; idle resume associations do not reserve it. Bind/restore via .sessions/. Do not select it by rewriting .plan-files. -->
 <!-- New plans use plan.md; existing tasks.md plans retain the same format and behavior. -->
 <!-- Trusted hot state. Keep at most 300 lines, 24 KiB, 12 hot phase headings, ~100 visible items, and 15 items/4 KiB in Current Phase. -->
 
@@ -47,6 +47,8 @@ Use `blocked (reason)` only for a genuine external dependency and `deferred (rea
 Pending phases participate in automatic continuation. Add postponed work with phase-add --status deferred --reason; resume existing blocked/deferred work with resume N --decision.
 Use P IDs for work and V IDs for phase acceptance. IDs are unique and match the containing phase number.
 Use targeted plan operations for routine reads/edits. Phase add/compaction archives and evicts the oldest eligible complete phase when the 12-heading hot window needs room; never remove unfinished work to make space.
+
+If a tool is rejected, retain its actual error evidence. An unresolved receipt does not prove execution; follow native reconciliation or the documented single-call acknowledgement for a confirmed pre-execution denial. Running, timed-out and unknown calls require collection/investigation. Never edit private session files.
 -->
 
 <!-- Begin with one useful phase. Replace these outcomes with task-specific ones; add phases only for real work boundaries. Do not create separate items merely to narrate planning activity. -->

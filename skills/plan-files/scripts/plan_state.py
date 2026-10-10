@@ -1247,7 +1247,16 @@ def main(argv: Iterable[str] | None = None) -> int:
             print(budget_warning(args.plan), end="")
             return 0
         if args.command in {"overview", "resume-pack"}:
+            from session_state import identity, store_for_plan
+            store = store_for_plan(args.plan)
+            owned_location = (store.plans / args.plan.parent.name).resolve() == args.plan.parent.resolve()
+            before = store.snapshot(args.plan.parent.name) if owned_location else ""
             payload = overview_payload(args.plan, args.max_chars, args.total_max_chars)
+            who = identity()
+            if who and before and store.accepts_state():
+                with store.lock():
+                    if before == store.snapshot(args.plan.parent.name):
+                        store.remember_read(store.route(*who), args.plan.parent.name)
             print(_overview_dump(payload))
             return 0
         if args.command == "phase":

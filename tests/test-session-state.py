@@ -223,11 +223,12 @@ Phase 1
                 import re
                 content = re.sub(r"- \*\*Status:\*\* .*", f"- **Status:** {status}", content)
                 tasks.write_text(content)
-                self.store.claim(provider, "lifecycle", task)
+                self.store.bind(provider, "lifecycle", task)
                 output = self.hook(provider, "lifecycle", "agent-stop.sh", task=task)
                 self.assertEqual(output, {}, (provider, status, output))
                 row = self.store.read(self.store.route(provider, "lifecycle"))
-                self.assertEqual(row["status"], "inactive" if status == "complete" else "owned")
+                self.assertEqual(row["status"], "inactive" if status == "complete" else "idle")
+                self.assertEqual(self.store.owners(task), [])
             self.assertEqual((self.root / ".plan-files").read_text(), "task-a\n")
 
     def test_obsolete_paths_are_ignored_and_current_state_remains_authoritative(self):

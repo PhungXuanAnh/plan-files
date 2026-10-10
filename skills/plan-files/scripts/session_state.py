@@ -26,7 +26,7 @@ from feedback_transport import feedback_path, valid_file
 from plan_paths import PLAN_FILENAMES, conflicting_plan_files, resolve_plan_file
 
 SCRIPTS = Path(__file__).resolve().parent
-STATUSES = {"pending", "owned", "creating", "waiting", "discussing", "inactive", "disabled"}
+STATUSES = {"pending", "owned", "creating", "waiting", "discussing", "idle", "inactive", "disabled"}
 TASK_RE = re.compile(r"[A-Za-z0-9._-]+\Z")
 PROVIDER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 SESSION_RE = re.compile(r"[A-Za-z0-9._:-]{1,240}\Z")
@@ -125,15 +125,17 @@ class SessionStore:
             if not separator or key in row:
                 raise SessionError("invalid session state; diagnose the session before writing")
             row[key] = value
-        if row.get("status") not in STATUSES or row.get("schema", "1") not in {"1", "2"}:
+        if row.get("status") not in STATUSES or row.get("schema", "1") not in {"1", "2", "3"}:
             raise SessionError("invalid or unsupported session state")
         if row.get("generation") and not re.fullmatch(r"[0-9a-f]{32}", row["generation"]):
             raise SessionError("invalid session generation")
-        for key in ("task", "candidate", "last_task"):
+        for key in ("task", "candidate", "last_task", "associated"):
             if row.get(key) and not valid_task(row[key]):
                 raise SessionError("invalid task in session state")
-        if row["status"] in {"owned", "discussing", "creating"} and not row.get("task"):
+        if row["status"] in {"owned", "creating"} and not row.get("task"):
             raise SessionError("session state is missing its owned task")
+        if row["status"] in {"discussing", "idle"} and not (row.get("task") or row.get("associated")):
+            raise SessionError("session state is missing its associated task")
         return row
 
     @contextmanager
@@ -168,7 +170,8 @@ class SessionStore:
 
     def write(self, file: Path, status: str, **fields: str) -> None:
         self.excludes()
-        row = {"schema": "2", "status": status, "generation": uuid.uuid4().hex,
+        row = {"schema": "3", "status": status, "generation": uuid.uuid4().hex,
+               "updated": str(time.time()),
                **{key: value for key, value in fields.items() if value}}
         atomic_text(file, "".join(f"{key}={value}\n" for key, value in row.items()))
         feedback = feedback_path(str(file))
@@ -188,6 +191,54 @@ class SessionStore:
     def owners(self, task: str) -> list[Path]:
         return [file for file in self.sessions.glob("*/*.state")
                 if self.read(file).get("task") == task]
+
+    def tools(self, file: Path) -> dict:
+        path = file.with_suffix(".tools")
+        try:
+            value = json.loads(path.read_text()) if path.exists() else {}
+        except (OSError, ValueError) as error:
+            raise SessionError("invalid tool receipts; diagnose outstanding writers before recovery") from error
+        if not isinstance(value, dict) or any(not isinstance(item, (str, list)) for item in value.values()):
+            raise SessionError("invalid tool receipts; diagnose outstanding writers before recovery")
+        return value
+
+    def busy(self, file: Path) -> bool:
+        return bool(self.tools(file))
+
+    def snapshot(self, task: str) -> str:
+        directory = self.task_path(task)
+        digest = hashlib.sha256()
+        for path in (resolve_plan_file(directory), directory / "decisions.md", directory / "findings.md"):
+            digest.update(path.name.encode())
+            digest.update(path.read_bytes() if path.is_file() else b"<missing>")
+        return digest.hexdigest()
+
+    def remember_read(self, file: Path, task: str) -> None:
+        """Caller holds routing lock; updating a read receipt never changes authority."""
+        row = self.read(file)
+        if task not in {row.get("task"), row.get("associated")}:
+            return
+        row["seen"] = self.snapshot(task)
+        atomic_text(file, "".join(f"{key}={value}\n" for key, value in row.items()))
+
+    def require_fresh(self, row: dict, task: str) -> None:
+        if row.get("seen") and row["seen"] != self.snapshot(task):
+            plan = resolve_plan_file(self.task_path(task))
+            raise SessionError(f"plan changed since your last read; run python3 {SCRIPTS / 'plan_state.py'} overview {plan} before writing")
+
+    def current_view(self, task: str) -> str:
+        # Acquiring authority always returns the bounded state it authorizes.
+        # Invalid plans still need to be readable and repairable.
+        from plan_state import overview_payload
+        return json.dumps(overview_payload(resolve_plan_file(self.task_path(task)), 800, 4096), separators=(",", ":"))
+
+    def recover_dead(self, task: str) -> None:
+        """Only a verified dead local runtime with no unfinished tools is reclaimable."""
+        from session_runtime import runtime_dead
+        for other in self.owners(task):
+            row = self.read(other)
+            if runtime_dead(row) and not self.busy(other):
+                self.write(other, "idle", associated=task, last_task=task)
 
     def event(self, provider: str, session: str, event: str, *, record: bool) -> bool:
         """Bounded receipts fence identifiable late PostTool events by generation."""
@@ -224,16 +275,18 @@ class SessionStore:
                 "Do not retry bind. If those sessions may be closed, ask the user; only with their "
                 f"authorization run the bind adapter with: reclaim {task} --reason \"user confirmed the other sessions are closed\"")
 
-    def pending(self, provider: str, session: str, preferred: str = "") -> str:
+    def pending(self, provider: str, session: str, preferred: str = "", turn: str = "") -> str:
         file = self.route(provider, session)
         with self.lock():
             row = self.read(file)
-            candidate = row.get("task") or row.get("candidate", "")
+            candidate = row.get("task") or row.get("candidate") or row.get("associated", "")
             if not candidate and preferred:
                 self.task_path(preferred)
                 candidate = preferred
             # Even an empty pending row identifies a prompt without opting in.
-            self.write(file, "pending", task=row.get("task", ""), candidate=candidate)
+            self.write(file, "pending", task=row.get("task", ""), candidate=candidate,
+                       associated=candidate, turn=turn or row.get("turn", ""),
+                       **{key: row[key] for key in ("runtime", "seen") if key in row})
             return candidate
 
     def claim(self, provider: str, session: str, task: str, *, preview: bool = False,
@@ -250,16 +303,20 @@ class SessionStore:
                 if row.get("event") and row["event"] != event:
                     raise SessionError("creation event does not match this reservation")
             else:
-                if row.get("status") in {"discussing", "waiting", "disabled"}:
+                if row.get("status") in {"discussing", "waiting", "disabled", "idle", "inactive"}:
                     raise SessionError("planning lease is not claimable; resolve the current prompt first")
                 current = row.get("task") or row.get("candidate")
                 if current and current != task:
                     raise SessionError(f"planning lease conflicts with task: {current}")
                 if row.get("status") == "pending" and row.get("task"):
                     raise SessionError("owned task requires explicit bind on the new prompt")
+            if not preview:
+                self.recover_dead(task)
             self.exclusive(file, task)
             if not preview and not (row.get("status") == "owned" and row.get("task") == task):
-                self.write(file, "creating" if creating else "owned", task=task, event=event)
+                from session_runtime import runtime_identity
+                self.write(file, "creating" if creating else "owned", task=task, associated=task,
+                           event=event, runtime=runtime_identity(), turn=row.get("turn", ""))
             return str(directory)
 
     def resolve(self, provider: str, session: str) -> str:
@@ -267,8 +324,12 @@ class SessionStore:
         row = self.read(file)
         if row.get("status") not in {"owned", "discussing"}:
             return ""
-        self.exclusive(file, row["task"])
-        return str(self.task_path(row["task"]))
+        task = row.get("task") or row.get("associated")
+        if not task:
+            return ""
+        if row.get("task"):
+            self.exclusive(file, task)
+        return str(self.task_path(task))
 
     def bind(self, provider: str, session: str, task: str, reason: str = "") -> str:
         self.enabled()
@@ -276,16 +337,26 @@ class SessionStore:
         file = self.route(provider, session)
         with self.lock():
             row = self.read(file)
-            current = row.get("task") or row.get("candidate")
+            current = row.get("task") or row.get("candidate") or row.get("associated")
             if current and current != task:
                 raise SessionError("this session must release/handoff its existing task before binding another")
             if row.get("status") == "discussing" and not reason.strip():
                 raise SessionError('planning lease is still "discussing": bind the same task with --reason "user authorization"')
             if row.get("status") in {"owned", "creating"}:
                 raise SessionError("planning lease is already owned; use resolve instead of binding again")
+            if self.busy(file):
+                from tool_recovery import recovery_guidance
+                guidance = ("; if Claude already delivered automatic completion, let Stop reconcile its native "
+                            "background registry, then follow the new routing guidance" if provider == "claude" else "")
+                raise SessionError("collect unfinished tools before binding a new execution generation" + guidance
+                                   + recovery_guidance(self, provider, task))
+            self.recover_dead(task)
             self.exclusive(file, task)
-            self.write(file, "owned", task=task)
-        return f"planning task bound for this prompt: {task}"
+            from session_runtime import runtime_identity
+            view = self.current_view(task)
+            self.write(file, "owned", task=task, associated=task, seen=self.snapshot(task),
+                       runtime=runtime_identity(), turn=row.get("turn", ""))
+        return f"planning task bound for this prompt: {task}\nCurrent plan (read before acting):\n{view}"
 
     def reclaim(self, provider: str, session: str, task: str, reason: str) -> str:
         """User-authorized recovery of a task whose other owners are no longer running."""
@@ -296,15 +367,21 @@ class SessionStore:
         file = self.route(provider, session)
         with self.lock():
             row = self.read(file)
-            current = row.get("task") or row.get("candidate")
+            current = row.get("task") or row.get("candidate") or row.get("associated")
             if current and current != task:
                 raise SessionError("this session must release/handoff its existing task before reclaiming another")
             holders = self.holders(file, task)
             for other in holders:
-                self.write(other, "inactive", last_task=task)
-            if not (row.get("status") == "owned" and row.get("task") == task):
-                self.write(file, "owned", task=task)
-        return f"planning task reclaimed for this prompt: {task}; {len(holders)} other lease(s) made inactive"
+                # Explicit recovery confirms the previous writers have stopped;
+                # retire orphaned receipts as well as authority, fence late posts.
+                atomic_text(other.with_suffix(".tools"), "{}")
+                self.write(other, "inactive", last_task=task, associated=task)
+            atomic_text(file.with_suffix(".tools"), "{}")
+            from session_runtime import runtime_identity
+            self.write(file, "owned", task=task, associated=task, seen=self.snapshot(task),
+                       runtime=runtime_identity(), turn=row.get("turn", ""))
+            view = self.current_view(task)
+        return f"planning task reclaimed for this prompt: {task}; {len(holders)} other lease(s) made inactive\nCurrent plan:\n{view}"
 
     def transition(self, provider: str, session: str, verb: str, task: str,
                    generation: str | None = None) -> str:
@@ -313,7 +390,9 @@ class SessionStore:
             raise SessionError("invalid planning task id")
         with self.lock():
             row = self.read(file)
-            current = row.get("task") or row.get("candidate")
+            current = row.get("task") or row.get("candidate") or row.get("associated")
+            if generation is not None and row.get("generation", "legacy") != generation:
+                return ""
             if verb == "finish" and (row.get("status") != "owned" or row.get("task") != task):
                 return ""
             if verb == "finish":
@@ -332,17 +411,56 @@ class SessionStore:
             if verb in {"release", "clarify"} and row.get("status") not in {"pending", "waiting"}:
                 raise SessionError("planning lease is not pending; use handoff to relinquish owned work")
             if verb == "discuss":
-                self.exclusive(file, task)
-                self.write(file, "discussing", task=task)
-                return f"planning discussion only: {task}; execution needs a new prompt bind or bind --reason"
+                if self.busy(file):
+                    raise SessionError("unfinished tools must complete before entering discussion")
+                view = self.current_view(task)
+                self.write(file, "discussing", associated=task, seen=self.snapshot(task), turn=row.get("turn", ""))
+                return f"planning discussion only: {task}; execution needs a new prompt bind or bind --reason\nCurrent plan:\n{view}"
             if verb == "clarify":
-                self.write(file, "waiting", task=row.get("task", ""), candidate=task)
+                self.write(file, "waiting", task=row.get("task", ""), candidate=task,
+                           associated=task, turn=row.get("turn", ""))
                 return f"planning candidate preserved: {task}; ask the user now, then wait for their answer."
             if verb == "handoff" and row.get("task") != task:
                 raise SessionError("only the owning session can handoff a task")
-            self.write(file, "inactive", last_task=task)
+            if self.busy(file):
+                from tool_recovery import recovery_guidance
+                raise SessionError("unfinished tools must complete before relinquishing this task"
+                                   + recovery_guidance(self, provider, task))
+            self.write(file, "inactive", last_task=task,
+                       associated=task if verb == "handoff" else "")
             # Never unlink lock files; another process may still hold that inode.
             return f"planning session {verb}: {task}; other sessions and workspace marker unchanged"
+
+    def yield_turn(self, provider: str, session: str, generation: str, *, ending: bool = False,
+                   turn: str = "", observed: float | None = None) -> None:
+        """Release only the inspected generation; never edit plan progress."""
+        file = self.route(provider, session)
+        if not file.exists():
+            return
+        with self.lock():
+            row = self.read(file)
+            if not row or row.get("generation", "legacy") != generation:
+                return
+            if row.get("status") == "idle":
+                return
+            if turn and row.get("turn") and row["turn"] != turn:
+                return
+            if observed is not None and observed < float(row.get("updated", "0")):
+                return  # A delayed event created before the current generation.
+            if self.busy(file):
+                from tool_recovery import recovery_guidance
+                raise SessionError("unfinished tools still hold execution authority; collect their results before stopping"
+                                   + recovery_guidance(self, provider, row.get("task", "")))
+            task = row.get("task") or row.get("candidate") or row.get("associated")
+            if not task:
+                return
+            if not ending and row.get("status") in {"owned", "creating"}:
+                from plan_state import parse_plan
+                state = parse_plan(resolve_plan_file(self.task_path(task)))
+                unstarted = not state.current_phase and all(p.status == "pending" for p in state.phases)
+                if state.issues or (not unstarted and any(p.status not in {"complete", "blocked", "deferred"} for p in state.phases)):
+                    raise SessionError("plan changed before yielding; restore and continue its actionable work")
+            self.write(file, "idle", associated=task, last_task=task)
 
 
 _transactions: ContextVar[frozenset[Path]] = ContextVar("plan_transactions", default=frozenset())
@@ -401,7 +519,7 @@ def plan_transaction(plan: Path):
             if conflicting_plan_files(plan):
                 raise SessionError("PLAN_FILENAME_CONFLICT: preserve and reconcile plan.md and tasks.md before writing")
             row = store.read(file) if file else {}
-            if before != row:
+            if {k: v for k, v in before.items() if k != "seen"} != {k: v for k, v in row.items() if k != "seen"}:
                 raise SessionError("session ownership changed while waiting; re-read the current prompt and plan")
             owners = store.owners(plan.parent.name)
             if owners and (file is None or owners != [file]):
@@ -413,9 +531,16 @@ def plan_transaction(plan: Path):
                 raise SessionError("resolve the pending candidate before modifying a plan")
             if row.get("status") in {"inactive", "disabled"}:
                 raise SessionError("this session relinquished its plan; explicitly bind before writing again")
+            if row.get("status") == "idle":
+                raise SessionError("execution authority was yielded; explicitly bind and read the current plan before writing")
+            if row.get("associated") and row["associated"] != plan.parent.name:
+                raise SessionError("this plan is outside the current discussion or execution scope")
+            store.require_fresh(row, plan.parent.name)
             token = _transactions.set(held | {plan})
             try:
                 yield
+                if file:
+                    store.remember_read(file, plan.parent.name)
             finally:
                 _transactions.reset(token)
 
@@ -461,7 +586,9 @@ def candidate_context(store: SessionStore, task: str, adapter: str, compact: boo
     # Bind cannot succeed while another lease holds the task; say so up front
     # instead of offering a bind the agent would retry forever.
     who = identity()
-    holders = store.holders(store.route(*who), task) if who else []
+    from session_runtime import runtime_dead
+    holders = [holder for holder in store.holders(store.route(*who), task)
+               if not (runtime_dead(store.read(holder)) and not store.busy(holder))] if who else []
     reserved = (f"RESERVED: task '{task}' is held by {store.holder_summary(holders)}, so bind will fail; do not retry it. "
                 f"For SAME, run `{command} clarify {task}` and ask the user whether those sessions are closed. Only with their authorization run "
                 f"`{command} reclaim {task} --reason \"user confirmed the other sessions are closed\"`, which makes the other leases inactive and binds this session.\n"
@@ -488,7 +615,7 @@ def main(argv=None) -> int:
     op, *args = args
     if op in {"session-id", "event-id"}:
         value = json.load(sys.stdin)
-        keys = ("session_id", "sessionId") if op == "session-id" else ("tool_use_id", "toolUseId", "tool_call_id")
+        keys = ("session_id", "sessionId") if op == "session-id" else ("tool_use_id", "toolUseId", "tool_call_id", "toolCallId")
         value = next((value[k] for k in keys if isinstance(value, dict) and value.get(k)), "")
         if not isinstance(value, str) or (op == "session-id" and not SESSION_RE.fullmatch(value)):
             return 1
@@ -498,6 +625,20 @@ def main(argv=None) -> int:
     output = ""
     if op == "candidate-context":
         output = candidate_context(store, args[0], args[1], "--compact" in args)
+    elif op in {"tools", "ack-rejected"}:
+        import argparse
+        from tool_recovery import recover
+        parser = argparse.ArgumentParser(prog=op)
+        parser.add_argument("task")
+        parser.add_argument("--command", required=True)
+        if op == "ack-rejected":
+            for option in ("receipt", "generation", "reason"):
+                parser.add_argument("--" + option, required=True)
+        options = vars(parser.parse_args(args))
+        who = identity()
+        if who is None:
+            raise SessionError("no verified planning session identity is available")
+        output = recover(store, *who, **options)
     elif op in {"bind", "reclaim", "release", "clarify", "discuss", "handoff"}:
         who = identity()
         if who is None:
@@ -510,7 +651,7 @@ def main(argv=None) -> int:
         provider, session = args[:2]
         file = store.route(provider, session)
         if op == "pending":
-            output = store.pending(provider, session, args[2] if len(args) > 2 else "")
+            output = store.pending(provider, session, args[2] if len(args) > 2 else "", os.environ.get("PWF_TURN_ID", ""))
         elif op in {"claim", "reserve", "created"}:
             output = store.claim(provider, session, args[2], preview="--dry-run" in args,
                                  creating=op == "reserve", finalize=op == "created",
@@ -519,6 +660,8 @@ def main(argv=None) -> int:
             output = store.resolve(provider, session)
         elif op == "finish":
             store.transition(provider, session, "finish", args[2], args[3] if len(args) > 3 else None)
+        elif op in {"yield", "end-session"}:
+            store.yield_turn(provider, session, args[2], ending=op == "end-session", turn=os.environ.get("PWF_TURN_ID", ""))
         elif op == "health":
             row = store.read(file)
             if row.get("task"):
@@ -528,6 +671,10 @@ def main(argv=None) -> int:
             output = store.read(file).get("status", "")
         elif op == "generation":
             output = store.read(file).get("generation", "legacy")
+        elif op == "event-current":
+            row = store.read(file)
+            turn = os.environ.get("PWF_TURN_ID", "")
+            return 1 if turn and row.get("turn") and turn != row["turn"] else 0
         elif op == "owned-task":
             output = store.read(file).get("task", "")
         elif op == "repair-path":
@@ -537,7 +684,7 @@ def main(argv=None) -> int:
                 output = str(store.task_path(row["task"], exists=False))
         elif op == "pending-candidate":
             row = store.read(file)
-            output = row.get("candidate", "") if row.get("status") in {"pending", "waiting"} else ""
+            output = (row.get("candidate") or row.get("associated", "")) if row.get("status") in {"pending", "waiting", "idle"} else ""
         elif op == "cache":
             row = store.read(file)
             if row.get("status") == "owned":
