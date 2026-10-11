@@ -192,8 +192,10 @@ def reconcile_turn_end(store, provider: str, session: str, payload: dict) -> Non
         return
     with store.lock():
         row = store.read(file)
-        if row.get("turn") != turn:
-            return  # A delayed or foreign Stop proves nothing about current calls.
+        # Codex awaits Stop hooks before starting another turn. A recorded turn
+        # still fences foreign Stops; rows created mid-turn may lack one.
+        if row.get("turn") and row["turn"] != turn:
+            return
         runtime = runtime_identity()
         if row.get("runtime") and runtime and row["runtime"] != runtime:
             return

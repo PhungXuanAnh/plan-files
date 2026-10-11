@@ -283,6 +283,21 @@ P1.1
         self.hook("codex", "writer", "user-prompt-submit.sh", prompt=f"Continue {self.plan}.", turn_id="t2")
         self.assertIn("discussion only", self.store.transition("codex", "writer", "discuss", "task-a"))
 
+    def test_codex_plan_created_mid_turn_still_retires_failed_calls_at_stop(self):
+        # No UserPromptSubmit row exists when a turn creates the workspace's first
+        # plan; the reservation records the creating call's turn instead.
+        from session_runtime import turn_id
+        self.pause()
+        self.store.claim("codex", "legacy", "task-a")  # rows written before turns were recorded
+        file = self.store.route("codex", "legacy")
+        begin_tool(self.store, "codex", "legacy", {"tool_name": "apply_patch", "tool_use_id": "exec-failed",
+                                                    "tool_input": {"command": "*** Begin Patch\n*** End Patch"}})
+        self.hook("codex", "legacy", "agent-stop.sh", turn_id="t1")
+        self.assertFalse(self.store.busy(file))
+        self.assertEqual(self.row("codex", "legacy")["status"], "idle")
+        self.store.claim("codex", "creator", "task-a", turn=turn_id({"turn_id": "t2"}))
+        self.assertEqual(self.row("codex", "creator")["turn"], turn_id({"turn_id": "t2"}))
+
     def test_grok_failure_and_denial_events_retire_their_receipts(self):
         # Grok runs PreToolUse before permission checks; dispatch/MCP failures and
         # denials then arrive only as these events, correlated by toolUseId.

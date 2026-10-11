@@ -294,7 +294,7 @@ class SessionStore:
             return candidate
 
     def claim(self, provider: str, session: str, task: str, *, preview: bool = False,
-              creating: bool = False, finalize: bool = False, event: str = "") -> str:
+              creating: bool = False, finalize: bool = False, event: str = "", turn: str = "") -> str:
         self.enabled()
         directory = self.task_path(task, exists=not creating)
         event = hashlib.sha256(event.encode()).hexdigest() if event else ""
@@ -320,7 +320,7 @@ class SessionStore:
             if not preview and not (row.get("status") == "owned" and row.get("task") == task):
                 from session_runtime import runtime_identity
                 self.write(file, "creating" if creating else "owned", task=task, associated=task,
-                           event=event, runtime=runtime_identity(), turn=row.get("turn", ""))
+                           event=event, runtime=runtime_identity(), turn=row.get("turn") or turn)
             return str(directory)
 
     def resolve(self, provider: str, session: str) -> str:
@@ -661,7 +661,8 @@ def main(argv=None) -> int:
         elif op in {"claim", "reserve", "created"}:
             output = store.claim(provider, session, args[2], preview="--dry-run" in args,
                                  creating=op == "reserve", finalize=op == "created",
-                                 event=args[args.index("--event") + 1] if "--event" in args else "")
+                                 event=args[args.index("--event") + 1] if "--event" in args else "",
+                                 turn=os.environ.get("PWF_TURN_ID", ""))
         elif op == "resolve":
             output = store.resolve(provider, session)
         elif op == "finish":
