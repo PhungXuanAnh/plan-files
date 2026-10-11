@@ -30,6 +30,10 @@ STATUSES = {"pending", "owned", "creating", "waiting", "discussing", "idle", "in
 TASK_RE = re.compile(r"[A-Za-z0-9._-]+\Z")
 PROVIDER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 SESSION_RE = re.compile(r"[A-Za-z0-9._:-]{1,240}\Z")
+# Codex emits no PostToolUse for failed calls; its end-of-turn Stop retires them.
+CODEX_TURN_END_HINT = ("; Codex sends no PostToolUse for a call that failed (for example apply_patch verification): "
+                       "end this reply so the current turn's Stop retires it, then follow the next routing guidance. "
+                       "Collect any native background job first")
 
 
 class SessionError(ValueError):
@@ -347,7 +351,8 @@ class SessionStore:
             if self.busy(file):
                 from tool_recovery import recovery_guidance
                 guidance = ("; if Claude already delivered automatic completion, let Stop reconcile its native "
-                            "background registry, then follow the new routing guidance" if provider == "claude" else "")
+                            "background registry, then follow the new routing guidance" if provider == "claude"
+                            else CODEX_TURN_END_HINT if provider == "codex" else "")
                 raise SessionError("collect unfinished tools before binding a new execution generation" + guidance
                                    + recovery_guidance(self, provider, task))
             self.recover_dead(task)
@@ -412,7 +417,8 @@ class SessionStore:
                 raise SessionError("planning lease is not pending; use handoff to relinquish owned work")
             if verb == "discuss":
                 if self.busy(file):
-                    raise SessionError("unfinished tools must complete before entering discussion")
+                    raise SessionError("unfinished tools must complete before entering discussion"
+                                       + (CODEX_TURN_END_HINT if provider == "codex" else ""))
                 view = self.current_view(task)
                 self.write(file, "discussing", associated=task, seen=self.snapshot(task), turn=row.get("turn", ""))
                 return f"planning discussion only: {task}; execution needs a new prompt bind or bind --reason\nCurrent plan:\n{view}"

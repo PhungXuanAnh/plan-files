@@ -257,6 +257,32 @@ P1.1
         self.assertEqual(self.row("copilot", "writer")["status"], "pending")
         self.store.bind("copilot", "writer", "task-a")
 
+    def test_codex_stop_retires_calls_that_failed_without_post_tool_use(self):
+        # Codex has no failure event: a failed apply_patch emits PreToolUse only,
+        # and its nested exec-* id never reaches the rollout transcript.
+        self.pause()
+        self.hook("codex", "writer", "user-prompt-submit.sh", prompt=f"Continue {self.plan}.", turn_id="t1")
+        self.store.bind("codex", "writer", "task-a")
+        file = self.store.route("codex", "writer")
+        failed = {"tool_name": "apply_patch", "tool_use_id": "exec-failed", "turn_id": "t1",
+                  "tool_input": {"command": "*** Begin Patch\n*** Update File: notes.md\n@@\n-old\n+new\n*** End Patch"}}
+        launch = {"tool_name": "exec_command", "tool_use_id": "exec-launch", "turn_id": "t1",
+                  "tool_input": {"cmd": "python3 build.py"}}
+        begin_tool(self.store, "codex", "writer", failed)
+        begin_tool(self.store, "codex", "writer", launch)
+        end_tool(self.store, "codex", "writer", {**launch, "tool_response": {"session_id": 7, "output": "building"}})
+        # Only the current turn's Stop proves its synchronous calls ended;
+        # the native background job keeps the reservation until collected.
+        self.hook("codex", "writer", "agent-stop.sh", turn_id="t0")
+        self.assertEqual(len(self.store.tools(file)), 2)
+        self.assertEqual(self.hook("codex", "writer", "agent-stop.sh", turn_id="t1")["decision"], "block")
+        self.assertEqual([key.split(":")[0] for key in self.store.tools(file)], ["background"])
+        poll = {"tool_name": "write_stdin", "tool_use_id": "exec-poll", "turn_id": "t1", "tool_input": {"session_id": 7}}
+        begin_tool(self.store, "codex", "writer", poll)
+        end_tool(self.store, "codex", "writer", {**poll, "tool_response": {"exit_code": 0, "output": "built"}})
+        self.hook("codex", "writer", "user-prompt-submit.sh", prompt=f"Continue {self.plan}.", turn_id="t2")
+        self.assertIn("discussion only", self.store.transition("codex", "writer", "discuss", "task-a"))
+
     def test_claude_rejected_calls_reconcile_before_bind_without_clearing_live_work(self):
         import hashlib
         self.store.bind("claude", "writer", "task-a")

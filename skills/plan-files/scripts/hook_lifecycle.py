@@ -9,7 +9,8 @@ import sys
 from datetime import datetime
 
 from session_state import SessionError, SessionStore, project_root
-from session_runtime import begin_collection, begin_tool, end_tool, reconcile_background, reconcile_tool_results, turn_id
+from session_runtime import (begin_collection, begin_tool, end_tool, reconcile_background, reconcile_tool_results,
+                             reconcile_turn_end, turn_id)
 
 
 def main() -> int:
@@ -48,6 +49,7 @@ def main() -> int:
             return 0
     if event == "stop" and enabled:
         reconcile_background(store, provider, session, payload)
+        reconcile_turn_end(store, provider, session, payload)
     if event == "pre" and enabled and begin_collection(store, provider, session, payload, preview="--explain" in arguments):
         print("{}")
         return 0

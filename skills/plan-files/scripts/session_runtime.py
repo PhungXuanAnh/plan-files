@@ -174,6 +174,35 @@ def reconcile_background(store, provider: str, session: str, payload: dict) -> N
             atomic_text(file.with_suffix(".tools"), json.dumps(remaining))
 
 
+def reconcile_turn_end(store, provider: str, session: str, payload: dict) -> None:
+    """Retire synchronous receipts at Codex's native end-of-turn Stop.
+
+    Codex has no failure event: a call that fails (apply_patch verification,
+    sibling-hook denial) gets PreToolUse only, and nested exec-* ids are absent
+    from its rollout. Its Stop runs after the model received every synchronous
+    result of the turn, and a session runs one turn at a time. Native async
+    handles stay outstanding until collected; other providers keep their events.
+    """
+    from session_state import atomic_text
+    turn = turn_id(payload)
+    if provider != "codex" or not turn:
+        return
+    file = store.route(provider, session)
+    if not file.exists():
+        return
+    with store.lock():
+        row = store.read(file)
+        if row.get("turn") != turn:
+            return  # A delayed or foreign Stop proves nothing about current calls.
+        runtime = runtime_identity()
+        if row.get("runtime") and runtime and row["runtime"] != runtime:
+            return
+        pending = store.tools(file)
+        remaining = {key: value for key, value in pending.items() if key.startswith("background:")}
+        if remaining != pending:
+            atomic_text(file.with_suffix(".tools"), json.dumps(remaining))
+
+
 def reconcile_tool_results(store, provider: str, session: str, payload: dict) -> None:
     """Retire only correlated terminal receipts, without granting authority.
 
