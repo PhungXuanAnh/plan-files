@@ -19,6 +19,9 @@ EVENT_SCRIPTS = {
     "UserPromptSubmit": "user-prompt-submit.sh",
     "PreToolUse": "pre-tool-use.sh",
     "PostToolUse": "post-tool-use.sh",
+    # Grok reports failed dispatch and permission denials only through these.
+    "PostToolUseFailure": "post-tool-use.sh",
+    "PermissionDenied": "post-tool-use.sh",
     "Stop": "agent-stop.sh",
 }
 

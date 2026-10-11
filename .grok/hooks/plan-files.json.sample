@@ -37,6 +37,28 @@
         ]
       }
     ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && ROOT=\"$(bash \"$ROOT/skills/plan-files/scripts/resolve-project-root.sh\")\" && cd \"$ROOT\" && bash \"$ROOT/.grok/hooks/plan-files/scripts/post-tool-use.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && ROOT=\"$(bash \"$ROOT/skills/plan-files/scripts/resolve-project-root.sh\")\" && cd \"$ROOT\" && bash \"$ROOT/.grok/hooks/plan-files/scripts/post-tool-use.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

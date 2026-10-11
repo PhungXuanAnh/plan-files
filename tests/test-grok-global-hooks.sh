@@ -119,7 +119,7 @@ import json, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     data = json.load(handle)
 assert data["_planFilesHook"]["managedBy"] == "plan-files-grok-installer"
-for event in ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"):
+for event in ("UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionDenied", "Stop"):
     command = data["hooks"][event][0]["hooks"][0]["command"]
     assert sys.argv[2] in command, command
     assert ".grok/hooks/plan-files/scripts/" in command, command

@@ -283,6 +283,21 @@ P1.1
         self.hook("codex", "writer", "user-prompt-submit.sh", prompt=f"Continue {self.plan}.", turn_id="t2")
         self.assertIn("discussion only", self.store.transition("codex", "writer", "discuss", "task-a"))
 
+    def test_grok_failure_and_denial_events_retire_their_receipts(self):
+        # Grok runs PreToolUse before permission checks; dispatch/MCP failures and
+        # denials then arrive only as these events, correlated by toolUseId.
+        self.pause()
+        self.store.bind("grok", "writer", "task-a")
+        file = self.store.route("grok", "writer")
+        for call, event in (("denied", "PermissionDenied"), ("failed", "PostToolUseFailure")):
+            payload = {"toolName": "run_terminal_command", "toolUseId": call, "toolInput": {"command": "touch out"}}
+            begin_tool(self.store, "grok", "writer", payload)
+            self.assertTrue(self.store.busy(file))
+            self.hook("grok", "writer", "post-tool-use.sh", **payload, hook_event_name=event,
+                      hookEventName=event, error="tool failed")
+            self.assertFalse(self.store.busy(file))
+        self.assertEqual(self.hook("grok", "writer", "agent-stop.sh"), {})
+
     def test_claude_rejected_calls_reconcile_before_bind_without_clearing_live_work(self):
         import hashlib
         self.store.bind("claude", "writer", "task-a")
