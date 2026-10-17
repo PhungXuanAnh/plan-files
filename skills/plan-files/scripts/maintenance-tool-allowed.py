@@ -290,7 +290,7 @@ def text_plan_paths(value: object) -> list[str]:
 REQUIRED_PLAN_FILES = {*PLAN_FILENAMES, "findings.md", "decisions.md"}
 
 
-def plan_id_for_path(path: str, project_root: Path) -> str | None:
+def plan_id_for_path(path: str, project_root: Path, allow_new: bool = True) -> str | None:
     """Resolve a path under this project's plan root and return its task id."""
     cleaned = path.strip().lstrip("([{=:").rstrip(")]},;:")
     candidate = Path(cleaned)
@@ -319,17 +319,21 @@ def plan_id_for_path(path: str, project_root: Path) -> str | None:
     # moment it matters most: task creation.
     if resolve_plan_file(plan_root / task_id).is_file():
         return task_id
-    if candidate.name.lower() in REQUIRED_PLAN_FILES:
+    if allow_new and candidate.name.lower() in REQUIRED_PLAN_FILES:
         return task_id
     return None
 
 
-def plan_ids(paths: list[str], project_root: Path) -> set[str]:
+def plan_ids(paths: list[str], project_root: Path, allow_new: bool = True) -> set[str]:
     return {
         task_id
         for path in paths
-        if (task_id := plan_id_for_path(path, project_root)) is not None
+        if (task_id := plan_id_for_path(path, project_root, allow_new)) is not None
     }
+
+
+def shell_changes_directory(tool_input: object) -> bool:
+    return re.search(r"(^|[;&|(]\s*)(?:builtin\s+)?(cd|pushd)\b", shell_command_text(tool_input)) is not None
 
 
 def shell_has_mutation_intent(tool_input: object) -> bool:
@@ -395,9 +399,15 @@ def extract_mutation_plan_id(payload: dict, project_root: Path) -> int:
     targets = shell_write_targets(tool_input) if shell else mutation_targets(tool_input)
     if shell and _cat_heredoc_header(tool_input):
         return print_single_plan_id(plan_ids(targets, project_root))
-    if not targets:
-        targets = text_plan_paths(tool_input)
-    return print_single_plan_id(plan_ids(targets, project_root))
+    if targets or not shell:
+        return print_single_plan_id(plan_ids(targets or text_plan_paths(tool_input), project_root))
+    # A plan path in a command's prose (a prompt argument, an echo) names a plan
+    # without writing it, so a mention can only reach a plan that exists; after
+    # `cd`, a relative mention cannot be placed in this project at all.
+    paths = text_plan_paths(tool_input)
+    if shell_changes_directory(tool_input):
+        paths = [path for path in paths if os.path.isabs(path)]
+    return print_single_plan_id(plan_ids(paths, project_root, allow_new=False))
 
 
 def tool_class(payload: dict, plan_dir: Path) -> dict[str, object]:

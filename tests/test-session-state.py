@@ -347,6 +347,23 @@ Phase 1
                 rejected = self.hook(provider, "creator", "pre-tool-use.sh", task=task)
                 self.assertIn(rejected.get("decision"), {"block", "deny"})
 
+    def test_plan_path_mentions_in_shell_prose_reserve_no_new_task(self):
+        mentions = ("cd /tmp/elsewhere && printf x > tmp/plan-files/{task}/plan.md",
+                    "claude -p 'Continue tmp/plan-files/{task}/plan.md' > run.jsonl")
+        for provider in ("codex", "claude", "copilot", "grok"):
+            task = f"mention-{provider}"
+            with self.subTest(provider=provider):
+                for command in mentions:
+                    command = command.format(task=task)
+                    allowed = self.hook(provider, "creator", "pre-tool-use.sh", task=task, tool="Bash",
+                                        tool_input={"command": command})
+                    self.assertNotIn(allowed.get("decision"), {"block", "deny"})
+                    self.assertEqual(self.store.owners(task), [])
+                creation = f"cat > tmp/plan-files/{task}/plan.md <<'EOF'\n# plan\nEOF"
+                self.hook(provider, "creator", "pre-tool-use.sh", task=task, tool="Bash",
+                          tool_input={"command": creation})
+                self.assertEqual(len(self.store.owners(task)), 1)
+
     def test_nonparticipant_hooks_do_not_adopt_another_plan(self):
         self.store.claim("codex", "owner", "task-a")
         self.store.claim("claude", "second-owner", "task-b")
