@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Suspend any prior lease and print candidate identity for an adapter to wrap.
+# A prompt made only of host task notifications keeps the lease pending verification.
 
 set -u
 set -o pipefail 2>/dev/null || true
@@ -25,6 +26,8 @@ PROMPT_CANDIDATE=$(printf '%s' "$INPUT" \
     | python3 "$TARGET_TOOL" prompt-plan-id "$PWD" 2>/dev/null || true)
 export PWF_TURN_ID
 PWF_TURN_ID=$(printf '%s' "$INPUT" | python3 -c 'import hashlib,json,sys; p=json.load(sys.stdin); t=p.get("turn_id") or p.get("turnId"); print(hashlib.sha256(str(t).encode()).hexdigest() if t else "")')
+export PWF_NOTICE
+PWF_NOTICE=$(printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/tool_results.py" notice 2>/dev/null || true)
 CANDIDATE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" pending \
     "$ADAPTER_ID" "$SESSION_ID" "$PROMPT_CANDIDATE" 2>/dev/null || true)
 if [ -z "$CANDIDATE" ]; then

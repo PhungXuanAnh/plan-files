@@ -9,8 +9,8 @@ import sys
 from datetime import datetime
 
 from session_state import SessionError, SessionStore, project_root
-from session_runtime import (begin_collection, begin_tool, end_tool, reconcile_background, reconcile_tool_results,
-                             reconcile_turn_end, turn_id)
+from session_runtime import (begin_collection, begin_tool, end_tool, reconcile_background, reconcile_notifications,
+                             reconcile_tool_results, reconcile_turn_end, turn_id)
 
 
 def main() -> int:
@@ -24,6 +24,7 @@ def main() -> int:
     env = {**os.environ, "PWF_TURN_ID": turn_id(payload), "PWF_LIFECYCLE_EVENT": event}
     if enabled and "--explain" not in arguments:
         reconcile_tool_results(store, provider, session, payload)
+        reconcile_notifications(store, provider, session, payload)
     if event == "end":
         if enabled:
             row = store.read(store.route(provider, session))

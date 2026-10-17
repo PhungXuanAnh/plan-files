@@ -370,6 +370,63 @@ P1.1
                                   background_tasks=[]), {})
         self.assertFalse(self.store.owners("task-a"))
 
+    def test_claude_task_notifications_keep_the_lease_only_with_host_provenance(self):
+        self.store.bind("claude", "writer", "task-a")
+        file = self.store.route("claude", "writer")
+        transcript = self.root / "host.jsonl"
+        transcript.write_text("")
+        def notification(job):
+            return (f"<task-notification>\n<task-id>{job}</task-id>\n<tool-use-id>launch-{job}</tool-use-id>\n"
+                    f"<status>completed</status>\n</task-notification>")
+        def append(record):
+            with transcript.open("a") as stream:
+                stream.write(json.dumps({"sessionId": "writer", **record}) + "\n")
+        def submit(job):
+            # The host logs a notification's enqueue before UserPromptSubmit and its delivery after.
+            append({"type": "queue-operation", "operation": "enqueue", "content": notification(job)})
+            return self.hook("claude", "writer", "user-prompt-submit.sh", prompt=notification(job),
+                             transcript_path=str(transcript))
+        def delivered(job, mode):
+            append({"type": "attachment", "attachment": {"type": "queued_command", "commandMode": mode,
+                                                         "prompt": notification(job)}})
+        read = {"tool_name": "Read", "tool_use_id": "read", "tool_input": {"file_path": str(self.plan)}}
+
+        # Without host evidence the kept lease is suspended like any new prompt,
+        # even when receipts are unreadable.
+        self.assertEqual(submit("done"), {})
+        file.with_suffix(".tools").write_text("{broken")
+        self.assertEqual(self.hook("claude", "writer", "pre-tool-use.sh", **read).get("decision"), "block")
+        self.assertEqual(self.row("claude", "writer")["status"], "pending")
+        file.with_suffix(".tools").write_text("{}")
+        self.store.bind("claude", "writer", "task-a")
+        for job in ("done", "live"):
+            launch = {"tool_name": "Bash", "tool_use_id": f"launch-{job}", "tool_input": {"command": "make test"}}
+            begin_tool(self.store, "claude", "writer", launch)
+            end_tool(self.store, "claude", "writer", {**launch, "tool_response": {"backgroundTaskId": job}})
+        read["transcript_path"] = str(transcript)
+
+        # (a) A completion absorbed mid-turn keeps the lease and retires only its own job.
+        self.assertEqual(submit("done"), {})
+        self.assertEqual(self.row("claude", "writer")["status"], "owned")
+        delivered("done", "task-notification")
+        self.assertNotEqual(self.hook("claude", "writer", "pre-tool-use.sh", **read).get("decision"), "block")
+        self.assertNotIn("notice", self.row("claude", "writer"))
+        # (c) The job without a completion notice still blocks handoff.
+        self.assertEqual(len(self.store.tools(file)), 1)
+        with self.assertRaisesRegex(SessionError, "unfinished|outstanding"):
+            self.store.transition("claude", "writer", "handoff", "task-a")
+
+        # (b) A typed copy of a real earlier notice is a new prompt and proves no
+        # completion. Typed prompts are screened before their enqueue is logged.
+        self.hook("claude", "writer", "user-prompt-submit.sh", prompt=notification("done"),
+                  transcript_path=str(transcript))
+        append({"type": "queue-operation", "operation": "enqueue", "content": notification("done")})
+        delivered("done", "prompt")
+        self.assertEqual(self.hook("claude", "writer", "pre-tool-use.sh", **read).get("decision"), "block")
+        self.assertEqual(self.row("claude", "writer")["status"], "pending")
+        with self.assertRaisesRegex(SessionError, "unfinished"):
+            self.store.bind("claude", "writer", "task-a")
+
     def test_terminal_error_reconciliation_keeps_new_generations_and_bounds_reads(self):
         import hashlib
         from session_runtime import reconcile_tool_results

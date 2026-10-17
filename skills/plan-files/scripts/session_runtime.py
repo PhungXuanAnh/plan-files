@@ -242,6 +242,67 @@ concurrent reclaim/new generation cannot be modified by this reconciliation.
         return
 
 
+def retire_notified_receipts(store, provider: str, session: str, path: str) -> None:
+    """Retire background receipts whose task has a terminal host notification."""
+    from session_state import SessionError, atomic_text
+    from tool_results import finished_tasks
+    file = store.route(provider, session)
+    try:
+        with store.lock():
+            snapshot = store.tools(file)
+    except (SessionError, OSError):
+        return  # Keep receipts for the read-only diagnosis and explicit recovery routes.
+    if not any(key.startswith("background:") for key in snapshot):
+        return
+    finished = {"background:" + hashlib.sha256(f"shell:{task}".encode()).hexdigest()
+                for task in finished_tasks(provider, session, path)}
+    try:
+        with store.lock():
+            pending = store.tools(file)
+            remaining = {key: generation for key, generation in pending.items()
+                         if key not in finished or generation != snapshot.get(key)}
+            if remaining != pending:
+                atomic_text(file.with_suffix(".tools"), json.dumps(remaining))
+    except (SessionError, OSError):
+        return
+
+
+def reconcile_notifications(store, provider: str, session: str, payload: dict) -> None:
+    """Apply Claude's host-queued task notifications, never their prompt text.
+
+    A finished notice retires its background receipt. A lease kept for a
+    notification-only prompt is confirmed by that prompt's host record, else suspended.
+    """
+    from session_state import SessionError, atomic_text
+    from tool_results import host_notified
+    if provider != "claude":
+        return
+    file = store.route(provider, session)
+    if not file.exists():
+        return
+    path = payload.get("transcript_path", "")
+    retire_notified_receipts(store, provider, session, path)
+    try:
+        with store.lock():
+            row = store.read(file)
+    except (SessionError, OSError):
+        return  # Unreadable state is rejected by every route that reads it.
+    if not row.get("notice"):
+        return
+    verified = all(host_notified(provider, session, path, notice) for notice in row["notice"].split(","))
+    # A lease kept unverified must not survive a failed update: errors
+    # propagate, and the lifecycle then blocks PreTool.
+    with store.lock():
+        current = store.read(file)
+        if current.get("generation") != row.get("generation") or not current.get("notice"):
+            return
+        if verified and current["notice"] == row["notice"]:
+            del current["notice"]
+            atomic_text(file, "".join(f"{key}={value}\n" for key, value in current.items()))
+        else:
+            store.suspend(file, current, current.get("task") or current.get("associated", ""))
+
+
 def begin_collection(store, provider: str, session: str, payload: dict, *, preview: bool = False) -> bool:
     """Read results of this session's existing job even across prompt routing.
 

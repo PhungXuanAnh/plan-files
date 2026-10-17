@@ -279,19 +279,32 @@ class SessionStore:
                 "Do not retry bind. If those sessions may be closed, ask the user; only with their "
                 f"authorization run the bind adapter with: reclaim {task} --reason \"user confirmed the other sessions are closed\"")
 
-    def pending(self, provider: str, session: str, preferred: str = "", turn: str = "") -> str:
+    def pending(self, provider: str, session: str, preferred: str = "", turn: str = "", notice: str = "") -> str:
         file = self.route(provider, session)
         with self.lock():
             row = self.read(file)
+            if notice and provider == "claude" and row.get("status") in {"owned", "discussing"}:
+                # A task notification is not a user prompt. Claude records its origin
+                # after this hook returns, so the next lifecycle event verifies it.
+                calls = set(notice.split(","))
+                if row.get("notice"):
+                    calls |= set(row["notice"].split(","))
+                row["notice"] = ",".join(sorted(calls))
+                atomic_text(file, "".join(f"{key}={value}\n" for key, value in row.items()))
+                return ""
             candidate = row.get("task") or row.get("candidate") or row.get("associated", "")
             if not candidate and preferred:
                 self.task_path(preferred)
                 candidate = preferred
-            # Even an empty pending row identifies a prompt without opting in.
-            self.write(file, "pending", task=row.get("task", ""), candidate=candidate,
-                       associated=candidate, turn=turn or row.get("turn", ""),
-                       **{key: row[key] for key in ("runtime", "seen") if key in row})
+            self.suspend(file, row, candidate, turn)
             return candidate
+
+    def suspend(self, file: Path, row: dict, candidate: str, turn: str = "") -> None:
+        """Caller holds the routing lock; a new prompt routes before it acts."""
+        # Even an empty pending row identifies a prompt without opting in.
+        self.write(file, "pending", task=row.get("task", ""), candidate=candidate,
+                   associated=candidate, turn=turn or row.get("turn", ""),
+                   **{key: row[key] for key in ("runtime", "seen") if key in row})
 
     def claim(self, provider: str, session: str, task: str, *, preview: bool = False,
               creating: bool = False, finalize: bool = False, event: str = "", turn: str = "") -> str:
@@ -657,7 +670,8 @@ def main(argv=None) -> int:
         provider, session = args[:2]
         file = store.route(provider, session)
         if op == "pending":
-            output = store.pending(provider, session, args[2] if len(args) > 2 else "", os.environ.get("PWF_TURN_ID", ""))
+            output = store.pending(provider, session, args[2] if len(args) > 2 else "", os.environ.get("PWF_TURN_ID", ""),
+                                   os.environ.get("PWF_NOTICE", ""))
         elif op in {"claim", "reserve", "created"}:
             output = store.claim(provider, session, args[2], preview="--dry-run" in args,
                                  creating=op == "reserve", finalize=op == "created",
