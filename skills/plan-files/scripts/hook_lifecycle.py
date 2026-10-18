@@ -37,8 +37,14 @@ def main() -> int:
             observed = (datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp()
                         if isinstance(timestamp, str) else timestamp / 1000
                         if isinstance(timestamp, (int, float)) else None)
+            exit_reasons = []
+            if len(arguments) == 2 and arguments[0] == "--native-tools-stopped-on":
+                exit_reasons = arguments[1].split(",")
+            native_tools_stopped = (payload.get("hook_event_name") == "SessionEnd"
+                                    and payload.get("reason") in exit_reasons)
             store.yield_turn(provider, session, row.get("generation", "legacy"), ending=True,
-                             turn=turn_id(payload), observed=observed)
+                             turn=turn_id(payload), observed=observed, runtime=runtime,
+                             native_tools_stopped=native_tools_stopped)
         print("{}")
         return 0
     if event == "post" and enabled:

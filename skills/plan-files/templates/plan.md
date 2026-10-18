@@ -1,6 +1,7 @@
 # Plan: [Brief Description]
 <!-- Private runtime file. Session hooks add local Git excludes when the project root has a .git directory. -->
 <!-- One task has one executor; idle resume associations do not reserve it. Bind/restore via .sessions/. Do not select it by rewriting .plan-files. -->
+<!-- Normal Codex/Claude exit reconciles tracked native tools and releases execution automatically. An unknown/legacy receipt still needs completion evidence or authorized recovery. -->
 <!-- New plans use plan.md; existing tasks.md plans retain the same format and behavior. -->
 <!-- Trusted hot state. Keep at most 300 lines, 24 KiB, 12 hot phase headings, ~100 visible items, and 15 items/4 KiB in Current Phase. -->
 

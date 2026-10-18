@@ -451,7 +451,8 @@ class SessionStore:
             return f"planning session {verb}: {task}; other sessions and workspace marker unchanged"
 
     def yield_turn(self, provider: str, session: str, generation: str, *, ending: bool = False,
-                   turn: str = "", observed: float | None = None) -> None:
+                   turn: str = "", observed: float | None = None, runtime: str = "",
+                   native_tools_stopped: bool = False) -> None:
         """Release only the inspected generation; never edit plan progress."""
         file = self.route(provider, session)
         if not file.exists():
@@ -466,6 +467,16 @@ class SessionStore:
                 return
             if observed is not None and observed < float(row.get("updated", "0")):
                 return  # A delayed event created before the current generation.
+            if runtime and row.get("runtime") and runtime != row["runtime"]:
+                return
+            if ending and native_tools_stopped and runtime and runtime == row.get("runtime"):
+                from session_runtime import native_tools, remember_native_tools
+                pending = self.tools(file)
+                native = native_tools(file)
+                remaining = {key: value for key, value in pending.items() if native.get(key) != value}
+                if remaining != pending:
+                    atomic_text(file.with_suffix(".tools"), json.dumps(remaining))
+                    remember_native_tools(file, remaining, native)
             if self.busy(file):
                 from tool_recovery import recovery_guidance
                 raise SessionError("unfinished tools still hold execution authority; collect their results before stopping"

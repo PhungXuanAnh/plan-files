@@ -1,7 +1,9 @@
 """Execution leases end independently of persistent plan progress and association."""
+import io
 import json
 import os
 import shlex
+from contextlib import redirect_stdout
 from pathlib import Path
 import subprocess
 import sys
@@ -63,7 +65,7 @@ P1.1
             name = "user-prompt-transformed.py"
             payload["transformedPrompt"] = payload.get("prompt", "")
         env = {**os.environ, "PWF_PROJECT_ROOT": str(self.root), "PWF_SESSION_ADAPTER": provider,
-               "PWF_SESSION_ID": session, "GROK_SESSION_ID": session}
+               "PWF_SESSION_ID": session, "GROK_SESSION_ID": session, "CLAUDE_PROJECT_DIR": ""}
         env.pop("PLANNING_DISABLED", None)
         result = subprocess.run([sys.executable if name.endswith(".py") else "bash", str(adapter / name)], cwd=self.root, env=env,
                                 input=json.dumps(payload), text=True, capture_output=True, check=True)
@@ -194,6 +196,92 @@ P1.1
         self.assertEqual(self.hook("claude", "receiver", "post-tool-use.sh", **payload,
                                    hook_event_name="PermissionDenied"), {})
         self.assertFalse(self.store.busy(self.store.route("claude", "receiver")))
+
+    def test_native_exit_drains_abandoned_receipts_before_releasing_execution(self):
+        from hook_lifecycle import main
+        from session_runtime import turn_id
+
+        for provider, tool, reason in (("codex", "exec_command", "other"), ("claude", "Bash", "prompt_input_exit")):
+            with self.subTest(provider=provider), patch("session_runtime.runtime_identity", return_value="native-runtime"):
+                self.store.pending(provider, "writer", "task-a", turn=turn_id({"turn_id": "current"}))
+                self.store.bind(provider, "writer", "task-a")
+                file = self.store.route(provider, "writer")
+                launch = {"tool_name": tool, "tool_use_id": "launch", "tool_input": {"command": "make test"}}
+                begin_tool(self.store, provider, "writer", launch)
+                end_tool(self.store, provider, "writer", {**launch, "tool_response": {
+                    "backgroundTaskId" if provider == "claude" else "session_id": "job"}})
+                begin_tool(self.store, provider, "writer", {**launch, "tool_use_id": "missing-result"})
+                begin_tool(self.store, provider, "writer", {"tool_name": "Write", "tool_use_id": "write",
+                                                           "tool_input": {"file_path": str(self.root / "output")}})
+                self.assertEqual(len(self.store.tools(file)), 3)
+                with self.assertRaises(SessionError):
+                    self.store.bind("copilot", "receiver", "task-a")
+                before = self.plan.read_bytes()
+                row = self.row(provider, "writer")
+                # Stale closes and another runtime must not drain any receipt.
+                for fence in ({"observed": 0}, {"turn": "old"}, {"runtime": "other-runtime"}):
+                    options = {"ending": True, "native_tools_stopped": True, "runtime": "native-runtime", **fence}
+                    self.store.yield_turn(provider, "writer", row["generation"], **options)
+                    self.assertEqual(len(self.store.tools(file)), 3)
+                self.store.yield_turn(provider, "writer", "old-generation", ending=True,
+                                      runtime="native-runtime", native_tools_stopped=True)
+                self.assertEqual(len(self.store.tools(file)), 3)
+
+                payload = {"session_id": "writer", "hook_event_name": "SessionEnd", "reason": reason}
+                args = ["hook_lifecycle.py", "end", provider, "--native-tools-stopped-on", reason]
+                # Claude may exit after cwd drift; the workspace marker still resolves its plan.
+                nested = self.root / "subfolder"
+                nested.mkdir(exist_ok=True)
+                env = {"PWF_PROJECT_ROOT": str(nested), "CLAUDE_PROJECT_DIR": str(self.root), "PLANNING_DISABLED": "0"}
+                with patch.dict(os.environ, env), \
+                        patch.object(sys, "argv", args), patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), \
+                        redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(main(), 0)
+                self.assertEqual(json.loads(output.getvalue()), {})
+                self.assertFalse(self.store.busy(file))
+                self.assertEqual(self.row(provider, "writer")["status"], "idle")
+                self.assertEqual(self.plan.read_bytes(), before)
+                self.store.bind("copilot", "receiver", "task-a")
+                self.store.transition("copilot", "receiver", "handoff", "task-a")
+
+    def test_exit_preserves_unknown_tools_and_nonterminal_session_events(self):
+        from hook_lifecycle import main
+        with patch("session_runtime.runtime_identity", return_value="native-runtime"):
+            self.store.bind("claude", "writer", "task-a")
+            file = self.store.route("claude", "writer")
+            for call, tool in (("shell", "Bash"), ("remote", "mcp__server__Write")):
+                begin_tool(self.store, "claude", "writer", {"tool_name": tool, "tool_use_id": call,
+                                                           "tool_input": {"command": "run work"}})
+            # A legacy receipt has no native lifetime evidence.
+            pending = self.store.tools(file)
+            pending["legacy"] = self.row("claude", "writer")["generation"]
+            file.with_suffix(".tools").write_text(json.dumps(pending))
+            for reason in ("clear", "resume", "unknown"):
+                args = ["hook_lifecycle.py", "end", "claude", "--native-tools-stopped-on", "prompt_input_exit,logout,other"]
+                payload = {"session_id": "writer", "hook_event_name": "SessionEnd", "reason": reason,
+                           "native_tools_stopped": True}  # An input field cannot grant a capability.
+                env = {"PWF_PROJECT_ROOT": str(self.root), "CLAUDE_PROJECT_DIR": "", "PLANNING_DISABLED": "0"}
+                with patch.dict(os.environ, env), \
+                        patch.object(sys, "argv", args), patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), \
+                        redirect_stdout(io.StringIO()):
+                    with self.assertRaisesRegex(SessionError, "unfinished tools"):
+                        main()
+                self.assertEqual(self.store.tools(file), pending)
+            row = self.row("claude", "writer")
+            native_file = file.with_suffix(".native-tools")
+            saved_native = native_file.read_text()
+            for invalid in ("{}", "{broken", json.dumps({key: "old-generation" for key in pending})):
+                native_file.write_text(invalid)
+                with self.assertRaisesRegex(SessionError, "unfinished tools"):
+                    self.store.yield_turn("claude", "writer", row["generation"], ending=True,
+                                          runtime="native-runtime", native_tools_stopped=True)
+                self.assertEqual(self.store.tools(file), pending)
+            native_file.write_text(saved_native)
+            with self.assertRaisesRegex(SessionError, "unfinished tools"):
+                self.store.yield_turn("claude", "writer", row["generation"], ending=True,
+                                      runtime="native-runtime", native_tools_stopped=True)
+            self.assertEqual(len(self.store.tools(file)), 2)
+            self.assertEqual(self.row("claude", "writer")["status"], "owned")
 
     def test_native_background_results_hold_authority_until_collected(self):
         self.store.bind("codex", "writer", "task-a")

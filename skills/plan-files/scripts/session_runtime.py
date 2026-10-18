@@ -107,6 +107,33 @@ def is_helper(payload: dict) -> bool:
     return False
 
 
+def native_tools(file: Path) -> dict:
+    """Generation-matched receipts for tools stopped by the host at exit."""
+    try:
+        receipts = json.loads(file.with_suffix(".native-tools").read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(receipts, dict):
+        return {}
+    return {key: generation for key, generation in receipts.items()
+            if isinstance(key, str) and isinstance(generation, str)}
+
+
+def remember_native_tools(file: Path, pending: dict, receipts: dict) -> None:
+    from session_state import atomic_text
+    current = {key: generation for key, generation in receipts.items()
+               if pending.get(key) == generation}
+    atomic_text(file.with_suffix(".native-tools"), json.dumps(current))
+
+
+def native_tool(payload: dict) -> bool:
+    name = str(payload.get("tool_name") or payload.get("toolName") or "")
+    if name.startswith("functions."):
+        name = name.removeprefix("functions.")
+    return name.lower() in {"bash", "exec_command", "write_stdin", "apply_patch",
+                            "edit", "write", "multiedit", "notebookedit"}
+
+
 def background_result(payload: dict) -> tuple[str, bool]:
     """Recognize native asynchronous shell handles; never infer completion from age."""
     name = str(payload.get("tool_name") or payload.get("toolName") or "").rsplit(".", 1)[-1].lower()
@@ -330,11 +357,15 @@ def begin_collection(store, provider: str, session: str, payload: dict, *, previ
             return False
         store.exclusive(file, row["task"])
         if not preview:
+            native = native_tools(file)
             if key.startswith("anonymous:"):
                 pending.setdefault(key, []).append(pending[background])
             else:
                 pending[key] = pending[background]
+                if native.get(background) == pending[background]:
+                    native[key] = pending[key]
             atomic_text(file.with_suffix(".tools"), json.dumps(pending))
+            remember_native_tools(file, pending, native)
         return True
 
 
@@ -380,6 +411,11 @@ def begin_tool(store, provider: str, session: str, payload: dict, *, preview: bo
             else:
                 pending[key] = row.get("generation", "legacy")
             atomic_text(file.with_suffix(".tools"), json.dumps(pending))
+            native = native_tools(file)
+            native.pop(key, None)
+            if native_tool(payload) and isinstance(pending[key], str):
+                native[key] = pending[key]
+            remember_native_tools(file, pending, native)
 
 
 def end_tool(store, provider: str, session: str, payload: dict) -> bool:
@@ -391,6 +427,7 @@ def end_tool(store, provider: str, session: str, payload: dict) -> bool:
         row = store.read(file)
         task = row.get("task") or row.get("associated")
         pending = store.tools(file)
+        native = native_tools(file)
         key = tool_key(payload)
         generation = pending.get(key)
         if isinstance(generation, list):
@@ -403,10 +440,13 @@ def end_tool(store, provider: str, session: str, payload: dict) -> bool:
         if background:
             if running and generation is not None:
                 pending[background] = generation
+                if native.get(key) == generation:
+                    native[background] = generation
             elif not running and generation is not None and pending.get(background) == generation:
                 pending.pop(background, None)
         if generation is not None or background:
             atomic_text(file.with_suffix(".tools"), json.dumps(pending))
+            remember_native_tools(file, pending, native)
         if generation == row.get("generation", "legacy") and task:
             if store.task_path(task, exists=False).exists():
                 store.remember_read(file, task)
