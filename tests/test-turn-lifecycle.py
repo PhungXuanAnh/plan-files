@@ -116,6 +116,8 @@ P1.1
                 self.assertEqual(self.store.resolve(provider, reader), str(self.directory))
                 payload = {"tool_name": "Write", "tool_use_id": "write-1",
                            "tool_input": {"file_path": str(self.directory / "findings.md"), "content": "new"}}
+                if provider == "claude":
+                    payload["agent_id"] = "helper"  # Only a subagent call can still run at Claude's Stop.
                 with self.assertRaises(SessionError):
                     begin_tool(self.store, provider, reader, payload)
                 self.store.transition(provider, writer, "handoff", "task-a")
@@ -440,18 +442,20 @@ P1.1
         self.store.bind("claude", "writer", "task-a")
         self.assertEqual(self.row("claude", "writer")["status"], "owned")
 
-        # A missed terminal error can be repaired at Stop, but missing evidence
-        # and genuine background receipts must keep the reservation.
-        begin_tool(self.store, "claude", "writer", {**payload, "tool_use_id": "failed"})
+        # Main-thread Stop follows every synchronous result, so it retires a call the
+        # host dropped without any record; subagent calls and background jobs stay.
+        subagent = {**payload, "tool_use_id": "subagent-call", "agent_id": "helper"}
+        begin_tool(self.store, "claude", "writer", {**payload, "tool_use_id": "dropped"})
+        begin_tool(self.store, "claude", "writer", subagent)
         begin_tool(self.store, "claude", "writer", {**payload, "tool_use_id": "launched"})
         end_tool(self.store, "claude", "writer", {**payload, "tool_use_id": "launched",
                                                  "tool_response": {"backgroundTaskId": "live-job"}})
         self.pause()
+        self.hook("claude", "writer", "agent-stop.sh", transcript_path=str(self.root / "missing.jsonl"), agent_id="helper")
+        self.assertEqual(len(self.store.tools(file)), 3)
         self.hook("claude", "writer", "agent-stop.sh", transcript_path=str(self.root / "missing.jsonl"))
-        self.assertEqual(len(self.store.tools(file)), 2)
-        with transcript.open("a") as stream:
-            stream.write(json.dumps(result("failed")) + "\n")
-        self.hook("claude", "writer", "agent-stop.sh", transcript_path=str(transcript))
+        self.assertEqual(sorted(key.split(":")[0] for key in self.store.tools(file)), ["agent", "background"])
+        end_tool(self.store, "claude", "writer", subagent)
         self.assertEqual(len(self.store.tools(file)), 1)
         self.assertTrue(self.store.owners("task-a"))
         self.assertEqual(self.hook("claude", "writer", "agent-stop.sh", transcript_path=str(transcript),

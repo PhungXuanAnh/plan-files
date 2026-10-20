@@ -30,14 +30,21 @@ STATUSES = {"pending", "owned", "creating", "waiting", "discussing", "idle", "in
 TASK_RE = re.compile(r"[A-Za-z0-9._-]+\Z")
 PROVIDER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 SESSION_RE = re.compile(r"[A-Za-z0-9._:-]{1,240}\Z")
-# Codex emits no PostToolUse for failed calls; its end-of-turn Stop retires them.
+# Calls that end without a post event are retired by the host's end-of-turn Stop.
 CODEX_TURN_END_HINT = ("; Codex sends no PostToolUse for a call that failed (for example apply_patch verification): "
                        "end this reply so the current turn's Stop retires it, then follow the next routing guidance. "
                        "Collect any native background job first")
+CLAUDE_TURN_END_HINT = ("; Claude can run PreToolUse for a call it then drops without a result, and reports background "
+                        "completion through its Stop registry: end this reply so Stop retires them, then follow the "
+                        "next routing guidance")
 
 
 class SessionError(ValueError):
     pass
+
+
+def turn_end_hint(provider: str) -> str:
+    return {"codex": CODEX_TURN_END_HINT, "claude": CLAUDE_TURN_END_HINT}.get(provider, "")
 
 
 def valid_task(task: str) -> bool:
@@ -363,11 +370,8 @@ class SessionStore:
                 raise SessionError("planning lease is already owned; use resolve instead of binding again")
             if self.busy(file):
                 from tool_recovery import recovery_guidance
-                guidance = ("; if Claude already delivered automatic completion, let Stop reconcile its native "
-                            "background registry, then follow the new routing guidance" if provider == "claude"
-                            else CODEX_TURN_END_HINT if provider == "codex" else "")
-                raise SessionError("collect unfinished tools before binding a new execution generation" + guidance
-                                   + recovery_guidance(self, provider, task))
+                raise SessionError("collect unfinished tools before binding a new execution generation"
+                                   + turn_end_hint(provider) + recovery_guidance(self, provider, task))
             self.recover_dead(task)
             self.exclusive(file, task)
             from session_runtime import runtime_identity
@@ -430,8 +434,7 @@ class SessionStore:
                 raise SessionError("planning lease is not pending; use handoff to relinquish owned work")
             if verb == "discuss":
                 if self.busy(file):
-                    raise SessionError("unfinished tools must complete before entering discussion"
-                                       + (CODEX_TURN_END_HINT if provider == "codex" else ""))
+                    raise SessionError("unfinished tools must complete before entering discussion" + turn_end_hint(provider))
                 view = self.current_view(task)
                 self.write(file, "discussing", associated=task, seen=self.snapshot(task), turn=row.get("turn", ""))
                 return f"planning discussion only: {task}; execution needs a new prompt bind or bind --reason\nCurrent plan:\n{view}"
@@ -444,7 +447,7 @@ class SessionStore:
             if self.busy(file):
                 from tool_recovery import recovery_guidance
                 raise SessionError("unfinished tools must complete before relinquishing this task"
-                                   + recovery_guidance(self, provider, task))
+                                   + turn_end_hint(provider) + recovery_guidance(self, provider, task))
             self.write(file, "inactive", last_task=task,
                        associated=task if verb == "handoff" else "")
             # Never unlink lock files; another process may still hold that inode.

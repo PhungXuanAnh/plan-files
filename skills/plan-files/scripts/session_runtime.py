@@ -89,7 +89,9 @@ def turn_id(payload: dict) -> str:
 def tool_key(payload: dict) -> str:
     event = event_id(payload)
     if event:
-        return hashlib.sha256(event.encode()).hexdigest()
+        key = hashlib.sha256(event.encode()).hexdigest()
+        # Claude subagents can outlive the main turn, so its Stop must not retire their calls.
+        return "agent:" + key if payload.get("agent_id") else key
     if not payload.get("timestamp"):
         return ""  # Legacy hosts lacking both correlation and lifecycle metadata.
     module = classifier()
@@ -202,17 +204,23 @@ def reconcile_background(store, provider: str, session: str, payload: dict) -> N
 
 
 def reconcile_turn_end(store, provider: str, session: str, payload: dict) -> None:
-    """Retire synchronous receipts at Codex's native end-of-turn Stop.
+    """Retire synchronous receipts at the native end-of-turn Stop.
 
     Codex has no failure event: a call that fails (apply_patch verification,
     sibling-hook denial) gets PreToolUse only, and nested exec-* ids are absent
-    from its rollout. Its Stop runs after the model received every synchronous
+    from its rollout. Claude can run PreToolUse for a streamed call that it then
+    discards, so neither the call nor its result reaches the transcript. Both
+    hosts run the main-thread Stop after the model received every synchronous
     result of the turn, and a session runs one turn at a time. Native async
-    handles stay outstanding until collected; other providers keep their events.
+    handles and Claude subagent calls stay outstanding.
     """
     from session_state import atomic_text
     turn = turn_id(payload)
-    if provider != "codex" or not turn:
+    if provider == "codex" and turn:
+        kept = ("background:",)
+    elif provider == "claude" and not payload.get("agent_id"):
+        kept = ("background:", "agent:")
+    else:
         return
     file = store.route(provider, session)
     if not file.exists():
@@ -221,13 +229,13 @@ def reconcile_turn_end(store, provider: str, session: str, payload: dict) -> Non
         row = store.read(file)
         # Codex awaits Stop hooks before starting another turn. A recorded turn
         # still fences foreign Stops; rows created mid-turn may lack one.
-        if row.get("turn") and row["turn"] != turn:
+        if turn and row.get("turn") and row["turn"] != turn:
             return
         runtime = runtime_identity()
         if row.get("runtime") and runtime and row["runtime"] != runtime:
             return
         pending = store.tools(file)
-        remaining = {key: value for key, value in pending.items() if key.startswith("background:")}
+        remaining = {key: value for key, value in pending.items() if key.startswith(kept)}
         if remaining != pending:
             atomic_text(file.with_suffix(".tools"), json.dumps(remaining))
 

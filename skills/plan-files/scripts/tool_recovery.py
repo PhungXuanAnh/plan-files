@@ -51,7 +51,7 @@ def recover(store, provider: str, session: str, task: str, command: str, *,
         attempts = metadata(file)
         matches = [{"receipt": key, "generation": value}
                    for key, value in pending.items() if isinstance(value, str)
-                   and ":" not in key and attempts.get(key) == {
+                   and not key.startswith(("anonymous:", "background:")) and attempts.get(key) == {
                        "generation": value, "command_sha256": digest}]
         if not receipt:
             return json.dumps({"schema_version": 1, "matches": matches[:16],
