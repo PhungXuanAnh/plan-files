@@ -90,6 +90,23 @@ Use P ids for work and V ids for phase acceptance:
 
 The immediate checkpoint barrier applies when the observable outcome becomes true, not at phase end. Use `plan_checkpoint.py` instead of editing checkbox/status/current pointers independently.
 
+## Handoff outputs
+
+`## Outputs` follows `## Phases` and lists only results someone will use after the task: a PR, a repo and branch, a final report, a deployed URL. Drafts, logs, and experiments stay in the task folder and may be cited from `findings.md`.
+
+```markdown
+## Outputs
+- Phase 1 — Research report: artifacts/research-report.md
+- Task — PR: https://github.com/org/repo/pull/123 (org/repo, branch feature/search)
+```
+
+- Each line is `- <Task | Phase N> — <result>: <location>`; `—`, `–`, or `-` may separate the scope.
+- A file location is relative to the task folder. A branch names its repository.
+- Use `- None yet.` before any output exists.
+- Record stable identifiers only. Volatile state such as CI results stays in Verification with its freshness rules.
+- Anchors name what the task is about, such as a ticket or an existing PR under review. A PR the task opens belongs in Outputs.
+- Replace a superseded result with `entry-replace`; its earlier reference survives in item evidence or `history.md`.
+
 The new-plan template starts with one phase and task-specific work/acceptance outcomes. Expand it only for meaningful work boundaries. For a new phase, `phase-add --item ... --verify ... --start` creates its outcomes and execution pointers together; do not first mark an empty phase in_progress.
 
 ## Restore semantics
@@ -106,4 +123,4 @@ Timezone-aware ISO-8601 timestamps and a positive window are required. Expired e
 
 ## Settlement
 
-An explicit discussion/clarification lease may yield without claiming completion; text-only pending turns may also yield before attempted work requires routing. During execution, Stop blocks malformed or actionable plans. Finalization requires every phase settled, no Active Item, truthful status/evidence, and current restore/freshness checks. Fully complete work releases its own session lease; blocked/deferred work may be explicitly parked and retains its resume association after Stop releases execution. Workspace marker contents never determine finalizability.
+An explicit discussion/clarification lease may yield without claiming completion; text-only pending turns may also yield before attempted work requires routing. During execution, Stop blocks malformed or actionable plans. Finalization requires every phase settled, no Active Item, truthful status/evidence, and current restore/freshness checks. When a plan has `## Outputs` and every phase is complete, Profile A also needs a Task output with an `http(s)://` URL (`OUTPUT_PR_MISSING`) and Profile C a Task output (`OUTPUT_DELIVERABLE_MISSING`). Profile B, blocked/deferred pauses, and plans without the section are not checked. Fully complete work releases its own session lease; blocked/deferred work may be explicitly parked and retains its resume association after Stop releases execution. Workspace marker contents never determine finalizability.

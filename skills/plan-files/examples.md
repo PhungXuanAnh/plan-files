@@ -49,9 +49,12 @@ P2.1
 **Done when:**
 - [ ] [V3.1] `pytest tests/auth` passes.
   - Evidence: pending
+
+## Outputs
+- Phase 1 — Reproduction notes: artifacts/login-repro.md
 ```
 
-Only current/incomplete work stays detailed. The completed phase retains its heading and status because its evidence has moved to history.
+Outputs grows as handoff results appear; after the PR opens, the agent appends `- Task — PR: https://github.com/org/auth/pull/88 (org/auth, branch fix/login-await)`. Profile A cannot finalize without that Task line. Only current/incomplete work stays detailed. The completed phase retains its heading and status because its evidence has moved to history.
 
 On a new prompt, ownership hooks expose a short candidate notice and Goal preview; a denied operational attempt supplies full Task Identity and routing recovery. A request to continue `AUTH-421` is `SAME`, so the agent binds; a report-performance request is `DIFFERENT` even if it touches the same auth module; only unclear wording requires a question. A purely textual answer needs no routing command.
 

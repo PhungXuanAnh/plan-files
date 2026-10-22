@@ -25,7 +25,7 @@ Session hooks add `tmp/*` and `.plan-files` to the project root's `.git/info/exc
 
 Only this layout and the [current tasks format](skills/plan-files/references/format-contract.md) are supported. The former `tmp/plan-with-files/` directory and `.plan-with-files` markers are ignored. Every plan requires `## Active Item`; every phase uses one `- **Status:**` body line, and every phase checkbox retains its ID and evidence, including completed work. Inline phase statuses are rejected.
 
-- `plan.md` is the single authoritative plan: task identity, goal, current phase, phases/items/evidence, concise progress, errors, and verification. Its maintenance ceiling is 300 lines/24 KiB, 12 phases, about 100 visible items, and 15 items/4 KiB in Current Phase.
+- `plan.md` is the single authoritative plan: task identity, goal, current phase, phases/items/evidence, handoff outputs, concise progress, errors, and verification. `## Outputs` names each phase and task result (PR, branch, report, deployed URL) and where to find it; Profile A cannot finalize without the PR URL there, nor Profile C without its deliverable. Its maintenance ceiling is 300 lines/24 KiB, 12 phases, about 100 visible items, and 15 items/4 KiB in Current Phase.
 - `findings.md` stores research, discoveries, and untrusted external content.
 - `decisions.md` stores user decisions, changed direction, superseded choices, and open decision questions.
 - `history.md` stores trusted completed-work summaries and is read only when needed.

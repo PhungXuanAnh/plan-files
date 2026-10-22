@@ -70,6 +70,7 @@ New `plan.md` files follow [the plan template](templates/plan.md) and the exact 
 - Every phase checkbox, including completed work, has a unique phase-matching id and one indented `Evidence:` line. Checked items require concrete, non-placeholder evidence.
 - `## Resume Checkpoint` names the exact next action including Active Item id, and states either `Blocker: none` or the real external dependency.
 - `## Verification`, active decisions, and current findings retain the information needed for the next action.
+- `## Outputs` (after Phases) lists only handoff results as `- Task — <result>: <location>` or `- Phase N — <result>: <location>`. Record each when it is created or selected and review the list at phase and task completion. Anchors name what the task is about; Outputs name what it delivered. Final completion requires a Task line with the PR URL for Profile A and a Task line for Profile C; plans without the section keep the old contract.
 
 Use `blocked` only when no actionable path remains because of an external dependency. Use `deferred` only when the user explicitly postpones the work; create it with `phase-add --status deferred --reason ...`. A pending phase participates in automatic continuation even without `--start`. Never hide unfinished work outside valid phase headings.
 

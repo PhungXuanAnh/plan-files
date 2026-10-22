@@ -350,6 +350,7 @@ ALLOWED_SECTIONS: dict[str, set[str]] = {
         "Progress Notes",
         "Errors Encountered",
         "Files Touched",
+        "Outputs",
         "History",
     },
     "decisions.md": {"Active Decisions", "Superseded Decisions", "Open Decision Questions"},
@@ -359,6 +360,8 @@ ALLOWED_SECTIONS: dict[str, set[str]] = {
 }
 
 ALLOWED_SECTIONS["tasks.md"] = ALLOWED_SECTIONS["plan.md"]
+
+COLD_ARCHIVE_NONE_RE = re.compile(r"- Cold archive:\s*none\b.*", re.IGNORECASE)
 
 HISTORY_TEMPLATE = """# History
 <!-- Optional trusted cold archive. Do not auto-read. Never store external/untrusted content here. -->
@@ -596,6 +599,16 @@ def _set_phase_high_water(lines: list[str], phase_num: int) -> list[str]:
     return result
 
 
+def _link_cold_archive(lines: list[str]) -> list[str]:
+    """Point the plan's History section at history.md once an archive writes it."""
+    result = list(lines)
+    for index, line in enumerate(result):
+        if COLD_ARCHIVE_NONE_RE.fullmatch(line.strip()):
+            result[index] = "- Cold archive: [history.md](history.md)"
+            break
+    return result
+
+
 def _retired_item_ids(lines: list[str]) -> set[str]:
     return set(re.findall(r"Retired\s+([PV]\d+\.\d+)", "\n".join(lines)))
 
@@ -650,6 +663,8 @@ def _phase_add(
             )
         blocks = [(num, value) for num, value in blocks if num != archived.num]
     lines = _set_phase_high_water(_replace_phase_blocks(state.lines, state, blocks), new_num)
+    if archived is not None:
+        lines = _link_cold_archive(lines)
     return lines, {"phase": new_num, "archived_phase": archived.num if archived else None}, archived
 
 
@@ -1674,7 +1689,7 @@ def _archive_complete_phase(args, state, phase, old_fingerprint: str) -> dict[st
     lines = list(state.lines)
     del lines[phase.heading_index : phase.end_index]
     lines = _set_phase_high_water(lines, max(candidate.num for candidate in state.phases))
-    tasks_candidate = _text(lines)
+    tasks_candidate = _text(_link_cold_archive(lines))
     usage, _ = _preflight(args.plan, tasks_candidate)
     transaction_id = None
     if not args.dry_run:
@@ -1732,7 +1747,7 @@ def _archive_entry(args, old_fingerprint: str) -> dict[str, object]:
     tasks_lines = args.plan.read_text(encoding="utf-8").splitlines()
     source_start, source_end = _find_entry(tasks_lines, args.source_section, args.entry)
     tasks_lines[source_start:source_end] = []
-    tasks_candidate = _text(tasks_lines)
+    tasks_candidate = _text(_link_cold_archive(tasks_lines))
     usage, _ = _preflight(args.plan, tasks_candidate)
     marker_hash = hashlib.sha256(f"{args.source_section}\n{args.entry}".encode("utf-8")).hexdigest()[:16]
     marker = f"<!-- Archived {args.source_section}: {marker_hash} -->"

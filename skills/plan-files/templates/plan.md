@@ -13,7 +13,7 @@
 <!-- Keep this deterministic and concise; session-owned hooks expose it before binding. -->
 <!-- Update scope after explicit user authorization within this same plan; other Non-goals remain in force. -->
 - Deliverable: [specific result this task owns]
-- Anchors: [ticket, PR, task id, or other stable identifiers; `none` if absent]
+- Anchors: [ticket, existing PR, task id, or other stable identifiers this task is about; `none` if absent]
 - Non-goals: [nearby work that must not be mistaken for this task]
 
 ## Current Phase
@@ -61,6 +61,10 @@ If a tool is rejected, retain its actual error evidence. An unresolved receipt d
 - [ ] [V1.1] [Exact acceptance check demonstrates the requested result]
   - Evidence: pending
 - **Status:** pending
+
+## Outputs
+<!-- Handoff results only, not drafts/logs: "- Task — <result>: <location>" or "- Phase N — <result>: <location>". Location is a path relative to this task folder, a URL, or repo + branch. Record when created/selected; review at phase and task completion. Finalization needs a Task line with the PR URL for Profile A, and a Task line for Profile C. Anchors name what the task is about; Outputs name what it delivered. -->
+- None yet.
 
 ## Key Questions
 1. [Question to answer]

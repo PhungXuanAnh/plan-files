@@ -24,6 +24,9 @@ STATUS_RE = re.compile(r"^- \*\*Status:\*\*\s+(complete|in_progress|pending|bloc
 SETTLED = {"complete", "blocked", "deferred"}
 PLACEHOLDER_EVIDENCE = {"", "pending", "none", "n/a", "todo", "tbd"}
 PLACEHOLDER_TEXT = {"", "-", "pending", "todo", "tbd", "n/a", "na", "unknown"}
+PROFILE_RE = re.compile(r"\*\*Profile:\*\*\s*([ABC])")
+TASK_OUTPUT_RE = re.compile(r"^- Task\s*[—–-]\s*\S", re.IGNORECASE)
+URL_RE = re.compile(r"https?://\S")
 
 
 def pointer_path(project_root: Path) -> Path:
@@ -901,6 +904,7 @@ def overview_payload(plan: Path, max_chars: int, total_max_chars: int = DEFAULT_
         "verification": (plan, "Verification"),
         "errors": (plan, "Errors Encountered"),
         "files_touched": (plan, "Files Touched"),
+        "outputs": (plan, "Outputs"),
         "active_decisions": (decisions, "Active Decisions"),
         "open_decision_questions": (decisions, "Open Decision Questions"),
         "findings_summary": (findings, "Current Summary"),
@@ -952,6 +956,7 @@ def overview_payload(plan: Path, max_chars: int, total_max_chars: int = DEFAULT_
         "errors",
         "files_touched",
         "verification",
+        "outputs",
         "active_decisions",
         "findings_summary",
         "task_identity",
@@ -1111,6 +1116,14 @@ ISSUE_EXPLANATIONS: dict[str, str] = {
     ),
     "PHASES_ACTIONABLE": "at least one phase is not yet complete, blocked, or deferred",
     "STATUS_LIES": "a phase is marked complete but still has an unchecked item beneath it",
+    "OUTPUT_PR_MISSING": (
+        'Profile A needs the handoff PR under "## Outputs": add a line such as '
+        '"- Task — PR: https://<host>/<repo>/pull/<n> (<repo>, branch <name>)"'
+    ),
+    "OUTPUT_DELIVERABLE_MISSING": (
+        'Profile C needs the final deliverable under "## Outputs": add a line such as '
+        '"- Task — <report>: <path relative to the task folder or URL>"'
+    ),
 
 }
 
@@ -1138,6 +1151,36 @@ def is_parked(state: PlanState) -> bool:
             and any(phase.status in {"blocked", "deferred"} for phase in state.phases))
 
 
+def _workflow_profile(lines: list[str]) -> str:
+    indices = _section_indices(lines, "## Workflow Profile")
+    if len(indices) != 1:
+        return ""
+    for line in _visible_body(lines, indices[0], _section_end(lines, indices[0])):
+        match = PROFILE_RE.fullmatch(line)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def output_issues(state: PlanState) -> list[str]:
+    """Profile A/C handoff checks for a fully complete plan that tracks Outputs."""
+    indices = _section_indices(state.lines, "## Outputs")
+    # Plans created before the Outputs section existed keep their old contract.
+    if len(indices) != 1:
+        return []
+    # Blocked/deferred work has not been handed off yet, so a pause never needs it.
+    if not state.phases or any(phase.status != "complete" for phase in state.phases):
+        return []
+    body = _visible_body(state.lines, indices[0], _section_end(state.lines, indices[0]))
+    task_outputs = [line for line in body if TASK_OUTPUT_RE.match(line)]
+    profile = _workflow_profile(state.lines)
+    if profile == "A" and not any(URL_RE.search(line) for line in task_outputs):
+        return ["OUTPUT_PR_MISSING"]
+    if profile == "C" and not task_outputs:
+        return ["OUTPUT_DELIVERABLE_MISSING"]
+    return []
+
+
 def finalizability_issues(state: PlanState, project_root: Path | None = None) -> list[str]:
     issues = list(state.issues)
     if not state.phases or any(phase.status not in SETTLED for phase in state.phases):
@@ -1146,6 +1189,7 @@ def finalizability_issues(state: PlanState, project_root: Path | None = None) ->
         issues.append("STATUS_LIES")
     if state.active_item:
         issues.append("ACTIVE_ITEM_INVALID")
+    issues.extend(output_issues(state))
     return list(dict.fromkeys(issues))
 
 

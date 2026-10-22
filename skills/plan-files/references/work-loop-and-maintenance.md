@@ -6,7 +6,7 @@ Read this reference when handling long waits, repeated failures, compaction, con
 
 Before a phase, read bounded overview and only the phase/decision/finding detail it lacks for the next action. Run restore-check for complete diagnostics when overview.restore.ok is false. Use checkpoint start (or phase-add with items and --start) to move Current Phase, Active Item, and status together. Do not load every planning file for one known edit.
 
-Give each phase executable acceptance outcomes. After meaningful work, keep verification, current errors, and touched files current. When an item becomes true, checkpoint immediately. A phase completes only after its acceptance outcomes pass.
+Give each phase executable acceptance outcomes. After meaningful work, keep verification, current errors, and touched files current. When a phase creates or selects a handoff result, add it to `## Outputs` right away (for example, immediately after opening the PR) and review that list when the phase completes. When an item becomes true, checkpoint immediately. A phase completes only after its acceptance outcomes pass.
 
 When Current Phase settles, advance to the next non-settled phase and continue in the same turn. Commentary may report progress; final output is only for terminal state. Completing one item or phase, updating Resume Checkpoint, or receiving a Stop continuation is not permission to stop.
 
@@ -53,7 +53,7 @@ Run `plan_state.py budgets` and use targeted operations. Never raw-truncate.
 6. Compress superseded decisions without losing rationale that explains the active choice.
 7. Split only independent follow-up work if the coherent hot state still cannot fit.
 
-Preserve Goal, Task Identity, current and unfinished phases, Active Item, exact next action/blocker, required checks, active decisions, relevant findings, and current file/error state. Never automatically archive pending, current, blocked, or deferred phases. Never delete evidenced work.
+Preserve Goal, Task Identity, Outputs, current and unfinished phases, Active Item, exact next action/blocker, required checks, active decisions, relevant findings, and current file/error state. Never automatically archive pending, current, blocked, or deferred phases. Never delete evidenced work.
 
 `history.md` stores concise trusted phase outcomes, verification evidence, resolved root causes, and durable references. Do not auto-read it or copy external content into it.
 
@@ -80,5 +80,5 @@ After all in-scope work settles:
 
 1. Complete the final item with current evidence and `--deactivate-pointer`. When every item is already checked — a plan that finished in an earlier turn without the flag — run `plan_checkpoint.py deactivate-pointer --project-root <root>` instead. For an intentional pause with blocked/deferred work and no actionable phases, use `plan_checkpoint.py park --reason ...` to retain a resume association for the next prompt; valid Stop releases exclusive execution. Write any handoff after parking. Neither command may hide actionable work. The compatibility deactivation name finishes only the current session; both leave the workspace marker and other sessions unchanged.
 2. Run `plan_state.py restore-check <known-plan.md>` followed by `plan_checkpoint.py --plan <known-plan.md> assert-finalizable --project-root <root>`. These check final freshness and settlement respectively; after finishing the lease the explicit plan path is required. No extra overview or full-file reread is needed.
-3. If either names an issue, target-read and repair that issue before retrying.
+3. If either names an issue, target-read and repair that issue before retrying. `OUTPUT_PR_MISSING` or `OUTPUT_DELIVERABLE_MISSING` means `## Outputs` lacks the Task line the profile hands off; add it, then run `deactivate-pointer` because the final item is already checked.
 4. Preserve the task directory as history and return the user-facing outcome.

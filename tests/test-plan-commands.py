@@ -552,6 +552,30 @@ Phase 1
                 if value is not None:
                     self.assertEqual(pointer.read_text(), value)
 
+    def test_outputs_gate_profile_handoff_and_survive_archival(self):
+        text = self.tasks.read_text()
+        deferred = text[text.index("### Phase 2"):text.index("## Verification")]
+        self.tasks.write_text(text.replace(deferred, "## Outputs\n- None yet.\n")
+                              + "## History\n- Cold archive: none\n")
+        self.assertIn("OUTPUT_DELIVERABLE_MISSING", self.call("plan_state.py", "assert-finalizable", check=False).stdout)
+        self.edit("entry-replace", "--file", "plan.md", "--heading", "Outputs", "--entry", "- None yet.",
+                  "--replacement", "- Task — Report: artifacts/report.md")
+        self.assertEqual(self.call("plan_state.py", "assert-finalizable").stdout.strip(), "FINALIZABLE")
+        self.edit("section-replace", "--file", "plan.md", "--heading", "Workflow Profile", "--content", "**Profile:** A")
+        self.assertIn("OUTPUT_PR_MISSING", self.call("plan_state.py", "assert-finalizable", check=False).stdout)
+        self.edit("entry-append", "--file", "plan.md", "--heading", "Outputs",
+                  "--entry", "- Task — PR: https://github.com/org/repo/pull/1 (org/repo, branch fix)")
+        self.call("plan_state.py", "assert-finalizable")
+
+        self.edit("phase-add", "--title", "Next", "--item", "Next result works.", "--start")
+        self.edit("archive-phase", "1", "--expected-history-fingerprint", "missing")
+        plan = self.tasks.read_text()
+        self.assertIn("- Cold archive: [history.md](history.md)", plan)
+        self.assertNotIn("### Phase 1", plan)
+        outputs = json.loads(self.call("plan_state.py", "overview").stdout)["outputs"]
+        self.assertIn("artifacts/report.md", outputs)
+        self.assertIn("pull/1", outputs)
+
     def test_rollover_error_example_can_be_completed_and_executed(self):
         completed = "".join(f"### Phase {number}: Earlier result\n- **Status:** complete\n"
                             for number in range(3, 13))

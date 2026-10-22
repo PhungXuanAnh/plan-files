@@ -422,12 +422,13 @@ class SessionStore:
                     return ""
                 # The exclusive routing lock waits for every helper transaction.
                 # Revalidate here so a reopen cannot race the earlier Stop read.
-                from plan_state import parse_plan, finalizability_issues
+                from plan_state import explain_issues, parse_plan, finalizability_issues
                 state = parse_plan(resolve_plan_file(self.task_path(task)))
                 if not state.phases or any(phase.status != "complete" for phase in state.phases):
                     raise SessionError("plan changed before finalization; restore its current state")
-                if finalizability_issues(state):
-                    raise SessionError("plan is not finalizable; repair its current state")
+                issues = finalizability_issues(state)
+                if issues:
+                    raise SessionError("plan is not finalizable: " + explain_issues(issues))
             if current != task:
                 raise SessionError(f"session is not associated with task: {task}")
             if verb in {"release", "clarify"} and row.get("status") not in {"pending", "waiting"}:
