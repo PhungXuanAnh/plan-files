@@ -72,6 +72,7 @@ P1.1
             shutil.rmtree(self.project / "tmp/plan-files/.sessions", ignore_errors=True)
         self.last_provider = provider
         env = {**os.environ, "PWF_PROJECT_ROOT": str(self.project),
+               "CLAUDE_PROJECT_DIR": "",
                "PWF_SESSION_ADAPTER": provider, "PWF_SESSION_ID": "fixture",
                "CODEX_THREAD_ID": "fixture", "COPILOT_AGENT_SESSION_ID": "fixture",
                "GROK_SESSION_ID": "fixture", "GROK_WORKSPACE_ROOT": str(self.project)}
@@ -688,6 +689,8 @@ P1.1
 
     def test_skill_gate_blocks_mutation_until_read(self):
         skill_md = str(ROOT / "skills/plan-files/SKILL.md")
+        alias = self.project / "installed skill"
+        alias.symlink_to(ROOT / "skills/plan-files", target_is_directory=True)
         for provider in ADAPTERS:
             with self.subTest(provider=provider):
                 self.state(provider, "claim", provider, "fixture", "task-a")
@@ -710,6 +713,14 @@ P1.1
                 self.assertNotIn(self.hook(provider, "pre-tool-use.sh", "touch app.py").get("decision"),
                                  {"block", "deny"}, "one read of the named path must clear the gate")
                 self.state(provider, "skill-loaded", provider, "fixture", "clear")
+                for tool, tool_input in (
+                    (None, {"command": f"cat {shlex.quote(str(alias / 'SKILL.md'))}"}),
+                    ("Read", {"file_path": str(alias / "SKILL.md")}),
+                ):
+                    self.hook(provider, "pre-tool-use.sh", tool=tool, tool_input=tool_input)
+                    self.assertNotIn(self.hook(provider, "pre-tool-use.sh", "touch app.py").get("decision"),
+                                     {"block", "deny"}, "an installed symlink read must clear the gate")
+                    self.state(provider, "skill-loaded", provider, "fixture", "clear")
 
     def test_discussion_allows_the_report_the_user_asked_for(self):
         """A discussion lease protects the plan, not the whole filesystem."""

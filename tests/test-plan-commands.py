@@ -77,6 +77,25 @@ def delayed_writer(plan, ready, proceed, results):
 
 
 class PlanCommands(unittest.TestCase):
+    def test_skill_read_resolves_aliases_without_granting_mutations(self):
+        recognizes = runpy.run_path(str(SCRIPTS / "maintenance-tool-allowed.py"))["names_skill_document"]
+        skill = SCRIPTS.parent / "SKILL.md"
+        with tempfile.TemporaryDirectory() as directory:
+            alias = Path(directory) / "installed skill"
+            alias.symlink_to(skill.parent, target_is_directory=True)
+            quoted = shlex.quote(str(alias / "SKILL.md"))
+            for command, expected in (
+                (f"cat {quoted}", True),
+                ("cat 'installed skill/SKILL.md'", True),
+                (f"cat {quoted}.backup", False),
+                (f"cat {quoted}; touch app.py", False),
+                (f"cat {quoted} > app.py", False),
+            ):
+                with self.subTest(command=command):
+                    payload = {"tool_name": "Bash", "cwd": directory,
+                               "tool_input": {"command": command}}
+                    self.assertEqual(recognizes(payload, str(skill)), expected)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="plan commands '")
         self.addCleanup(self.temp.cleanup)

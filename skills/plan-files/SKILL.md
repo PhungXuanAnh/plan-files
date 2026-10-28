@@ -49,7 +49,7 @@ For `DISCUSSION ONLY`, run the supplied `discuss` command; it works on an owned 
 
 Hook messages name the absolute path of every script and document they tell you to run or read. Use the path as given; never guess an install location or search the filesystem for a skill script.
 
-Read this `SKILL.md` once per session before operational work, by its named absolute path. Do this first, before resolving ownership — the read is allowed in every routing state and is what lets you classify the prompt correctly. It is required even when the rules are already in your context, because PreTool observes tool calls, not context. One read clears the gate for the session; reads and owned-plan repair stay available while it blocks.
+Read this `SKILL.md` once per session before operational work, by its named absolute path or an installed symlink to the same file. Do this first, before resolving ownership — the read is allowed in every routing state and is what lets you classify the prompt correctly. It is required even when the rules are already in your context, because PreTool observes tool calls, not context. One read clears the gate for the session; reads and owned-plan repair stay available while it blocks.
 
 Read [routing and hook semantics](references/routing-and-hooks.md) for ownership diagnosis, root resolution, provider behavior, or user-requested workflow disabling.
 

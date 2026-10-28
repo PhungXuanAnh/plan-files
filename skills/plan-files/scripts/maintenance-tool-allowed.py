@@ -1297,20 +1297,24 @@ def is_read_only_call(payload: dict) -> bool:
 
 
 def names_skill_document(payload: dict, skill_md: str) -> bool:
-    """Recognize a read-only read of the skill entrypoint, from tool input.
-
-    Any tool that names the resolved SKILL.md path counts, so a harness with an
-    unfamiliar reader schema can still satisfy the gate in one call. Requiring
-    read-only means naming the path cannot smuggle an unrelated mutation past a
-    gate that this same signal is allowed to open.
-    """
-    target = skill_md.replace("\\", "/")
-    if not target:
+    """Recognize the entrypoint through canonical or installed symlink paths."""
+    if not skill_md or not is_read_only_call(payload):
         return False
-    if not any(target in value.replace("\\", "/")
-               for value in strings(payload_tool_input(payload))):
-        return False
-    return is_read_only_call(payload)
+    target = os.path.realpath(skill_md)
+    tool_input = payload_tool_input(payload)
+    candidates = list(strings(tool_input))
+    for segment in shell_segments(shell_command_text(tool_input)) or []:
+        candidates.extend(segment.argv)
+    cwd = payload.get("cwd") or os.getcwd()
+    if isinstance(tool_input, dict):
+        cwd = tool_input.get("workdir") or tool_input.get("cwd") or cwd
+    for candidate in candidates:
+        path = os.path.expanduser(candidate)
+        if not os.path.isabs(path):
+            path = os.path.join(cwd, path)
+        if os.path.realpath(path) == target:
+            return True
+    return False
 
 
 def outside_every_plan(tool_input: object, project_root: Path) -> bool:
