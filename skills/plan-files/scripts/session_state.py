@@ -43,6 +43,10 @@ class SessionError(ValueError):
     pass
 
 
+class UnfinishedTools(SessionError):
+    """Outstanding tool receipts prevent relinquishing execution."""
+
+
 def turn_end_hint(provider: str) -> str:
     return {"codex": CODEX_TURN_END_HINT, "claude": CLAUDE_TURN_END_HINT}.get(provider, "")
 
@@ -62,16 +66,36 @@ def planning_root(root: Path) -> Path:
     return root / "tmp/plan-files"
 
 
+NATIVE_SESSION_VARIABLES = (("codex", "CODEX_THREAD_ID"), ("claude", "CLAUDE_SESSION_ID"),
+                            ("copilot", "COPILOT_AGENT_SESSION_ID"), ("grok", "GROK_SESSION_ID"))
+
+
+def inherited_identity() -> bool:
+    """PWF_* exported for every shell of one agent process, seen under another agent it launched.
+
+    PWF_SESSION_OWNER is "<agent pid>:<session id>"; a caller that sets its own
+    PWF_SESSION_ID deliberately no longer matches it.
+    """
+    owner, _, session = os.environ.get("PWF_SESSION_OWNER", "").partition(":")
+    if not owner or session != os.environ.get("PWF_SESSION_ID"):
+        return False
+    from session_runtime import ancestor_pids, host_agent
+    _, pid = host_agent()
+    if pid:
+        return str(pid) != owner
+    # A sandbox with its own PID namespace (Codex workspace-write) hides every
+    # agent above it, including the owner.
+    return owner not in {str(ancestor) for ancestor in ancestor_pids()}
+
+
 def identity() -> tuple[str, str] | None:
     provider, session = os.environ.get("PWF_SESSION_ADAPTER"), os.environ.get("PWF_SESSION_ID")
-    if provider or session:
+    if (provider or session) and not inherited_identity():
         if not (provider and session):
             raise SessionError("incomplete planning session identity")
         candidates = [(provider, session)]
     else:
-        candidates = [(name, os.environ[key]) for name, key in (
-            ("codex", "CODEX_THREAD_ID"), ("claude", "CLAUDE_SESSION_ID"),
-            ("copilot", "COPILOT_AGENT_SESSION_ID"), ("grok", "GROK_SESSION_ID")) if os.environ.get(key)]
+        candidates = [(name, os.environ[key]) for name, key in NATIVE_SESSION_VARIABLES if os.environ.get(key)]
     if not candidates:
         return None
     if len(candidates) != 1:
@@ -215,6 +239,13 @@ class SessionStore:
 
     def busy(self, file: Path) -> bool:
         return bool(self.tools(file))
+
+    def awaits_notification(self, provider: str, file: Path) -> bool:
+        """Only background jobs or subagents remain, and the host wakes the session when they end."""
+        pending = self.tools(file)
+        if provider != "claude" or not pending:
+            return False
+        return all(key.startswith(("background:", "agent:")) for key in pending)
 
     def snapshot(self, task: str) -> str:
         directory = self.task_path(task)
@@ -368,7 +399,9 @@ class SessionStore:
                 raise SessionError('planning lease is still "discussing": bind the same task with --reason "user authorization"')
             if row.get("status") in {"owned", "creating"}:
                 raise SessionError("planning lease is already owned; use resolve instead of binding again")
-            if self.busy(file):
+            # Unfinished tools of the task this session still reserves continue under
+            # the new generation; only another task needs them collected first.
+            if self.busy(file) and row.get("task") != task:
                 from tool_recovery import recovery_guidance
                 raise SessionError("collect unfinished tools before binding a new execution generation"
                                    + turn_end_hint(provider) + recovery_guidance(self, provider, task))
@@ -434,10 +467,13 @@ class SessionStore:
             if verb in {"release", "clarify"} and row.get("status") not in {"pending", "waiting"}:
                 raise SessionError("planning lease is not pending; use handoff to relinquish owned work")
             if verb == "discuss":
-                if self.busy(file):
+                busy = self.busy(file)
+                if busy and row.get("task") != task:
                     raise SessionError("unfinished tools must complete before entering discussion" + turn_end_hint(provider))
                 view = self.current_view(task)
-                self.write(file, "discussing", associated=task, seen=self.snapshot(task), turn=row.get("turn", ""))
+                # Unfinished tools keep the reservation they started under.
+                self.write(file, "discussing", task=task if busy else "", associated=task,
+                           seen=self.snapshot(task), turn=row.get("turn", ""))
                 return f"planning discussion only: {task}; execution needs a new prompt bind or bind --reason\nCurrent plan:\n{view}"
             if verb == "clarify":
                 self.write(file, "waiting", task=row.get("task", ""), candidate=task,
@@ -447,7 +483,7 @@ class SessionStore:
                 raise SessionError("only the owning session can handoff a task")
             if self.busy(file):
                 from tool_recovery import recovery_guidance
-                raise SessionError("unfinished tools must complete before relinquishing this task"
+                raise UnfinishedTools("unfinished tools must complete before relinquishing this task"
                                    + turn_end_hint(provider) + recovery_guidance(self, provider, task))
             self.write(file, "inactive", last_task=task,
                        associated=task if verb == "handoff" else "")
@@ -673,6 +709,14 @@ def main(argv=None) -> int:
         if who is None:
             raise SessionError("no verified planning session identity is available")
         output = recover(store, *who, **options)
+    elif op == "resolve" and len(args) < 2:
+        # Adapter form `resolve [task]`, which ownership errors recommend.
+        who = identity()
+        if who is None:
+            raise SessionError("no verified planning session identity is available")
+        output = store.resolve(*who)
+        if not output:
+            raise SessionError("this session owns no plan for this prompt; follow the routing guidance")
     elif op in {"bind", "reclaim", "release", "clarify", "discuss", "handoff"}:
         who = identity()
         if who is None:
@@ -726,6 +770,8 @@ def main(argv=None) -> int:
             if row.get("status") == "owned":
                 generation = row.get("generation")
                 output = str(file.with_suffix(f".{generation}.hook-state" if generation else ".hook-state"))
+        elif op == "awaits-notification":
+            return 0 if store.awaits_notification(provider, file) else 1
         elif op in {"event-record", "event-check"}:
             return 0 if store.event(provider, session, args[2], record=op == "event-record") else 1
         elif op == "feedback-file":

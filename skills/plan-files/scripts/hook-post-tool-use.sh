@@ -73,8 +73,10 @@ if [ -z "$PLAN_DIR" ] && [ -n "$SESSION_ID" ] && command -v python3 >/dev/null 2
 fi
 if [ -z "$PLAN_DIR" ]; then
     CANDIDATE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" pending-candidate "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
+    # Only the parent routes a prompt; a subagent cannot act on this warning.
     if [ -n "$CANDIDATE" ] && [ -x "$BIND_TOOL" ] \
-        && PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" routing-required "$PROVIDER" "$SESSION_ID" check 2>/dev/null; then
+        && PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" routing-required "$PROVIDER" "$SESSION_ID" check 2>/dev/null \
+        && ! printf '%s' "$INPUT" | python3 "$REPO_ROOT/skills/plan-files/scripts/maintenance-tool-allowed.py" subagent-call; then
         OWNERSHIP_WARN=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" candidate-context \
             "$CANDIDATE" "$BIND_TOOL" 2>/dev/null || true)
         if [ -n "$OWNERSHIP_WARN" ]; then

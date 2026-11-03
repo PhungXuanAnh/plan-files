@@ -149,6 +149,13 @@ class SessionIsolation(unittest.TestCase):
                 identity()
             os.environ.update(PWF_SESSION_ADAPTER="grok", PWF_SESSION_ID="b")
             self.assertEqual(identity(), ("grok", "b"))
+            # Claude's exported identity, inherited by a Codex it launched, is not Codex's.
+            del os.environ["GROK_SESSION_ID"]
+            os.environ.update(PWF_SESSION_ADAPTER="claude", PWF_SESSION_ID="c", PWF_SESSION_OWNER="1:c")
+            with patch("session_runtime.host_agent", return_value=("codex", 2)):
+                self.assertEqual(identity(), ("codex", "a"))
+                os.environ["PWF_SESSION_ID"] = "set-by-a-hook"
+                self.assertEqual(identity(), ("claude", "set-by-a-hook"))
         self.store.claim("codex", "preview", "task-a", preview=True)
         self.assertFalse(self.store.sessions.exists())
 

@@ -13,7 +13,7 @@ from typing import Iterable
 
 from plan_paths import resolve_plan_file
 
-from session_state import guarded, identity, store_for_plan, SessionError
+from session_state import guarded, identity, store_for_plan, SessionError, UnfinishedTools
 
 from plan_state import (
     _placeholder,
@@ -216,7 +216,8 @@ def _fingerprints(state) -> dict[str, str]:
 def progress(plan: Path, item_id: str, evidence_value: str) -> dict[str, object]:
     state = _validate_for_transition(plan)
     if state.active_item != item_id:
-        raise CheckpointError(f"{item_id} is not Active Item")
+        raise CheckpointError(f"{item_id} is not Active Item ({state.active_item or 'none'} is); "
+                              "checkpoint the Active Item first, then the next item becomes active")
     item = state.item(item_id)
     if not item or item.checked:
         raise CheckpointError(f"{item_id} is not an unchecked contracted item")
@@ -232,7 +233,8 @@ def progress(plan: Path, item_id: str, evidence_value: str) -> dict[str, object]
 def complete(plan: Path, item_id: str, evidence_value: str, requested_next: str | None, deactivate: bool) -> dict[str, object]:
     state = _validate_for_transition(plan)
     if state.active_item != item_id:
-        raise CheckpointError(f"{item_id} is not Active Item")
+        raise CheckpointError(f"{item_id} is not Active Item ({state.active_item or 'none'} is); "
+                              "checkpoint the Active Item first, then the next item becomes active")
     item = state.item(item_id)
     if not item or item.checked:
         raise CheckpointError(f"{item_id} is not an unchecked contracted item")
@@ -412,7 +414,12 @@ def main(argv: Iterable[str] | None = None) -> int:
             payload = assert_finalizable(args.plan, args.project_root)
         if args.command == "deactivate-pointer" or (args.command == "complete" and args.deactivate_pointer):
             if who and all(phase.status == "complete" for phase in parse_plan(args.plan).phases):
-                store.transition(*who, "finish", args.plan.parent.name, generation)
+                try:
+                    store.transition(*who, "finish", args.plan.parent.name, generation)
+                except UnfinishedTools:
+                    # The receipt can be this very call. The plan is final; Stop
+                    # releases the session once the turn's tools are collected.
+                    payload["session_finish"] = "at_stop: end this reply; Stop finishes the session"
     except (CheckpointError, SessionError, OSError) as error:
         print(json.dumps({"ok": False, "error": str(error)}, separators=(",", ":")))
         return 2

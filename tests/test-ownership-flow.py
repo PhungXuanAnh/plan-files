@@ -348,14 +348,18 @@ P1.1
         for provider in ADAPTERS:
             with self.subTest(provider=provider):
                 self.discuss(provider)
+                # Quoted patterns are data; assignments, loops and substitutions of reads are reads.
                 for command in (f"PLANE_INSECURE=1 cat {shlex.quote(str(self.tasks))}",
-                                f"env FOO=1 grep -c Goal {shlex.quote(str(self.tasks))}"):
+                                f"env FOO=1 grep -c Goal {shlex.quote(str(self.tasks))}",
+                                'L=e.log; n=$(grep -an "rm -r\\|ad/37" $L | tail -8); echo "$n"',
+                                'ls -la .s 2>/dev/null | head; for f in $(find . -name "*.md"); do tail -c 9 "$f"; done'):
                     self.assertNotIn(self.hook(provider, "pre-tool-use.sh", command).get("decision"),
                                      {"block", "deny"}, command)
-                # An env prefix must not launder a write into a read either.
-                self.assertIn(self.hook(provider, "pre-tool-use.sh",
-                                        f"FOO=1 rm -rf {shlex.quote(str(self.project / 'src'))}").get("decision"),
-                              {"block", "deny"})
+                # An env prefix or a loop must not launder a write into a read either.
+                src = shlex.quote(str(self.project / 'src'))
+                for command in (f"FOO=1 rm -rf {src}", f'for f in {src}; do rm -rf "$f"; done'):
+                    self.assertIn(self.hook(provider, "pre-tool-use.sh", command).get("decision"),
+                                  {"block", "deny"}, command)
                 for tool, allowed in (("mcp__jira__jira_search", True),
                                       ("mcp__serena__find_symbol", True),
                                       ("mcp__github__create_issue", False),

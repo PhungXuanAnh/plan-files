@@ -25,11 +25,26 @@ def host_identity() -> tuple[str, str]:
     return hashlib.sha256(machine.encode()).hexdigest(), Path("/proc/sys/kernel/random/boot_id").read_text().strip()
 
 
-def runtime_identity() -> str:
+def ancestor_pids() -> set[int]:
+    """Pids of the visible parent chain of this process."""
+    pids = set()
     try:
-        machine, boot = host_identity()
-        executables = {str(Path(path).resolve()) for name in ("codex", "claude", "copilot")
-                       if (path := shutil.which(name))}
+        pid = os.getppid()
+        for _ in range(64):
+            if pid <= 1:
+                break
+            pids.add(pid)
+            pid = int(Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return pids
+
+
+def host_agent() -> tuple[str, int]:
+    """Provider name and pid of the nearest agent process above this one, or ("", 0)."""
+    names = ("codex", "claude", "copilot")
+    executables = {str(Path(path).resolve()): name for name in names if (path := shutil.which(name))}
+    try:
         pid = os.getppid()
         for _ in range(32):
             if pid <= 1:
@@ -38,16 +53,29 @@ def runtime_identity() -> str:
             argv = base.joinpath("cmdline").read_bytes().split(b"\0")
             executable = Path(os.fsdecode(argv[0])).name
             script = os.fsdecode(argv[1]) if len(argv) > 1 else ""
-            agent = executable in {"codex", "claude", "copilot"}
-            agent |= str(base.joinpath("exe").resolve()) in executables
-            agent |= executable in {"node", "bun"} and "/@github/copilot/" in script
-            if agent:
-                start, _ = process_identity(pid)
-                return f"{machine}:{boot}:{pid}:{start}"
+            if executable in names:
+                return executable, pid
+            installed = executables.get(str(base.joinpath("exe").resolve()))
+            if installed:
+                return installed, pid
+            if executable in {"node", "bun"} and "/@github/copilot/" in script:
+                return "copilot", pid
             pid = int(base.joinpath("stat").read_text().rsplit(") ", 1)[1].split()[1])
     except (OSError, ValueError, IndexError):
         pass
-    return ""
+    return "", 0
+
+
+def runtime_identity() -> str:
+    try:
+        machine, boot = host_identity()
+        _, pid = host_agent()
+        if not pid:
+            return ""
+        start, _ = process_identity(pid)
+        return f"{machine}:{boot}:{pid}:{start}"
+    except (OSError, ValueError, IndexError):
+        return ""
 
 
 def runtime_dead(row: dict) -> bool:
@@ -86,12 +114,30 @@ def turn_id(payload: dict) -> str:
     return hashlib.sha256(str(raw).encode()).hexdigest() if raw else ""
 
 
+def agent_prefix(agent: str) -> str:
+    """Receipt prefix of one Claude subagent, so its host notification can retire them."""
+    return "agent:" + hashlib.sha256(agent.encode()).hexdigest() + ":"
+
+
+def launched_agent(payload: dict) -> str:
+    """Agent id of a Claude subagent the call started in the background."""
+    name = str(payload.get("tool_name") or payload.get("toolName") or "").lower()
+    result = payload.get("tool_response")
+    if name not in {"agent", "task"} or not isinstance(result, dict):
+        return ""
+    agent = result.get("agentId")
+    if result.get("status") != "async_launched" or not isinstance(agent, str):
+        return ""
+    return agent
+
+
 def tool_key(payload: dict) -> str:
     event = event_id(payload)
     if event:
         key = hashlib.sha256(event.encode()).hexdigest()
         # Claude subagents can outlive the main turn, so its Stop must not retire their calls.
-        return "agent:" + key if payload.get("agent_id") else key
+        agent = payload.get("agent_id")
+        return agent_prefix(str(agent)) + key if agent else key
     if not payload.get("timestamp"):
         return ""  # Legacy hosts lacking both correlation and lifecycle metadata.
     module = classifier()
@@ -277,8 +323,24 @@ concurrent reclaim/new generation cannot be modified by this reconciliation.
         return
 
 
+def notified_offset(file: Path, path: str) -> int:
+    """Transcript offset after the last notification that already retired agent receipts."""
+    try:
+        mark = json.loads(file.with_suffix(".notified").read_text())
+    except (OSError, ValueError):
+        return 0
+    if not isinstance(mark, dict) or mark.get("transcript") != path or not isinstance(mark.get("offset"), int):
+        return 0
+    return mark["offset"]
+
+
 def retire_notified_receipts(store, provider: str, session: str, path: str) -> None:
-    """Retire background receipts whose task has a terminal host notification."""
+    """Retire receipts of background jobs and subagents with a terminal host notification.
+
+    A stopped, killed or failed subagent never sends PostToolUse for its
+    in-flight call. A resumed subagent notifies again under the same id, so
+    only notifications after the recorded offset retire its receipts.
+    """
     from session_state import SessionError, atomic_text
     from tool_results import finished_tasks
     file = store.route(provider, session)
@@ -287,17 +349,25 @@ def retire_notified_receipts(store, provider: str, session: str, path: str) -> N
             snapshot = store.tools(file)
     except (SessionError, OSError):
         return  # Keep receipts for the read-only diagnosis and explicit recovery routes.
-    if not any(key.startswith("background:") for key in snapshot):
+    if not any(key.startswith(("background:", "agent:")) for key in snapshot):
         return
-    finished = {"background:" + hashlib.sha256(f"shell:{task}".encode()).hexdigest()
-                for task in finished_tasks(provider, session, path)}
+    notified = finished_tasks(provider, session, path)
+    start = notified_offset(file, path)
+    finished = {"background:" + hashlib.sha256(f"shell:{task}".encode()).hexdigest() for task in notified}
+    agents = tuple(agent_prefix(task) for task, offset in notified.items() if offset >= start)
     try:
         with store.lock():
             pending = store.tools(file)
-            remaining = {key: generation for key, generation in pending.items()
-                         if key not in finished or generation != snapshot.get(key)}
+            remaining = {}
+            for key, generation in pending.items():
+                retired = key in finished or key.startswith(agents)
+                if not retired or generation != snapshot.get(key):
+                    remaining[key] = generation
             if remaining != pending:
                 atomic_text(file.with_suffix(".tools"), json.dumps(remaining))
+            if agents:
+                end = max(notified.values()) + 1
+                atomic_text(file.with_suffix(".notified"), json.dumps({"transcript": path, "offset": end}))
     except (SessionError, OSError):
         return
 
@@ -437,6 +507,8 @@ def end_tool(store, provider: str, session: str, payload: dict) -> bool:
         pending = store.tools(file)
         native = native_tools(file)
         key = tool_key(payload)
+        if key.startswith("agent:") and key not in pending:
+            key = "agent:" + key.rsplit(":", 1)[1]  # Recorded before receipts named their agent.
         generation = pending.get(key)
         if isinstance(generation, list):
             generation = generation.pop(0)
@@ -452,6 +524,10 @@ def end_tool(store, provider: str, session: str, payload: dict) -> bool:
                     native[background] = generation
             elif not running and generation is not None and pending.get(background) == generation:
                 pending.pop(background, None)
+        agent = launched_agent(payload)
+        if agent and generation is not None:
+            # Held until the host notifies that this subagent stopped.
+            pending[agent_prefix(agent) + "running"] = generation
         if generation is not None or background:
             atomic_text(file.with_suffix(".tools"), json.dumps(pending))
             remember_native_tools(file, pending, native)

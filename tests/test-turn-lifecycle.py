@@ -122,7 +122,13 @@ P1.1
                     begin_tool(self.store, provider, reader, payload)
                 self.store.transition(provider, writer, "handoff", "task-a")
                 begin_tool(self.store, provider, reader, payload)
-                self.assertEqual(self.hook(provider, reader, "agent-stop.sh")["decision"], "block")
+                stop = self.hook(provider, reader, "agent-stop.sh")
+                if provider == "claude":
+                    # Claude notifies when its subagent stops, so Stop waits without yielding.
+                    self.assertEqual(stop, {})
+                    self.assertTrue(self.store.owners("task-a"))
+                else:
+                    self.assertEqual(stop["decision"], "block")
                 end_tool(self.store, provider, reader, payload)
                 self.assertEqual(self.hook(provider, reader, "agent-stop.sh"), {})
                 with patch.dict(os.environ, {"PWF_PROJECT_ROOT": str(self.root), "PWF_SESSION_ADAPTER": provider, "PWF_SESSION_ID": reader}):
@@ -319,14 +325,15 @@ P1.1
         begin_tool(self.store, "claude", "writer", command)
         end_tool(self.store, "claude", "writer", {**command, "tool_response": {"backgroundTaskId": "job"}})
         self.store.pending("claude", "writer", "task-a")
+        # The session's own job continues under its next bind and still blocks handoff.
+        self.store.bind("claude", "writer", "task-a")
         with self.assertRaisesRegex(SessionError, "unfinished"):
-            self.store.bind("claude", "writer", "task-a")
+            self.store.transition("claude", "writer", "handoff", "task-a")
         for registry in (None, [{"id": "job", "type": "shell", "status": "running"}]):
-            self.hook("claude", "writer", "agent-stop.sh", background_tasks=registry)
+            self.assertEqual(self.hook("claude", "writer", "agent-stop.sh", background_tasks=registry), {})
             self.assertTrue(self.store.busy(file))
         self.hook("claude", "writer", "agent-stop.sh", background_tasks=[])
         self.assertFalse(self.store.busy(file))
-        self.store.bind("claude", "writer", "task-a")
 
         # A new user prompt must not block collection of an already-running job.
         self.store.transition("claude", "writer", "handoff", "task-a")
@@ -436,10 +443,11 @@ P1.1
             stream.write("\n")
         self.hook("claude", "writer", "pre-tool-use.sh", **hook_args)
         self.assertEqual(set(self.store.tools(file)), {hashlib.sha256(b"still-running").hexdigest()})
-        with self.assertRaisesRegex(SessionError, "unfinished"):
-            self.store.bind("claude", "writer", "task-a")
-        end_tool(self.store, "claude", "writer", {**payload, "tool_use_id": "still-running"})
+        # The live call continues under this session's next bind and still blocks handoff.
         self.store.bind("claude", "writer", "task-a")
+        with self.assertRaisesRegex(SessionError, "unfinished"):
+            self.store.transition("claude", "writer", "handoff", "task-a")
+        end_tool(self.store, "claude", "writer", {**payload, "tool_use_id": "still-running"})
         self.assertEqual(self.row("claude", "writer")["status"], "owned")
 
         # Main-thread Stop follows every synchronous result, so it retires a call the
@@ -516,8 +524,64 @@ P1.1
         delivered("done", "prompt")
         self.assertEqual(self.hook("claude", "writer", "pre-tool-use.sh", **read).get("decision"), "block")
         self.assertEqual(self.row("claude", "writer")["status"], "pending")
-        with self.assertRaisesRegex(SessionError, "unfinished"):
-            self.store.bind("claude", "writer", "task-a")
+        self.store.bind("claude", "writer", "task-a")
+        self.assertEqual(len(self.store.tools(file)), 1)
+
+    def test_claude_subagents_keep_working_and_retire_on_their_host_notification(self):
+        self.store.bind("claude", "writer", "task-a")
+        file = self.store.route("claude", "writer")
+        file.with_suffix(".skill-loaded").touch()
+        transcript = self.root / "host.jsonl"
+        transcript.write_text("")
+        context = {"transcript_path": str(transcript)}
+        launch = {"tool_name": "Agent", "tool_use_id": "launch", "tool_input": {"prompt": "rebase"}}
+        begin_tool(self.store, "claude", "writer", launch)
+        end_tool(self.store, "claude", "writer", {**launch, "tool_response": {"status": "async_launched", "agentId": "a1"}})
+        rebase = {"tool_name": "Bash", "tool_use_id": "rebase", "agent_id": "a1", "tool_input": {"command": "git rebase main"}}
+        begin_tool(self.store, "claude", "writer", rebase)
+
+        # A new prompt neither strands the subagent nor stops its own session from binding.
+        self.hook("claude", "writer", "user-prompt-submit.sh", prompt="status?", **context)
+        self.assertEqual(self.hook("claude", "writer", "pre-tool-use.sh", **{**rebase, "tool_use_id": "next"}, **context), {})
+        self.store.bind("claude", "writer", "task-a")
+        self.pause()
+        with self.store.lock():
+            self.store.remember_read(file, "task-a")
+        self.assertEqual(self.hook("claude", "writer", "pre-tool-use.sh", **{**rebase, "tool_use_id": "next"}, **context), {})
+        self.assertEqual(self.hook("claude", "writer", "agent-stop.sh", **context), {})
+        self.assertTrue(self.store.owners("task-a"))
+
+        # Killed mid-call: its notification retires the launch and the orphaned call,
+        # but a resumed agent's later call is not retired by that old notification.
+        note = "<task-notification>\n<task-id>a1</task-id>\n<status>killed</status>\n</task-notification>"
+        with transcript.open("a") as stream:
+            stream.write(json.dumps({"type": "attachment", "sessionId": "writer", "attachment": {
+                "type": "queued_command", "commandMode": "task-notification", "prompt": note}}) + "\n")
+        self.hook("claude", "writer", "agent-stop.sh", **context)
+        self.assertEqual(self.store.tools(file), {})
+        self.assertFalse(self.store.owners("task-a"))
+        self.store.bind("claude", "writer", "task-a")
+        begin_tool(self.store, "claude", "writer", {**rebase, "tool_use_id": "resumed"})
+        self.hook("claude", "writer", "agent-stop.sh", **context)
+        self.assertEqual(len(self.store.tools(file)), 1)
+        end_tool(self.store, "claude", "writer", {**rebase, "tool_use_id": "resumed"})
+        self.assertEqual(self.hook("claude", "writer", "agent-stop.sh", **context), {})
+        self.assertFalse(self.store.owners("task-a"))
+
+    def test_final_checkpoint_inside_a_recorded_shell_call_finishes_at_stop(self):
+        self.store.bind("claude", "writer", "task-a")
+        # Variables hide the helper, so the call running the checkpoint holds a receipt.
+        begin_tool(self.store, "claude", "writer", {"tool_name": "Bash", "tool_use_id": "checkpoint",
+                                                    "tool_input": {"command": "S=x; python3 $S complete P1.1"}})
+        env = {**os.environ, "PWF_PROJECT_ROOT": str(self.root), "PWF_SESSION_ADAPTER": "claude", "PWF_SESSION_ID": "writer"}
+        result = subprocess.run([sys.executable, str(SCRIPTS / "plan_checkpoint.py"), "--plan", str(self.plan),
+                                 "complete", "P1.1", "--evidence", "artifact checked", "--deactivate-pointer"],
+                                env=env, capture_output=True, text=True)
+        output = json.loads(result.stdout)
+        self.assertTrue(output["ok"], output)
+        self.assertIn("at_stop", output["session_finish"])
+        self.assertEqual(self.hook("claude", "writer", "agent-stop.sh"), {})
+        self.assertFalse(self.store.owners("task-a"))
 
     def test_terminal_error_reconciliation_keeps_new_generations_and_bounds_reads(self):
         import hashlib
@@ -601,7 +665,7 @@ P1.1
                     recover(self.store, provider, "writer", "task-a", command, **token, reason="duplicate")
                 # Background execution still retains the lease after acknowledgement.
                 with self.assertRaises(SessionError):
-                    self.store.bind(provider, "writer", "task-a")
+                    self.store.transition(provider, "writer", "handoff", "task-a")
                 from session_runtime import begin_collection
                 collection = {"tool_name": "TaskOutput", "tool_use_id": "collect", "tool_input": {"task_id": "job"}}
                 self.assertTrue(begin_collection(self.store, provider, "writer", collection))

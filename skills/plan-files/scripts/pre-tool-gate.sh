@@ -181,6 +181,13 @@ non_mutating_shell() {
     printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" non-mutating-shell
 }
 
+# A Claude subagent carries out work its parent delegated earlier. Only the
+# parent routes prompts and settles the plan, so neither may strand the worker.
+subagent_call() {
+    command -v python3 >/dev/null 2>&1 || return 1
+    printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" subagent-call
+}
+
 block() {
     local reason=$1
     if [ "$EXPLAIN" != "--explain" ] && [ -n "${FEEDBACK_FILE:-}" ]; then
@@ -309,6 +316,10 @@ fi
 if [ -z "$PLAN_DIR" ]; then
     CANDIDATE=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" pending-candidate "$PROVIDER" "$SESSION_ID" 2>/dev/null || true)
     [ -n "$CANDIDATE" ] || { log "session=$SESSION_ID decision=allow reason=no-pending-candidate tool=$TOOL_NAME"; printf '{}'; exit 0; }
+    if subagent_call; then
+        log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-subagent-unrouted tool=$TOOL_NAME"
+        printf '{}'; exit 0
+    fi
     printf -v project_root_arg '%q' "$PWD"
     printf -v bind_tool_arg '%q' "$BIND_TOOL"
     printf -v task_arg '%q' "$CANDIDATE"
@@ -391,6 +402,10 @@ if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION
         log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=block-discussion-advance tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
         block "[plan-files] DISCUSSION ONLY — RECORD IT, DO NOT ADVANCE IT. This call changes execution state. Record decisions/findings or reports under $PLAN_DIR/artifacts instead. If this prompt already authorizes execution, run: $EXPECTED_ACTIVATE. Otherwise wait for a new user prompt. Needing a tool is not authorization; the candidate and unfinished work are preserved."
     fi
+    if subagent_call; then
+        log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=allow-subagent-during-discussion tool=$TOOL_NAME"
+        printf '{}'; exit 0
+    fi
     if maintenance_tool_allowed "$PLAN_DIR"; then
         log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=allow-discussion-maintenance tool=$TOOL_NAME"
         printf '{}'; exit 0
@@ -462,7 +477,7 @@ fi
 # Reads and owned-plan repair stay open: reopening the plan IS plan maintenance,
 # so the recovery this message asks for is always runnable from inside the gate.
 REOPEN_WARN=$(planning_settled_plan_warning "$PLAN_DIR" "$PWD")
-if [ -n "$REOPEN_WARN" ] && ! maintenance_tool_allowed "$PLAN_DIR"; then
+if [ -n "$REOPEN_WARN" ] && ! maintenance_tool_allowed "$PLAN_DIR" && ! subagent_call; then
     REASON_TEXT="$REOPEN_WARN $DISCUSSION_HINT $ALLOWED_HINT"
     log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") reopen=required decision=block-settled-plan tool=$TOOL_NAME"
     block "$REASON_TEXT"

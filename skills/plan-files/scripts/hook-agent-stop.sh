@@ -61,9 +61,18 @@ LEASE_GENERATION=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" generation "$PROVIDER" 
 export PWF_TURN_ID
 PWF_TURN_ID=$(printf '%s' "$INPUT" | python3 -c 'import hashlib,json,sys; p=json.load(sys.stdin); t=p.get("turn_id") or p.get("turnId"); print(hashlib.sha256(str(t).encode()).hexdigest() if t else "")')
 PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" event-current "$PROVIDER" "$SESSION_ID" || { printf '{}'; exit 0; }
+# The host starts a new turn when a background job or subagent ends, so waiting
+# for one ends the reply and keeps the lease instead of re-checking every Stop.
+awaits_notification() {
+    PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" awaits-notification "$PROVIDER" "$SESSION_ID" 2>/dev/null
+}
 yield_execution() {
     local error
     if ! error=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" yield "$PROVIDER" "$SESSION_ID" "$LEASE_GENERATION" 2>&1); then
+        if awaits_notification; then
+            printf '{}'
+            exit 0
+        fi
         render_stop_block "[plan-files] $error"
         exit 0
     fi
@@ -215,6 +224,11 @@ if [ $((COMPLETE + BLOCKED + DEFERRED)) -ge "$TOTAL" ]; then
     # Both relinquish execution; paused tasks retain their resume association.
     if [ "$BLOCKED" -eq 0 ] && [ "$DEFERRED" -eq 0 ] && [ "$TOTAL" -gt 0 ]; then
         if ! FINALIZE_ERROR=$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" finish "$PROVIDER" "$SESSION_ID" "$(basename "$PLAN_DIR")" "$LEASE_GENERATION" 2>&1); then
+            if awaits_notification; then
+                log "decision: ALL COMPLETE, AWAITING BACKGROUND WORK -> lease retained until the host notification"
+                echo '{}'
+                exit 0
+            fi
             render_stop_block "[plan-files] $FINALIZE_ERROR"
             exit 0
         fi
@@ -250,6 +264,13 @@ fi
 if [ -z "${PHASE_NUM:-}" ] && [ "$COMPLETE" -eq 0 ] && [ "$BLOCKED" -eq 0 ] && [ "$DEFERRED" -eq 0 ]; then
     yield_execution
     log "decision: DISCUSSION MODE (Current Phase empty, no settled phase) -> emitting {} (allow stop)"
+    log "stop continuation=false output_chars=2"
+    echo '{}'
+    exit 0
+fi
+
+if awaits_notification; then
+    log "decision: AWAITING BACKGROUND WORK -> lease retained, allow stop until the host notification"
     log "stop continuation=false output_chars=2"
     echo '{}'
     exit 0

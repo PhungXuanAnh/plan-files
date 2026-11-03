@@ -35,7 +35,7 @@ Grok exposes `background` (some versions/tools use `is_background`); Claude expo
 
 Grok also permits the user to background a foreground command with Ctrl+B or a new message; a completion `<system-reminder>` is a host task notification, not a planning validation failure. The notification alone does not reveal which trigger applied. A home-wide `find` may take a long time even when its output is small. Hooks can deny an explicit background request they receive, but cannot undo host/UI scheduling or remove already queued notifications. Use the returned task id to collect output and continue; do not change harness binaries or disable all background work.
 
-For a long command, external job, or test run, prefer a streaming/monitor tool that returns output into the same turn. Do not end turns merely to poll; each turn re-triggers Stop without proving useful progress. If no monitor exists and the external wait genuinely spans turns, record the exact resume check and mark the phase `blocked (reason)`, then continue other actionable phases.
+For a long command, external job, or test run, prefer a streaming/monitor tool that returns output into the same turn. Do not end turns merely to poll; each turn re-triggers Stop without proving useful progress. In Claude, a native background job or background subagent notifies the session when it ends: once nothing else is actionable, end the reply; Stop keeps the lease without marking the phase blocked, and the notification resumes the work. If no monitor exists and the external wait genuinely spans turns, record the exact resume check and mark the phase `blocked (reason)`, then continue other actionable phases.
 
 ## Exact verification
 

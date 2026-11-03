@@ -346,6 +346,12 @@ def shell_has_mutation_intent(tool_input: object) -> bool:
         return False
     if patch_paths(tool_input):
         return True
+    segments = shell_segments(command)
+    if segments is not None:
+        # Judge the programs each segment runs, so a quoted grep pattern such as
+        # "rm -r\|x" is data, not a command.
+        return any(_segment_has_mutation_intent(segment) for segment in segments)
+    # Unlexable text: scan it raw, which errs toward reporting a write.
     # `FOO=1 rm -rf x` runs rm. Anchoring the verb to the start of a segment
     # without stepping over assignments let an env prefix hide it, the same
     # blind spot _command_start closes for the read-only test.
@@ -357,6 +363,25 @@ def shell_has_mutation_intent(tool_input: object) -> bool:
         re.IGNORECASE,
     )
     return mutation_command.search(command) is not None
+
+
+MUTATION_COMMANDS = {"apply_patch", "cp", "install", "mv", "rm", "touch", "truncate", "tee", "chmod", "chown"}
+
+
+def _segment_has_mutation_intent(segment: Segment) -> bool:
+    if re.search(r">{1,2}(?!=)", _unquoted_redirects(segment)):
+        return True
+    if any(shell_has_mutation_intent(command) for command in segment.substitutions):
+        return True
+    words = _command_words(segment)
+    start = _command_start(words)
+    if start is None:
+        return False
+    executable = os.path.basename(words[start]).lower()
+    if executable in MUTATION_COMMANDS:
+        return True
+    in_place = any(re.match(r"-[A-Za-z]*i", word) or word.startswith("--in-place") for word in words[start + 1:])
+    return executable in {"sed", "perl"} and in_place
 
 
 def is_mutation_tool(tool_name: str, tool_input: object) -> bool:
@@ -702,27 +727,52 @@ def _command_start(words: list[str]) -> int | None:
                  if "=" not in word and Path(word).name not in ENV_WRAPPERS), None)
 
 
-def _segment_is_read_only(segment: Segment, allow_substitutions: bool = False) -> bool:
-    if not segment.argv:
-        return False
-    # Command substitution can hide arbitrary mutation behind a read-only shape.
-    # A caller with a reason to accept one -- `echo "pointer=$(cat .plan-files)"`
-    # appended to a routing command -- still holds it to the same read-only test
-    # as any other command, which is what allow_substitutions asks for.
-    if segment.substitutions and not (allow_substitutions and _substitutions_are_read_only(segment)):
-        return False
-    # Strip redirections that only discard output, then reject any that remain:
-    # a surviving > or < can write or consume real files.
-    probe = segment.text
+QUOTED_RE = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
+# Keywords that open a compound command; the words after them run as a command.
+OPENING_KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "!", "{"}
+CLOSING_KEYWORDS = {"done", "fi", "}"}
+
+
+def _unquoted_redirects(segment: Segment) -> str:
+    """Segment text without quoted strings or output-discarding redirections."""
+    probe = QUOTED_RE.sub(" ", segment.text)
     for token in DISCARD_REDIRECTS:
         probe = probe.replace(token, " ")
+    return probe
+
+
+def _command_words(segment: Segment) -> list[str]:
+    """The words of the command a segment runs, past compound-command keywords."""
+    words = segment.argv
+    while words and words[0] in OPENING_KEYWORDS:
+        words = words[1:]
+    return words
+
+
+def _segment_is_read_only(segment: Segment) -> bool:
+    if not segment.argv:
+        return False
+    # Command substitution can hide arbitrary mutation behind a read-only shape,
+    # so each substituted command faces the same read-only test.
+    if not _substitutions_are_read_only(segment):
+        return False
+    # A surviving > or < outside quotes can write or consume real files.
+    probe = _unquoted_redirects(segment)
     if ">" in probe or "<" in probe:
         return False
-    start = _command_start(segment.argv)
-    if start is None:
+    words = _command_words(segment)
+    if not words:
         return False
-    executable = os.path.basename(segment.argv[start])
-    operands = segment.argv[start + 1:]
+    if words[0] in CLOSING_KEYWORDS and len(words) == 1:
+        return True
+    # `for f in <words>` only expands words; the loop body is judged separately.
+    if words[0] == "for" and len(words) >= 3 and words[2] == "in":
+        return True
+    start = _command_start(words)
+    if start is None:
+        return all("=" in word for word in words)  # Assignments only, e.g. `L=/var/log/x`.
+    executable = os.path.basename(words[start])
+    operands = words[start + 1:]
     if executable == "xargs":
         while operands:
             if operands[0] in {"-0", "--null", "-r", "--no-run-if-empty"}:
@@ -1116,7 +1166,7 @@ def routing_verb(tool_input: object, bind_tool: Path, project_root: Path, task_i
             if verb:
                 return ""
             verb = found
-        elif not (_segment_is_read_only(segment, allow_substitutions=True)
+        elif not (_segment_is_read_only(segment)
                   or _segment_reads_plan(segment)):
             return ""
     return verb
@@ -1341,9 +1391,12 @@ def main() -> int:
             return 1
         target = os.path.realpath(sys.argv[2])
         segments = shell_segments(shell_command_text(value)) or []
-        return 0 if any(_segment_is_read_only(segment, allow_substitutions=True)
+        return 0 if any(_segment_is_read_only(segment)
                         and any(os.path.realpath(word) == target for word in segment.argv)
                         for segment in segments) else 1
+    if len(sys.argv) == 2 and sys.argv[1] == "subagent-call":
+        payload = load_payload()
+        return 0 if payload is not None and payload.get("agent_id") else 1
     if len(sys.argv) == 2 and sys.argv[1] == "read-only":
         payload = load_payload()
         return 0 if payload is not None and is_read_only_call(payload) else 1

@@ -113,18 +113,21 @@ def host_notified(provider: str, session: str, path: str, notice: str) -> bool:
     return False
 
 
-def finished_tasks(provider: str, session: str, path: str) -> set[str]:
-    """Background task ids with a terminal host notification."""
+def finished_tasks(provider: str, session: str, path: str) -> dict[str, int]:
+    """Task ids (background jobs and subagents) with a terminal host notification.
+
+    Each maps to the transcript offset of its latest such notification.
+    """
     if provider != "claude":
-        return set()
-    tasks = set()
-    for _, record in transcript_records(session, path):
+        return {}
+    tasks = {}
+    for offset, record in transcript_records(session, path):
         attachment = queued_prompt(record)
         if attachment.get("commandMode") != "task-notification":
             continue
         for block in NOTIFICATION_RE.findall(str(attachment.get("prompt", ""))):
             if notification_field(block, "status") in {"completed", "failed", "killed", "stopped"}:
-                tasks.add(notification_field(block, "task-id"))
+                tasks[notification_field(block, "task-id")] = offset
     return tasks
 
 
