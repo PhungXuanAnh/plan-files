@@ -158,8 +158,8 @@ assert_eq "$(pre_command grok-one "cat $FEEDBACK_PATH" | json_value '["decision"
 REASON=$(cat "$FEEDBACK_PATH")
 assert_contains "$REASON" '## Task Identity' "pending denial includes Task Identity"
 assert_contains "$REASON" '## Goal' "pending denial includes Goal"
-assert_contains "$REASON" 'SAME: run' "pending denial includes SAME command"
-assert_contains "$REASON" 'DIFFERENT: first run' "pending denial includes DIFFERENT command"
+assert_contains "$REASON" '- SAME (' "pending denial includes SAME command"
+assert_contains "$REASON" '- DIFFERENT (' "pending denial includes DIFFERENT command"
 
 printf -v ROOT_ARG '%q' "$PROJECT"
 printf -v BIND_ARG '%q' "$GROK_SCRIPTS/bind-session.sh"

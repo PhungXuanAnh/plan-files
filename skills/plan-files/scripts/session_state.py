@@ -666,12 +666,14 @@ def candidate_context(store: SessionStore, task: str, adapter: str, compact: boo
                 if holders else "")
     if compact:
         return (f"[plan-files] Candidate task '{task}'; text-only chat may yield without routing. Before tools, read {skill} and classify the request.\n{reserved}"
-                f"Run {command} <verb> {task}: SAME=bind, DIFFERENT=release, AMBIGUOUS=clarify, DISCUSSION ONLY=discuss. Never release continuing work.\nGoal: {goal[:180]}")
-    return ("[plan-files] OWNERSHIP ACTION REQUIRED for this prompt. Continue/implement this plan = SAME, even after research. Resolve ownership before other tools; this is not an external blocker.\n"
+                f"Run {command} <verb> {task}: SAME=bind, DIFFERENT=release, AMBIGUOUS=clarify, DISCUSSION ONLY=discuss. "
+                f"Naming this plan without saying clearly which work is AMBIGUOUS. Never release continuing work.\nGoal: {goal[:180]}")
+    return ("[plan-files] OWNERSHIP ACTION REQUIRED for this prompt. Classify the latest request, then resolve ownership before other tools; this is not an external blocker.\n"
             f"{reserved}"
-            f"- SAME: run `{command} bind {task}`.\n"
-            f"- DIFFERENT: first run `{command} release {task}` only for a separate goal. This releases only your session.\n"
-            f"- AMBIGUOUS: run `{command} clarify {task}`, then ask and wait. This keeps the candidate and blocks work; do not release it.\n"
+            f"- SAME (the request clearly asks for this plan's own work: continue it, finish it, or the step it records next; implementation counts even after research): run `{command} bind {task}`.\n"
+            f"- DIFFERENT (a separate goal; citing this plan as background is not continuing it): first run `{command} release {task}`. This releases only your session.\n"
+            f"- AMBIGUOUS (it names this plan but you cannot tell which work it wants, for example it points at something the plan does not record such as \"what I said yesterday\", or it could be this plan or separate work): "
+            f"run `{command} clarify {task}`, then ask and wait. Asking costs one turn; binding the wrong work changes code. This keeps the candidate and blocks work; do not release it.\n"
             f"- DISCUSSION ONLY (a question about this plan, this workflow, or your own behavior, with no implementation): run `{command} discuss {task}`. This answers and stops cleanly while keeping execution gated.\n"
             f"Read {skill} once in this session before operational work — required even if its rules are already in your context, because the gate observes tool calls. Reading it is allowed before bind.\n"
             f"After bind: run `python3 {state} overview {target}`, then only needed targeted reads. If restore.ok is false, use `python3 {state} restore-check {target}`. Reconcile user-authorized scope changes before implementation. After release: continue separately. Never release merely to bypass a gate.\n\n"

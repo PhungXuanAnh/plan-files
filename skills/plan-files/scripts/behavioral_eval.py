@@ -328,7 +328,7 @@ def _grok_hook_probe(project: Path, scripts: Path) -> dict[str, object]:
         "reason_within_official_cap": len(short_reason) <= 256,
         "feedback_read_allowed": feedback_allowed.get("decision") == "allow",
         "candidate_context_complete": all(
-            marker in reason for marker in ("## Task Identity", "## Goal", "SAME: run", "DIFFERENT: first run")
+            marker in reason for marker in ("## Task Identity", "## Goal", "- SAME (", "- DIFFERENT (", "- AMBIGUOUS (")
         ),
         "exact_bind_allowed": allowed.get("decision") == "allow",
         "session_resolved": Path(resolved).resolve()

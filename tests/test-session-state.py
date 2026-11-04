@@ -430,7 +430,10 @@ Phase 1
                                 input=json.dumps({"session_id": "verified"}), text=True, capture_output=True,
                                 env={**os.environ, "CLAUDE_ENV_FILE": str(env_file)}, cwd=self.root, check=True)
         self.assertEqual(json.loads(result.stdout), {})
-        self.assertEqual(env_file.read_text(), "export PWF_SESSION_ADAPTER=claude\nexport PWF_SESSION_ID=verified\n")
+        exported = env_file.read_text().splitlines()
+        self.assertEqual(exported[:2], ["export PWF_SESSION_ADAPTER=claude", "export PWF_SESSION_ID=verified"])
+        # The owner line appears only when the test itself runs under an agent process.
+        self.assertRegex("\n".join(exported[2:]), r"^(export PWF_SESSION_OWNER=\d+:verified)?$")
         self.assertTrue(self.store.resolve("codex", "owner").endswith("task-a"))
         self.assertEqual((self.root / ".plan-files").read_text(), "task-a\n")
 

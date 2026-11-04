@@ -41,10 +41,10 @@ the matching command verbatim before reading anything else of the plan:
 
 | The request | Class | Run |
 |---|---|---|
-| continue or implement the named plan (also research → implementation, applying its decisions) | `SAME` | `bind <task-id>`, then step 2 |
+| clearly this plan's own work: continue, finish, its recorded next step (also research → implementation) | `SAME` | `bind <task-id>`, then step 2 |
 | a question about the plan, this workflow or your behavior, with no implementation | `DISCUSSION ONLY` | `discuss <task-id>`, read, answer |
 | explicitly separate work, or the plan cited only as background | `DIFFERENT` | `release <task-id>`, then never touch that plan |
-| you cannot tell which | `AMBIGUOUS` | `clarify <task-id>`, ask, wait (never release to wait) |
+| names the plan but not clearly which work (e.g. "what I said yesterday"), or you cannot tell which class | `AMBIGUOUS` | `clarify <task-id>`, ask, wait (never release to wait) |
 
 Shared files, branch or repo are weak evidence. A text-only answer needs no routing.
 

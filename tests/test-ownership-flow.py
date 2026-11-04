@@ -526,6 +526,7 @@ P1.1
         self.hook(provider, "user-prompt-submit.sh")
         denial = self.hook(provider, "pre-tool-use.sh", "touch implementation")
         self.assertIn("even after research", denial["reason"])
+        self.assertIn("cannot tell which work", denial["reason"])
         self.run_command(["bash", "-c", self.action(provider, "bind")], provider)
         # Simulate the agent recording the new authorization under ownership.
         (self.plan / "decisions.md").write_text("## Active Decisions\n- User authorized implementation after lead answers.\n")
