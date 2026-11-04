@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# skill: internal (run by hooks and adapters, not by the agent)
 """Provider-neutral session routing and exclusive plan ownership.
 
 The per-session .state files are authoritative. The workspace marker never

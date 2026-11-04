@@ -1,6 +1,6 @@
 # Work Loop and Maintenance Details
 
-Read this reference when handling long waits, repeated failures, compaction, continuation across phases, or an intentional pause.
+Read this reference when handling long waits, repeated failures, compaction, continuation across phases, an intentional pause, or where a plan's files live.
 
 ## Phase loop
 
@@ -11,6 +11,25 @@ Give each phase executable acceptance outcomes. After meaningful work, keep veri
 When Current Phase settles, advance to the next non-settled phase and continue in the same turn. Commentary may report progress; final output is only for terminal state. Completing one item or phase, updating Resume Checkpoint, or receiving a Stop continuation is not permission to stop.
 
 Append a phase only for the same goal. Phase 13+ uses history-first rollover: archive the oldest eligible non-current complete phase, preserve the monotonic high-water id, then allocate the new id. If twelve hot phases are all unfinished, finish/compact them or split work with a genuinely independent goal/owner.
+
+## Plan-owned files
+
+Keep every temporary file and directory of a plan inside its task folder, in named subfolders:
+research, prototypes, extracted sources, logs, reports, generated fixtures, scratch scripts, backups
+and `handoff.md`. Environments and heavy regenerable files go where the
+`local-files-and-container-output` instruction says (`tmp-env/<task-id>/`), with their path recorded
+in the task folder. Shared maintained source code is not a temporary artifact, even when named
+`local.py`.
+
+When the workspace keeps local-only files under `.vscode/local_files/`, the plan data lives there
+and `tmp/plan-files/<task-id>/` reaches it through the workspace's ignored `tmp` symlink; never
+create a second copy. Tool-required aliases and the `.plan-files` marker are discovery metadata, not
+artifact stores.
+
+When consolidating or moving an existing plan, preserve evidence and uncommitted changes, move Git
+worktrees with `git worktree move`/`repair`, update live path references, and label historical
+snapshots instead of treating their old commands and results as current. Container output follows
+the same instruction: it stays in the container unless the user asks for an export.
 
 ## Errors and alternative paths
 

@@ -1,3 +1,4 @@
+# skill: internal (run by hooks and adapters, not by the agent)
 """Normalize host-written terminal events; never interpret tool output as events.
 
 Claude does not emit PostToolUseFailure for calls rejected by another PreTool

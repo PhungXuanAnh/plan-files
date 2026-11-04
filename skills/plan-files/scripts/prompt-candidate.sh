@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# skill: internal (run by hooks and adapters, not by the agent)
 # Suspend any prior lease and print candidate identity for an adapter to wrap.
 # A prompt made only of host task notifications keeps the lease pending verification.
 

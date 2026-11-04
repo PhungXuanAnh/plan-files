@@ -208,7 +208,7 @@ Archive command JSON adds `transaction_id` on committed writes (`null` for dry r
 
 The bind adapter's `tools TASK --command ...` diagnostic returns schema 1: `matches` (at most 16 receipt/generation pairs), total `match_count`, `command_sha256`, and recovery instructions. It reads only this session's pending receipts. `ack-rejected` requires the same command and one inspected receipt/generation plus a reason asserting a received native pre-execution denial; it returns `acknowledged_rejection`, `remaining_tools`, and `authority_changed: false`. This explicit recovery is not automatic host evidence. Both work before binding without granting execution. See [rejected-call recovery](routing-and-hooks.md#rejected-call-recovery) for the required evidence and exclusions.
 
-The maintenance ceilings are 300 lines, 24 KiB, 12 hot phase headings, about 100 visible items, and at most 15 items or 4 KiB in Current Phase. Crossing a ceiling is not malformed state: reads and plan-local repair remain allowed, while unrelated mutation waits for compaction or task splitting.
+The maintenance ceilings are listed under Limits in `SKILL.md`. Crossing a ceiling is not malformed state: reads and plan-local repair remain allowed, while unrelated mutation waits for compaction or task splitting.
 
 Compact in this order: old Progress Notes, completed verification, resolved errors, and completed phase detail. Archived phase headings leave the hot window; a single high-water marker prevents ID reuse. If neither `phase-add` rollover nor `compact-oldest` finds a non-current complete phase, it fails without writing. Split a new task only when the remaining work has an independent goal or ownership boundary.
 

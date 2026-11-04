@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# skill: internal (run by hooks and adapters, not by the agent)
 # plan-files: resolve the true workspace root for hook scripts.
 #
 # Usage: resolve-project-root.sh [START_DIR]   (default START_DIR: $PWD)

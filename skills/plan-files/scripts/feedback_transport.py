@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# skill: internal (run by hooks and adapters, not by the agent)
 """Retain complete hook reasons while bounding capped or repeated denials."""
 
 import hashlib

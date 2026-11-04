@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# skill: internal (run by hooks and adapters, not by the agent)
 """Classify planning tool calls and extract deterministic plan targets.
 
 Read operations may inspect the project. Plan maintenance is recognized from

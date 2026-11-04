@@ -1,3 +1,4 @@
+# skill: internal (run by hooks and adapters, not by the agent)
 """The authoritative plan filename, with temporary legacy compatibility."""
 
 from pathlib import Path

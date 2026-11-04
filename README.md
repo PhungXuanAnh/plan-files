@@ -31,7 +31,7 @@ Only this layout and the [current tasks format](skills/plan-files/references/for
 - `history.md` stores trusted completed-work summaries and is read only when needed.
 - `handoff.md` is overwritten only for an intentional pause whose volatile state does not fit in `plan.md`.
 
-All plan-owned temporary artifacts also belong inside that same task folder: research, downloads, extracted sources, generated outputs, logs, reports, backups, scratch scripts and temporary Git worktrees. Never scatter them into sibling `tmp/<topic>` folders or leave a root `handoff.md`. Maintained repository source remains in its repository. Where local-only data must live under `.vscode/local_files/`, use the workspace's ignored `tmp` symlink to that storage rather than duplicating plans. Explicitly requested container exports go only to a dedicated plan-contained output volume; do not copy container files back into host source trees.
+All plan-owned temporary artifacts also belong inside that same task folder; environments and heavy regenerable files go to `tmp-env/<task-id>/`. See [plan-owned files](skills/plan-files/references/work-loop-and-maintenance.md#plan-owned-files).
 
 Bounded `overview`/`resume-pack` output is capped at 4 KiB and supplies targeted follow-up reads for truncated sections. `restore-check` validates semantic resume fields plus handoff/external-evidence freshness before operational work. PostTool reminders use semantic risk classes, so read-only exploration and plan maintenance do not create false stale pressure while likely evidence and mutations still require timely checkpoints. Early validation also catches malformed legacy plans, missing profiles and inconsistent phase status before operational tools. PostTool repeats unresolved repair warnings, while healthy progress/finalization advisories share the semantic/time debounce; unchanged reads do not force an injection. Short planning commands run in the foreground; background builds/tests remain supported. Hook messages name the absolute path of every script and document they ask for, so the agent never guesses an install location or searches for a skill script, and the ownership message offers every routing verb its gate accepts, including `discuss` for a question that implements nothing. Operational work on an owned plan also requires the skill to have been read once in the session; reading through an installed symlink counts as reading the canonical file. When every phase is settled, `plan_edit.py resume N --decision ...` reactivates authorized blocked/deferred work with its IDs and evidence intact; `reopen` records authorization and starts a new phase for distinct work. Both synchronize execution state before further operational mutation. See the [early enforcement matrix](skills/plan-files/references/routing-and-hooks.md#early-enforcement-and-stop-audit).
 
@@ -80,7 +80,6 @@ plan-files/
 │   └── plan-files/          # Canonical skill source
 │       ├── SKILL.md
 │       ├── examples.md
-│       ├── reference.md
 │       ├── references/              # Focused routing, format, operations, evaluation details
 │       ├── scripts/                 # Canonical planning tools and shared shell hook cores
 │       └── templates/
