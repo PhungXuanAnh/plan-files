@@ -966,6 +966,10 @@ assert_eq "$(pre_hook codex codex-contract "python3 $EDIT_TOOL phase-add --title
     "gate permits a helper whose output is merged and paged"
 assert_contains "$(pre_hook codex codex-contract "python3 $EDIT_TOOL --plan $PROJECT/tmp/plan-files/other-task/tasks.md phase-add --title Deliver")" \
     "SETTLED PLAN REOPEN REQUIRED" "a helper aimed at another plan is not owned-plan maintenance"
+# A refused chain names the part that disqualified it, not chaining as such.
+INLINE_FINGERPRINT=$(pre_hook codex codex-contract "FP=\$(python3 $REPO_ROOT/skills/plan-files/scripts/plan_state.py fingerprint --file $PLAN_DIR/tasks.md) && python3 $EDIT_TOOL --expected-fingerprint \"\$FP\" reopen --title Deliver")
+assert_contains "$INLINE_FINGERPRINT" "plan_state.py fingerprint --file" "reopen block names the refused substitution"
+assert_contains "$INLINE_FINGERPRINT" "Reuse file_fingerprint" "reopen block says where the fingerprint comes from"
 SETTLED_LOG=$(cat "$PROJECT/tmp/hook-logs/plan-files/pre-tool-use.log")
 assert_contains "$SETTLED_LOG" "decision=block-settled-plan tool=Bash" "pre-tool log correlates the reopen denial"
 # PostTool repeats it only for work that reached execution, never after a read.

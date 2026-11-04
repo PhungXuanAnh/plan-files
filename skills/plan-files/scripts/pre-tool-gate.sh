@@ -188,6 +188,14 @@ subagent_call() {
     printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" subagent-call
 }
 
+# A refused planning call names the part that disqualified it, so the agent
+# fixes that part instead of reading the refusal as a ban on chaining.
+maintenance_refusal() {
+    command -v python3 >/dev/null 2>&1 || return 0
+    printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" \
+        maintenance-refusal "$PLAN_DIR" 2>/dev/null || true
+}
+
 block() {
     local reason=$1
     if [ "$EXPLAIN" != "--explain" ] && [ -n "${FEEDBACK_FILE:-}" ]; then
@@ -426,7 +434,8 @@ if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION
         printf '{}'; exit 0
     fi
     log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=block-discussion tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
-    block "[plan-files] DISCUSSION ONLY. This call writes and its targets cannot be located. Use a native write tool with an explicit path, a supported planning helper, or literal cp/cat report write. Reads, questions, and owned-plan records remain allowed. If this prompt already authorizes execution, run: $EXPECTED_ACTIVATE. Otherwise wait for a new user prompt."
+    REFUSAL=$(maintenance_refusal)
+    block "[plan-files] DISCUSSION ONLY. This call writes and its targets cannot be located. ${REFUSAL:+$REFUSAL }Use a native write tool with an explicit path, a supported planning helper, or literal cp/cat report write. Reads, questions, and owned-plan records remain allowed. If this prompt already authorizes execution, run: $EXPECTED_ACTIVATE. Otherwise wait for a new user prompt."
 fi
 DISCUSSION_HINT="If the user requested only discussion of this plan/workflow, run exactly: $EXPECTED_DISCUSS. This permits a discussion Stop while keeping execution gated; do not use it to pause authorized implementation."
 
@@ -436,7 +445,13 @@ DISCUSSION_HINT="If the user requested only discussion of this plan/workflow, ru
 # the message honest about the boundary: a helper is recognized by the program
 # the command actually runs, so `--help` or a version probe on one passes,
 # while quoting a helper or a plan path inside some other command does not.
-ALLOWED_HINT="Still allowed: read-only diagnosis; native Edit/Write with an explicit file_path inside $PLAN_DIR; and scoped helpers in $(planning_script_path '' | sed 's:/$::'). For direct Markdown shell writes, a cat heredoc with a quoted delimiter and one literal .md target inside the plan is recognized; any trailing commands must be read-only. Inline Python/custom shell cannot prove its write scope merely by including plan paths, even as arguments: switch to native Edit/Write or a supported helper. Chaining unrelated work onto a repair blocks the whole command."
+STATIC_ALLOWED_HINT="Still allowed: read-only diagnosis; native Edit/Write with an explicit file_path inside $PLAN_DIR; and scoped helpers in $(planning_script_path '' | sed 's:/$::'). For direct Markdown shell writes, a cat heredoc with a quoted delimiter and one literal .md target inside the plan is recognized; any trailing commands must be read-only. Inline Python/custom shell cannot prove its write scope merely by including plan paths, even as arguments: switch to native Edit/Write or a supported helper. A chained or substituted command is allowed only when it is itself read-only or a planning helper; one that is not blocks the whole command."
+
+allowed_hint() {
+    local refusal
+    refusal=$(maintenance_refusal)
+    printf '%s' "${refusal:+$refusal }$STATIC_ALLOWED_HINT"
+}
 
 # Invalid format/profile/status blocks execution before Stop, including legacy plans.
 INTEGRITY_WARN=$(planning_integrity_warning "$(planning_plan_file "$PLAN_DIR")")
@@ -445,7 +460,7 @@ if [ -n "$INTEGRITY_WARN" ]; then
         log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") integrity=required decision=allow-integrity-repair tool=$TOOL_NAME"
         printf '{}'; exit 0
     fi
-    block "$INTEGRITY_WARN Operational mutation is blocked until plan integrity is repaired. $ALLOWED_HINT"
+    block "$INTEGRITY_WARN Operational mutation is blocked until plan integrity is repaired. $(allowed_hint)"
 fi
 
 COMPACTION_WARN=$(budget_warning "$PLAN_DIR")
@@ -455,7 +470,7 @@ if [ -n "$COMPACTION_WARN" ]; then
         printf '{}'
         exit 0
     fi
-    REASON_TEXT="[plan-files] MAINTENANCE ACTION REQUIRED. $MAINTENANCE_ACTION $ALLOWED_HINT Questions remain allowed. Budgets are rechecked each call. $COMPACTION_WARN $DISCUSSION_HINT"
+    REASON_TEXT="[plan-files] MAINTENANCE ACTION REQUIRED. $MAINTENANCE_ACTION $(allowed_hint) Questions remain allowed. Budgets are rechecked each call. $COMPACTION_WARN $DISCUSSION_HINT"
     log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") maintenance=required decision=block-compaction tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
     block "$REASON_TEXT"
 fi
@@ -467,7 +482,7 @@ if [ -n "$RESTORE_WARN" ]; then
         printf '{}'
         exit 0
     fi
-    REASON_TEXT="$RESTORE_WARN Operational mutation waits until restore-check passes. $ALLOWED_HINT"
+    REASON_TEXT="$RESTORE_WARN Operational mutation waits until restore-check passes. $(allowed_hint)"
     log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") restore=required decision=block-restore-state tool=$TOOL_NAME"
     block "$REASON_TEXT"
 fi
@@ -478,7 +493,7 @@ fi
 # so the recovery this message asks for is always runnable from inside the gate.
 REOPEN_WARN=$(planning_settled_plan_warning "$PLAN_DIR" "$PWD")
 if [ -n "$REOPEN_WARN" ] && ! maintenance_tool_allowed "$PLAN_DIR" && ! subagent_call; then
-    REASON_TEXT="$REOPEN_WARN $DISCUSSION_HINT $ALLOWED_HINT"
+    REASON_TEXT="$REOPEN_WARN $DISCUSSION_HINT $(allowed_hint)"
     log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") reopen=required decision=block-settled-plan tool=$TOOL_NAME"
     block "$REASON_TEXT"
 fi
@@ -492,7 +507,7 @@ if [ -f "$SKILL_DOC" ] \
     && ! PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" skill-loaded "$PROVIDER" "$SESSION_ID" check 2>/dev/null \
     && ! maintenance_tool_allowed "$PLAN_DIR"; then
     log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=block-skill-unloaded tool=$TOOL_NAME"
-    block "[plan-files] SKILL NOT LOADED. Read $SKILL_DOC before operational work on the owned plan; it defines the format contract, the checkpoint protocol, and where these scripts live. Reading it once clears this gate for the session. If the rules are already in your context, read the file anyway so the gate can observe it. $ALLOWED_HINT"
+    block "[plan-files] SKILL NOT LOADED. Read $SKILL_DOC before operational work on the owned plan; it defines the format contract, the checkpoint protocol, and where these scripts live. Reading it once clears this gate for the session. If the rules are already in your context, read the file anyway so the gate can observe it. $(allowed_hint)"
 fi
 
 log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") maintenance=ok restore=ok decision=allow tool=$TOOL_NAME"

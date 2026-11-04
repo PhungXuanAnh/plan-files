@@ -975,19 +975,75 @@ def _plan_file_arguments(words: list[str]):
             yield word
 
 
-def _substitutions_are_read_only(segment: Segment) -> bool:
-    """A repair may compute an argument; the command it runs to do so may not write.
-
-    `--expected-fingerprint "$(sha256sum tasks.md | cut -d' ' -f1)"` is the
-    documented way to produce that value, so substitution cannot simply be
-    banned inside a repair. It does run a second command, which therefore faces
-    the same read-only test as any other segment.
-    """
+def _write_capable_substitution(segment: Segment) -> str:
+    """The first substituted command that is not read-only, or "" when all are."""
     for command in segment.substitutions:
         inner = shell_segments(command)
         if not inner or not all(_segment_is_read_only(part) for part in inner):
-            return False
-    return True
+            return command
+    return ""
+
+
+def _substitutions_are_read_only(segment: Segment) -> bool:
+    """A substituted command runs too, so it faces the same read-only test as any segment.
+
+    Tolerating a read-only substitution does not make it the way to fill
+    `--expected-fingerprint`: a hash computed inside the edit call always matches
+    and proves no read. plan-operations.md says to reuse `file_fingerprint`.
+    """
+    return not _write_capable_substitution(segment)
+
+
+def _shown(text: str) -> str:
+    """Command text as the agent wrote it, shortened for a block message."""
+    shown = SUBSTITUTION_RE.sub("$(...)", text).strip()
+    if len(shown) > 160:
+        return shown[:157] + "..."
+    return shown
+
+
+def _planning_call_segments(tool_input: object) -> list[Segment] | None:
+    """The command's segments when one of them runs a planning helper, else None."""
+    segments = shell_segments(shell_command_text(tool_input))
+    if not segments:
+        return None
+    for segment in segments:
+        if _segment_runs_planning_helper(segment.argv):
+            return segments
+    return None
+
+
+def _maintenance_refusal(segments: list[Segment], plan_dir: Path | None) -> str:
+    """Why a planning call is not owned-plan maintenance, or "" when it is."""
+    for segment in segments:
+        substitution = _write_capable_substitution(segment)
+        if substitution:
+            reason = f"`$({_shown(substitution)})` is not read-only, and every substitution in a planning call must be."
+            if "fingerprint" in substitution:
+                reason += (" Reuse file_fingerprint from the state you read or the previous edit"
+                           " instead of computing --expected-fingerprint inside the call.")
+            return reason
+        if _segment_runs_planning_helper(segment.argv):
+            if plan_dir is None:
+                continue
+            for word in _plan_file_arguments(segment.argv):
+                if not inside(word, plan_dir):
+                    return f"`{_shown(segment.text)}` names {word}, outside the owned plan {plan_dir}."
+        elif not _segment_is_read_only(segment):
+            return (f"`{_shown(segment.text)}` is neither a planning helper nor read-only;"
+                    " send it as its own call once the gate reopens.")
+    return ""
+
+
+def maintenance_refusal(tool_input: object, plan_dir: Path) -> str:
+    """Block-message note naming the part that disqualified a planning call, or ""."""
+    segments = _planning_call_segments(tool_input)
+    if segments is None:
+        return ""
+    reason = _maintenance_refusal(segments, plan_dir)
+    if not reason:
+        return ""
+    return f"Refused part of this planning call: {reason}"
 
 
 def shell_runs_planning_helper(tool_input: object, plan_dir: Path | None = None) -> bool:
@@ -1005,22 +1061,10 @@ def shell_runs_planning_helper(tool_input: object, plan_dir: Path | None = None)
     different task is not maintenance. A helper that names no plan path is still
     allowed; it resolves the owned plan from the pointer itself.
     """
-    segments = shell_segments(shell_command_text(tool_input))
-    if not segments:
+    segments = _planning_call_segments(tool_input)
+    if segments is None:
         return False
-    maintains = False
-    for segment in segments:
-        if _segment_runs_planning_helper(segment.argv):
-            if plan_dir is not None and any(
-                not inside(word, plan_dir) for word in _plan_file_arguments(segment.argv)
-            ):
-                return False
-            if not _substitutions_are_read_only(segment):
-                return False
-            maintains = True
-        elif not _segment_is_read_only(segment):
-            return False
-    return maintains
+    return not _maintenance_refusal(segments, plan_dir)
 
 
 ROUTING_VERBS = {"bind", "reclaim", "release", "clarify", "discuss", "handoff", "tools", "ack-rejected"}
@@ -1433,6 +1477,11 @@ def main() -> int:
             return 1
         plan_dir = Path(os.path.realpath(sys.argv[2]))
         print(json.dumps(tool_class(payload, plan_dir), separators=(",", ":")))
+        return 0
+    if len(sys.argv) == 3 and sys.argv[1] == "maintenance-refusal":
+        payload = load_payload()
+        if payload is not None:
+            print(maintenance_refusal(payload_tool_input(payload), Path(os.path.realpath(sys.argv[2]))), end="")
         return 0
     if len(sys.argv) == 3 and sys.argv[1] == "plan-op-class":
         payload = load_payload()
