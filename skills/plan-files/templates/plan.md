@@ -26,7 +26,7 @@
 <!-- Fill exactly one before operational work: A, B, or C. Unfilled profiles trigger PreTool repair gating. -->
 **Profile:** [A | B | C]
 
-- **A - PR-Handoff:** stop after PR opened, CI green, reviewers requested.
+- **A - PR-Handoff:** stop after PR opened, CI green, reviewers requested only when explicitly authorized.
 - **B - Staging-Verified:** stop after staging deploy and staging E2E pass.
 - **C - Research/Document:** stop after deliverable file/report is complete.
 
