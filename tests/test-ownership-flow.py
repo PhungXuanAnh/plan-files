@@ -303,6 +303,14 @@ P1.1
                 for variant in refused:
                     self.assertIn(self.hook(provider, "pre-tool-use.sh", variant).get("decision"),
                                   {"block", "deny"}, variant)
+                # $PWD names the printed root only while the call runs there.
+                pwd_command = "PWF_PROJECT_ROOT=$PWD bash " + command.split(" bash ", 1)[1]
+                at_root = self.hook(provider, "pre-tool-use.sh",
+                                    tool_input={"command": pwd_command, "cwd": str(self.project)})
+                self.assertNotIn(at_root.get("decision"), {"block", "deny"})
+                elsewhere = self.hook(provider, "pre-tool-use.sh",
+                                      tool_input={"command": pwd_command, "cwd": str(self.plan)})
+                self.assertIn("ROUTING COMMAND NOT RECOGNIZED", elsewhere["reason"])
                 # Recognition is worth nothing unless the decorated command it
                 # admits also resolves ownership when the agent runs it.
                 self.run_command(["bash", "-c", accepted[0]], provider)

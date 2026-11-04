@@ -1073,6 +1073,10 @@ ROUTING_VERBS = {"bind", "reclaim", "release", "clarify", "discuss", "handoff", 
 # PWF_PROJECT_ROOT would route a different project, so the routing command
 # carries at most the one assignment the gate's own message prescribes.
 ROUTING_ENV_NAMES = {"PWF_PROJECT_ROOT"}
+# Agents often retype the printed root as $PWD; it names the same directory
+# while the call runs where the host says and nothing before it changed directory.
+PWD_REFERENCES = {"$PWD", "${PWD}"}
+DIRECTORY_CHANGERS = {"cd", "pushd", "popd"}
 DETACH_COMMANDS = {"nohup", "setsid"}
 
 
@@ -1116,7 +1120,7 @@ def _routing_words(segment: Segment) -> list[str] | None:
 
 
 def _segment_routing_verb(segment: Segment, bind_tool: Path, project_root: Path,
-                          task_id: str) -> str | None:
+                          task_id: str, cwd: str) -> str | None:
     """The routing verb this segment runs, or None for anything else.
 
     Recognized from the program the segment actually runs -- the bind adapter
@@ -1139,6 +1143,8 @@ def _segment_routing_verb(segment: Segment, bind_tool: Path, project_root: Path,
         if "=" not in word or word.startswith("="):
             break
         name, _, value = word.partition("=")
+        if value in PWD_REFERENCES and cwd:
+            value = cwd
         if name not in ROUTING_ENV_NAMES or os.path.realpath(value) != str(project_root):
             return None
         index += 1
@@ -1186,7 +1192,7 @@ def _segment_reads_plan(segment: Segment) -> bool:
     return _helper_op_class(*call) == "read" and _routing_words(segment) is not None
 
 
-def routing_verb(tool_input: object, bind_tool: Path, project_root: Path, task_id: str) -> str:
+def routing_verb(tool_input: object, bind_tool: Path, project_root: Path, task_id: str, cwd: str = "") -> str:
     """The routing verb a whole command runs, or "" when it runs anything else.
 
     Read-only decoration around the routing command has to pass. The gate
@@ -1206,7 +1212,9 @@ def routing_verb(tool_input: object, bind_tool: Path, project_root: Path, task_i
         return ""
     verb = ""
     for segment in segments:
-        found = _segment_routing_verb(segment, bind_tool, project_root, task_id)
+        found = _segment_routing_verb(segment, bind_tool, project_root, task_id, cwd)
+        if segment.argv and Path(segment.argv[0]).name in DIRECTORY_CHANGERS:
+            cwd = ""
         if found:
             if verb:
                 return ""
@@ -1391,6 +1399,14 @@ def is_read_only_call(payload: dict) -> bool:
     return simple in SHELL_TOOL_NAMES and bash_is_read_only(tool_input)
 
 
+def payload_cwd(payload: dict) -> str:
+    """The directory the tool call runs in, as the host reports it, or "" when unknown."""
+    tool_input = payload_tool_input(payload)
+    if isinstance(tool_input, dict) and (tool_input.get("workdir") or tool_input.get("cwd")):
+        return tool_input.get("workdir") or tool_input.get("cwd")
+    return payload.get("cwd") or ""
+
+
 def names_skill_document(payload: dict, skill_md: str) -> bool:
     """Recognize the entrypoint through canonical or installed symlink paths."""
     if not skill_md or not is_read_only_call(payload):
@@ -1400,9 +1416,7 @@ def names_skill_document(payload: dict, skill_md: str) -> bool:
     candidates = list(strings(tool_input))
     for segment in shell_segments(shell_command_text(tool_input)) or []:
         candidates.extend(segment.argv)
-    cwd = payload.get("cwd") or os.getcwd()
-    if isinstance(tool_input, dict):
-        cwd = tool_input.get("workdir") or tool_input.get("cwd") or cwd
+    cwd = payload_cwd(payload) or os.getcwd()
     for candidate in candidates:
         path = os.path.expanduser(candidate)
         if not os.path.isabs(path):
@@ -1432,7 +1446,8 @@ def main() -> int:
         if payload is None:
             return 1
         value = payload_tool_input(payload)
-        if not routing_verb(value, Path(sys.argv[3]).resolve(), Path(sys.argv[4]).resolve(), sys.argv[5]):
+        if not routing_verb(value, Path(sys.argv[3]).resolve(), Path(sys.argv[4]).resolve(), sys.argv[5],
+                            payload_cwd(payload)):
             return 1
         target = os.path.realpath(sys.argv[2])
         segments = shell_segments(shell_command_text(value)) or []
@@ -1501,7 +1516,7 @@ def main() -> int:
             return 1
         verb = routing_verb(payload_tool_input(payload),
                             Path(os.path.realpath(sys.argv[2])),
-                            Path(os.path.realpath(sys.argv[3])), sys.argv[4])
+                            Path(os.path.realpath(sys.argv[3])), sys.argv[4], payload_cwd(payload))
         print(verb, end="")
         return 0 if verb else 1
     if len(sys.argv) == 3 and sys.argv[1] in {"prompt-plan-id", "mutation-plan-id"}:

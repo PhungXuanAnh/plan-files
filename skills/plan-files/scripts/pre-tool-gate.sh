@@ -371,6 +371,13 @@ if [ -z "$PLAN_DIR" ]; then
     else
         REASON_TEXT="[plan-files] OWNERSHIP ACTION REQUIRED (not a permission failure and not an external blocker). Candidate '$CANDIDATE' is pending for this prompt. Do not stop or report that the environment is blocked. Resolve ownership now by running exactly one action: SAME task -> $EXPECTED_BIND OR DIFFERENT task -> $EXPECTED_RELEASE. After bind/release succeeds, retry the original tool call."
     fi
+    # The call named the adapter, so it was a routing attempt the recognizer
+    # refused; without saying so the agent resends the same rewritten command.
+    case "$ROUTING_VERB:$TOOL_COMMAND" in
+        :*"$BIND_TOOL_NAME"*)
+            REASON_TEXT="[plan-files] ROUTING COMMAND NOT RECOGNIZED: copy the command for your class below exactly as printed (literal absolute paths, no other shell variables or substitutions, only read-only commands chained after it).
+$REASON_TEXT" ;;
+    esac
     log "session=$SESSION_ID candidate=$CANDIDATE decision=block-ownership tool=$TOOL_NAME command=$(printf '%s' "$TOOL_COMMAND" | cut -c 1-180)"
     if [ "$EXPLAIN" != "--explain" ]; then
         PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" routing-required "$PROVIDER" "$SESSION_ID" mark 2>/dev/null || true

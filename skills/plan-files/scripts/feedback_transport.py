@@ -61,6 +61,7 @@ def contains_path(value: object, path: str) -> bool:
 # repair before it opens the file. Labels are short because the pointer competes
 # with the path for a small budget; the file still carries the full text.
 REASON_LABELS = (
+    ("ROUTING COMMAND NOT RECOGNIZED", "ROUTING COMMAND NOT RECOGNIZED"),
     ("OWNERSHIP ACTION REQUIRED", "OWNERSHIP"),
     ("PLAN MUTATION BLOCKED", "PLAN MUTATION"),
     ("MAINTENANCE ACTION REQUIRED", "MAINTENANCE"),
