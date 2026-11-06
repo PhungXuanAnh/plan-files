@@ -361,8 +361,12 @@ class SessionStore:
                 if row.get("event") and row["event"] != event:
                     raise SessionError("creation event does not match this reservation")
             else:
-                if row.get("status") in {"discussing", "waiting", "disabled", "idle", "inactive"}:
+                if row.get("status") in {"discussing", "waiting", "disabled", "idle"}:
                     raise SessionError("planning lease is not claimable; resolve the current prompt first")
+                # After release or handoff the prompt may start a new plan, never take an existing one back.
+                starts_new_plan = creating and not resolve_plan_file(directory).is_file()
+                if row.get("status") == "inactive" and not starts_new_plan:
+                    raise SessionError("planning lease was released for this prompt; create a new task id for separate work")
                 current = row.get("task") or row.get("candidate")
                 if current and current != task:
                     raise SessionError(f"planning lease conflicts with task: {current}")
@@ -684,11 +688,30 @@ def candidate_context(store: SessionStore, task: str, adapter: str, compact: boo
             f"## Task Identity\n{task_identity}\n\n## Goal\n{goal}")
 
 
+ADAPTER_USAGE = """usage: <bind adapter> <verb> ...
+  bind <task-id> [--reason "<user authorization>"]  this prompt continues that plan's work
+  discuss <task-id>                                 answer about the plan; execution stays gated
+  clarify <task-id>                                 keep the candidate, ask the user, wait
+  release <task-id>                                 drop the pending candidate; the request is separate work
+  handoff <task-id>                                 give owned work to another session
+  reclaim <task-id> --reason "<user confirmation>"  take a task whose other sessions are closed
+  resolve                                           print the plan directory this prompt owns
+  tools <task-id> --command '<rejected command>'    rejected-call recovery
+A new plan needs no verb: write its plan.md, findings.md and decisions.md; the first write reserves the task.
+"""
+ROUTING_VERBS = {"bind", "reclaim", "release", "clarify", "discuss", "handoff"}
+
+
 def main(argv=None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
         raise SessionError("usage: session-state.sh <operation> [arguments]")
     op, *args = args
+    if op in {"-h", "--help", "help"}:
+        print(ADAPTER_USAGE, end="")
+        return 0
+    if op in ROUTING_VERBS and not args:
+        raise SessionError(f"{op} needs a task id\n{ADAPTER_USAGE}")
     if op in {"session-id", "event-id"}:
         value = json.load(sys.stdin)
         keys = ("session_id", "sessionId") if op == "session-id" else ("tool_use_id", "toolUseId", "tool_call_id", "toolCallId")
@@ -723,7 +746,7 @@ def main(argv=None) -> int:
         output = store.resolve(*who)
         if not output:
             raise SessionError("this session owns no plan for this prompt; follow the routing guidance")
-    elif op in {"bind", "reclaim", "release", "clarify", "discuss", "handoff"}:
+    elif op in ROUTING_VERBS:
         who = identity()
         if who is None:
             raise SessionError("no verified planning session identity is available")

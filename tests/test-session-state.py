@@ -350,6 +350,12 @@ Phase 1
                 self.store.transition(provider, "creator", "release", task)
                 self.hook(provider, "creator", "post-tool-use.sh", task=task)
                 self.assertEqual(self.store.resolve(provider, "creator"), "")
+                # Released separate work may start a new plan, but cannot take the released one back.
+                with self.assertRaises(SessionError):
+                    self.store.claim(provider, "creator", task, creating=True)
+                allowed = self.hook(provider, "creator", "pre-tool-use.sh", task=f"{task}-next")
+                self.assertNotIn(allowed.get("decision"), {"block", "deny"})
+                self.assertEqual(len(self.store.owners(f"{task}-next")), 1)
                 self.store.bind(provider, "competitor", task)
                 rejected = self.hook(provider, "creator", "pre-tool-use.sh", task=task)
                 self.assertIn(rejected.get("decision"), {"block", "deny"})
@@ -366,10 +372,12 @@ Phase 1
                                         tool_input={"command": command})
                     self.assertNotIn(allowed.get("decision"), {"block", "deny"})
                     self.assertEqual(self.store.owners(task), [])
-                creation = f"cat > tmp/plan-files/{task}/plan.md <<'EOF'\n# plan\nEOF"
-                self.hook(provider, "creator", "pre-tool-use.sh", task=task, tool="Bash",
-                          tool_input={"command": creation})
-                self.assertEqual(len(self.store.owners(task)), 1)
+                creations = (("creator", task, "cat > tmp/plan-files/{0}/plan.md <<'EOF'\n# plan\nEOF"),
+                             ("redirector", f"{task}-r", "mkdir -p tmp/plan-files/{0} && cat > tmp/plan-files/{0}/plan.md <<EOF\n# plan\nEOF"))
+                for session, created, creation in creations:
+                    self.hook(provider, session, "pre-tool-use.sh", task=created, tool="Bash",
+                              tool_input={"command": creation.format(created)})
+                    self.assertEqual(len(self.store.owners(created)), 1)
 
     def test_nonparticipant_hooks_do_not_adopt_another_plan(self):
         self.store.claim("codex", "owner", "task-a")

@@ -425,6 +425,9 @@ def extract_mutation_plan_id(payload: dict, project_root: Path) -> int:
         return 1
     shell = tool_name.lower().rsplit("__", 1)[-1] in SHELL_TOOL_NAMES
     targets = shell_write_targets(tool_input) if shell else mutation_targets(tool_input)
+    # After `cd`, a relative redirect target cannot be placed in this project.
+    if shell and not targets and not shell_changes_directory(tool_input):
+        targets = [path for path in redirect_targets(tool_input) if plan_id_for_path(path, project_root)]
     if shell and _cat_heredoc_header(tool_input):
         return print_single_plan_id(plan_ids(targets, project_root))
     if targets or not shell:
@@ -841,6 +844,30 @@ def shell_write_targets(tool_input: object) -> list[str]:
     # Even a rejected heredoc may contain patch markers as literal prose.
     # They cannot grant an invalid/mixed command the native-patch allowance.
     return [] if _cat_heredoc_header(tool_input) else mutation_targets(tool_input)
+
+
+def redirect_targets(tool_input: object) -> list[str]:
+    """Files a shell command writes through `>`, `>>` or `tee`."""
+    command = shell_command_text(tool_input)
+    if "<<" in command:
+        # The lines after a heredoc header are its body, not commands.
+        command = command.partition("\n")[0]
+    targets: list[str] = []
+    for segment in shell_segments(command) or []:
+        try:
+            lexer = shlex.shlex(segment.text, posix=True, punctuation_chars=";&|()<>")
+            lexer.whitespace_split = True
+            lexer.commenters = ""
+            words = list(lexer)
+        except ValueError:
+            continue
+        for index, word in enumerate(words[:-1]):
+            if word in {">", ">>"}:
+                targets.append(words[index + 1])
+        start = _command_start(words)
+        if start is not None and os.path.basename(words[start]) == "tee":
+            targets.extend(word for word in words[start + 1:] if not word.startswith("-"))
+    return targets
 
 
 def literal_copy_target(tool_input: object) -> str | None:
