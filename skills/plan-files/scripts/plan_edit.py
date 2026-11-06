@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Iterable
 
 import plan_checkpoint
+from global_commands import helper_command
 from plan_paths import PLAN_FILENAME, PLAN_FILENAMES, resolve_plan_file
 from session_state import authorize_edit, plan_transaction
 from plan_state import (
@@ -432,9 +433,9 @@ def _validate_section_target(file_name: str, heading: str) -> str:
         return normalized
     if normalized not in ALLOWED_SECTIONS[file_name]:
         if file_name in PLAN_FILENAMES and normalized in {"Current Phase", "Active Item"}:
-            checkpoint = Path(__file__).resolve().with_name("plan_checkpoint.py")
+            checkpoint = helper_command("plan_checkpoint.py", str(Path(__file__).resolve().with_name("plan_checkpoint.py")))
             raise EditError(
-                f"{normalized} is an execution field: use python3 {checkpoint} start <item-id> "
+                f"{normalized} is an execution field: use {checkpoint} start <item-id> "
                 "to synchronize phase, item, and resume state. For a new phase, add its --item "
                 "values and --start in the same phase-add call, or use reopen for newly authorized work."
             )
@@ -1613,7 +1614,7 @@ def _rollover_material(args, state, archived) -> dict[str, object]:
         raise EditError(
             f"{args.command} rollover requires --expected-history-fingerprint with the "
             f"current history.md SHA-256 or 'missing', AFTER {args.command}. Example: "
-            f"python3 {shlex.quote(str(Path(__file__).resolve()))} --plan {shlex.quote(str(args.plan))} "
+            f"{helper_command('plan_edit.py', shlex.quote(str(Path(__file__).resolve())))} --plan {shlex.quote(str(args.plan))} "
             f"--expected-fingerprint <tasks-sha256> {args.command} --expected-history-fingerprint "
             f'<history-sha256-or-missing> --title "<phase title>" --item "<outcome>"{authorization}'
         )

@@ -6,6 +6,8 @@
 #   planning_skill_dir                — absolute installed skills/plan-files directory
 #   planning_script_path NAME         — absolute path of a skill script for messages
 #   planning_doc_path RELPATH         — absolute path of SKILL.md or a references/ file
+#   planning_helper_command NAME      — how a message spells a helper: global name or python3 PATH
+#   planning_bind_command PROVIDER TOOL — how a message spells the bind adapter: global name or bash PATH
 #   planning_prepare_log_dir DIR      — mkdir a hook log dir only at a state-accepting root
 #   current_phase_pointer PLAN_FILE   — print only a valid exact `Phase N` pointer
 #   planning_item_context PLAN_FILE   — print contracted item state as compact JSON
@@ -16,7 +18,7 @@
 #   planning_file_budget_warning DIR — echo line/byte/scope warning when needed
 #   planning_handoff_warning DIR     — echo warning when optional handoff.md is stale
 #   planning_restore_warning DIR     — echo bounded targeted repair guidance for incomplete restore state
-#   planning_settled_plan_warning DIR ROOT — echo reopen guidance when every phase is already complete
+#   planning_settled_plan_warning DIR ROOT [DISCUSS_CMD] — echo reopen guidance when every phase is already complete
 
 current_phase_pointer() {
     local _plan_file="${1:-}" _body
@@ -68,6 +70,35 @@ planning_doc_path() {
     local _dir
     _dir=$(planning_skill_dir) || { printf '%s' "${1:-}"; return 0; }
     printf '%s/%s' "$_dir" "${1:-}"
+}
+
+# planning_global_command NAME TARGET — print NAME when it is on PATH and runs
+# exactly TARGET. `make install` links the short names; comparing resolved
+# paths keeps a look-alike earlier on PATH from ever being advertised.
+planning_global_command() {
+    local _found
+    _found=$(command -v -- "$1" 2>/dev/null) || return 1
+    [ "$(readlink -f -- "$_found")" = "$(readlink -f -- "$2")" ] || return 1
+    printf '%s' "$1"
+}
+
+# planning_helper_command NAME — the helper's global name when installed,
+# otherwise python3 with its quoted absolute path.
+planning_helper_command() {
+    local _path _quoted
+    _path=$(planning_script_path "$1")
+    planning_global_command "$1" "$_path" && return 0
+    printf -v _quoted '%q' "$_path"
+    printf 'python3 %s' "$_quoted"
+}
+
+# planning_bind_command PROVIDER BIND_TOOL — pwf-bind-PROVIDER when installed,
+# otherwise bash with the adapter's quoted absolute path.
+planning_bind_command() {
+    local _quoted
+    planning_global_command "pwf-bind-$1" "$2" && return 0
+    printf -v _quoted '%q' "$2"
+    printf 'bash %s' "$_quoted"
 }
 
 # Shared filename selection for canonical and legacy plans; policy stays in Python.
@@ -635,19 +666,19 @@ planning_restore_warning() {
     command -v python3 >/dev/null 2>&1 || return 0
     _payload=$(python3 "$_tool" restore-check "$_plan_file" 2>/dev/null) || true
     [ -n "$_payload" ] || return 0
-    printf '%s' "$_payload" | PWF_STATE_TOOL="$_tool" \
-        PWF_CHECKPOINT_TOOL="$(planning_script_path plan_checkpoint.py)" \
+    printf '%s' "$_payload" | PWF_STATE_COMMAND="$(planning_helper_command plan_state.py)" \
+        PWF_CHECKPOINT_COMMAND="$(planning_helper_command plan_checkpoint.py)" \
         PWF_PLAN_FILE="$_plan_file" PWF_RESTORE_MODE="$_mode" \
         python3 -c 'import json,os,sys
 try: p=json.load(sys.stdin)
 except Exception: raise SystemExit(0)
 plan=os.environ["PWF_PLAN_FILE"]
-state_tool=os.environ["PWF_STATE_TOOL"]
-checkpoint_tool=os.environ["PWF_CHECKPOINT_TOOL"]
+state_command=os.environ["PWF_STATE_COMMAND"]
+checkpoint_command=os.environ["PWF_CHECKPOINT_COMMAND"]
 if p.get("discussion_mode"):
     if os.environ.get("PWF_RESTORE_MODE") != "with-discussion": raise SystemExit(0)
     print("[plan-files] DISCUSSION ONLY. Start the user-authorized Active Item before operational work: "
-          f"python3 {checkpoint_tool} start <ID>.", end="")
+          f"{checkpoint_command} start <ID>.", end="")
     raise SystemExit(0)
 if p.get("ok", True): raise SystemExit(0)
 issues=p.get("issues", [])
@@ -657,11 +688,11 @@ for issue in issues[:3]:
 more=len(issues)-len(parts)
 if more > 0: parts.append(f"{more} more issue(s)")
 print("[plan-files] RESTORE STATE ACTION REQUIRED: " + "; ".join(parts) +
-      f". For the bounded complete diagnosis run: python3 {state_tool} restore-check {plan}", end="")' 2>/dev/null || true
+      f". For the bounded complete diagnosis run: {state_command} restore-check {plan}", end="")' 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
-# planning_settled_plan_warning PLAN_DIR PROJECT_ROOT
+# planning_settled_plan_warning PLAN_DIR PROJECT_ROOT [DISCUSS_CMD]
 # A plan whose every phase is complete has nowhere to record what the current
 # prompt is doing, and Stop accepts such a plan unconditionally. So an agent
 # that binds it for further work can implement, commit, and open a PR while the
@@ -669,24 +700,29 @@ print("[plan-files] RESTORE STATE ACTION REQUIRED: " + "; ".join(parts) +
 # recorded. A plan with only complete/blocked/deferred phases also has no
 # active slot for newly authorized work. Reopen adds distinct work; resume
 # explicitly continues an existing blocked/deferred phase with its IDs intact.
+# Every command stays literal and copy-runnable: agents and tests execute it as printed.
 # ---------------------------------------------------------------------------
 planning_settled_plan_warning() {
-    local _plan_dir="${1:-}" _root="${2:-}" _plan_file _edit _checkpoint _sha _plan_arg _root_arg
+    local _plan_dir="${1:-}" _root="${2:-}" _discuss="${3:-}" _plan_file _edit _checkpoint _sha _plan_arg _root_arg
     local TOTAL COMPLETE IN_PROGRESS PENDING BLOCKED DEFERRED
     [ -n "$_plan_dir" ] || return 0
     _plan_file=$(planning_plan_file "$_plan_dir")
     [ -f "$_plan_file" ] || return 0
     count_phases "$_plan_file"
     [ "$TOTAL" -gt 0 ] && [ $((COMPLETE + BLOCKED + DEFERRED)) -eq "$TOTAL" ] || return 0
-    printf -v _edit '%q' "$(planning_script_path plan_edit.py)"
-    printf -v _checkpoint '%q' "$(planning_script_path plan_checkpoint.py)"
+    _edit=$(planning_helper_command plan_edit.py)
+    _checkpoint=$(planning_helper_command plan_checkpoint.py)
     printf -v _plan_arg '%q' "$_plan_file"
     printf -v _root_arg '%q' "$_root"
     _sha=$(sha256sum "$_plan_file" | cut -d' ' -f1)
-    printf '[plan-files] SETTLED PLAN REOPEN REQUIRED. All %s phases in %s are settled (complete, blocked, or deferred). Choose resume for existing paused work or reopen for distinct new work. Reopen in one call, run from %s (planning commands default --plan to this session lease): python3 %s --compact --expected-fingerprint %s reopen --title "<phase title>" --decision "| <ID> | <what the user authorized> | <why> | <date> |" --item "<first outcome>". Add --supersede <OLD-ID> for the decision it replaces, more --item/--verify for the rest of the phase, and --goal/--deliverable/--non-goals/--profile for scope that moved. To continue an existing blocked/deferred phase, preserve its IDs and evidence with: python3 %s --expected-fingerprint %s resume <N> --decision "| <ID> | Resume the existing work | User authorized resumption | <date> |". If the prompt only discusses this plan or workflow without executing its deliverable, run the discussion command instead. If no new work was authorized, finalize with python3 %s --plan %s deactivate-pointer --project-root %s, then python3 %s --plan %s assert-finalizable --project-root %s. If it already reported ok (including session_finish at_stop), do not rerun it: read-only diagnosis remains allowed; otherwise end this reply so Stop releases the session.' \
+    if [ -n "$_discuss" ]; then
+        _discuss="run exactly $_discuss"
+    else
+        _discuss="run the discussion bind command instead"
+    fi
+    printf '[plan-files] SETTLED PLAN REOPEN REQUIRED: all %s phases in %s are complete, blocked, or deferred. From %s run one option (helpers default --plan to this session lease). (1) Distinct new work: %s --compact --expected-fingerprint %s reopen --title "<phase title>" --decision "| <ID> | <what the user authorized> | <why> | <date> |" --item "<first outcome>"; add --supersede <OLD-ID> for a replaced decision, more --item/--verify for the phase, --goal/--deliverable/--non-goals/--profile if scope moved. (2) Resume a blocked/deferred phase, keeping its IDs and evidence: %s --expected-fingerprint %s resume <N> --decision "| <ID> | Resume the existing work | User authorized resumption | <date> |". (3) Discussion only, deliverable not executed: %s (allows a discussion Stop with execution gated; never use it to pause authorized implementation). (4) No new work authorized: %s --plan %s deactivate-pointer --project-root %s, then %s --plan %s assert-finalizable --project-root %s. If that already reported ok (including session_finish at_stop), do not rerun it; read-only diagnosis stays allowed. Otherwise end this reply so Stop releases the session.' \
         "$TOTAL" "$_plan_file" "$_root" \
-        "$_edit" "$_sha" \
-        "$_edit" "$_sha" \
+        "$_edit" "$_sha" "$_edit" "$_sha" "$_discuss" \
         "$_checkpoint" "$_plan_arg" "$_root_arg" "$_checkpoint" "$_plan_arg" "$_root_arg"
 }
 

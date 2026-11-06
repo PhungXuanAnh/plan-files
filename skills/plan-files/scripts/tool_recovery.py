@@ -69,8 +69,9 @@ def recovery_guidance(store, provider: str, task: str) -> str:
     import shlex
     from pathlib import Path
     repo = Path(__file__).resolve().parents[3]
-    directory = ".github/hooks/scripts" if provider == "copilot" else f".{provider}/hooks/plan-files/scripts"
-    command = f"PWF_PROJECT_ROOT={shlex.quote(str(store.root))} bash {shlex.quote(str(repo / directory / 'bind-session.sh'))}"
+    from global_commands import adapter_path, bind_command
+    bind_tool = adapter_path(provider)
+    command = f"PWF_PROJECT_ROOT={shlex.quote(str(store.root))} {bind_command(bind_tool, shlex.quote(str(bind_tool)))}"
     return (f"; for an already received pre-execution denial, inspect only that command with `{command} tools {task} --command '<exact rejected command>'`, "
             f"then follow {repo / 'skills/plan-files/references/routing-and-hooks.md'} (Rejected-call recovery). "
             "Never acknowledge a running, timed-out or unknown call; do not clear .tools or reclaim other sessions")

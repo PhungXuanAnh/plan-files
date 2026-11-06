@@ -14,6 +14,8 @@ import re
 import shutil
 import sys
 
+from global_commands import BIND_COMMANDS
+
 
 def process_identity(pid: int) -> tuple[str, str]:
     data = Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()
@@ -149,7 +151,7 @@ def is_helper(payload: dict) -> bool:
     module = classifier()
     for segment in module.planning_helper_segments(module.shell_command_text(module.payload_tool_input(payload))):
         if any(Path(word).name in {"session-state.sh", "session_state.py", "bind-session.sh",
-                                  "plan_edit.py", "plan_checkpoint.py", "plan_state.py"}
+                                  "plan_edit.py", "plan_checkpoint.py", "plan_state.py", *BIND_COMMANDS}
                for word in segment.argv):
             return module.shell_runs_planning_helper(module.payload_tool_input(payload))
     return False

@@ -189,6 +189,8 @@ Install all supported skills and hooks globally from this checkout:
 make install-global
 ```
 
+`make install-commands` (included above) links short command names into `COMMAND_DIR` (default `~/.local/bin`; it must be on PATH): `plan_state.py`, `plan_edit.py`, `plan_checkpoint.py`, and `pwf-bind-codex`/`pwf-bind-claude`/`pwf-bind-copilot`/`pwf-bind-grok` for the provider bind adapters. While PATH resolves a name to this checkout, hook messages print it instead of `python3 <absolute path>` or `bash <adapter path>`, which keeps each block message shorter; otherwise they keep the full-path spelling. `make check-installs` lists the links.
+
 `make install-hooks` installs only the hooks. Claude Code merges the planning groups in `.claude/settings.json.sample` into the regular global file `~/.claude/settings.json`; missing groups are added, stale or duplicate planning groups are replaced, and unrelated settings and hook groups are preserved even when they share the same event. Codex merges its sample into `~/.codex/hooks.json`. Copilot's global hook config remains a symlink to its `.sample` file. Grok installs an owned native file at `${GROK_HOME:-$HOME/.grok}/hooks/plan-files.json` and leaves every sibling JSON hook untouched. Hook scripts execute from this checkout, so script-only edits apply globally without reinstalling. Rerun the relevant installer after changing a sample definition or moving this checkout.
 
 Install only the native Grok hook into the normal global home:

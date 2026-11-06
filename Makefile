@@ -1,7 +1,7 @@
 .PHONY: help test behavioral-eval check-installs injected-content plan-overview \
         install-skill-copilot install-skill-claude-code install-skill-codex install-skill-grok install-skill-kiro install-skills \
         install-hook-copilot install-hook-claude-code install-hook-codex install-hook-grok install-hooks \
-        install-copilot install-claude-code install-codex install-grok install-global install \
+        install-copilot install-claude-code install-codex install-grok install-commands install-global install \
         sync-upstream sync-upstream-rebase sync-upstream-merge install-hooks-json
 
 help: ## Show this help
@@ -41,6 +41,13 @@ KIRO_SKILL := $(HOME)/.kiro/skills/plan-files
 GROK_HOME ?= $(HOME)/.grok
 GROK_SKILL := $(GROK_HOME)/skills/plan-files
 GROK_HOOKS := $(GROK_HOME)/hooks/plan-files.json
+# Short command names; hook messages use them only while PATH resolves them to this checkout.
+COMMAND_DIR ?= $(HOME)/.local/bin
+GLOBAL_COMMANDS := plan_state.py plan_edit.py plan_checkpoint.py pwf-bind-codex pwf-bind-claude pwf-bind-copilot pwf-bind-grok
+# Tests assert the full-path spellings, so they run without the installed names;
+# the short-name contract test puts its own command directory on PATH.
+TEST_PATH := $(shell printf '%s' "$$PATH" | tr ':' '\n' | grep -vxF '$(COMMAND_DIR)' | paste -sd: -)
+test behavioral-eval: export PATH := $(TEST_PATH)
 
 CODEX_HOOKS_SRC := $(REPO_ROOT)/.codex/hooks.json.sample
 CLAUDE_CODE_SETTINGS_SRC := $(REPO_ROOT)/.claude/settings.json.sample
@@ -92,6 +99,10 @@ check-installs: ## Show global skill/hook install status
 	$(call check_path,$(GROK_SKILL))
 	$(call check_path,$(GROK_HOOKS))
 	$(call check_path,$(KIRO_SKILL))
+	@for name in $(GLOBAL_COMMANDS); do \
+		if [ -L "$(COMMAND_DIR)/$$name" ]; then echo "LINK    $(COMMAND_DIR)/$$name -> $$(readlink "$(COMMAND_DIR)/$$name")"; \
+		else echo "MISSING $(COMMAND_DIR)/$$name"; fi; \
+	done
 
 install-skill-codex: ## Link skill into global Codex skills
 	$(call link_path,$(SKILL_SRC),$(CODEX_SKILL))
@@ -133,7 +144,16 @@ install-skills: install-skill-codex install-skill-claude-code install-skill-copi
 
 install-hooks: install-hook-codex install-hook-claude-code install-hook-copilot install-hook-grok ## Install hook JSON/settings globally
 
-install-global install: install-skills install-hooks ## Install skills and available hook JSON/settings globally
+install-commands: ## Link short planning command names into COMMAND_DIR (default ~/.local/bin, must be on PATH)
+	$(call link_path,$(SKILL_SRC)/scripts/plan_state.py,$(COMMAND_DIR)/plan_state.py)
+	$(call link_path,$(SKILL_SRC)/scripts/plan_edit.py,$(COMMAND_DIR)/plan_edit.py)
+	$(call link_path,$(SKILL_SRC)/scripts/plan_checkpoint.py,$(COMMAND_DIR)/plan_checkpoint.py)
+	$(call link_path,$(REPO_ROOT)/.codex/hooks/plan-files/scripts/bind-session.sh,$(COMMAND_DIR)/pwf-bind-codex)
+	$(call link_path,$(REPO_ROOT)/.claude/hooks/plan-files/scripts/bind-session.sh,$(COMMAND_DIR)/pwf-bind-claude)
+	$(call link_path,$(REPO_ROOT)/.github/hooks/scripts/bind-session.sh,$(COMMAND_DIR)/pwf-bind-copilot)
+	$(call link_path,$(REPO_ROOT)/.grok/hooks/plan-files/scripts/bind-session.sh,$(COMMAND_DIR)/pwf-bind-grok)
+
+install-global install: install-skills install-hooks install-commands ## Install skills, hook JSON/settings and short command names globally
 
 # ---------------------------------------------------------------------------
 injected-content: ## Show what the post-tool-use hook would inject from the active plan.md

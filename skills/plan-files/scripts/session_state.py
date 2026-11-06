@@ -24,6 +24,7 @@ import time
 import uuid
 
 from feedback_transport import feedback_path, valid_file
+from global_commands import bind_command, helper_command
 from plan_paths import PLAN_FILENAMES, conflicting_plan_files, resolve_plan_file
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -267,7 +268,8 @@ class SessionStore:
     def require_fresh(self, row: dict, task: str) -> None:
         if row.get("seen") and row["seen"] != self.snapshot(task):
             plan = resolve_plan_file(self.task_path(task))
-            raise SessionError(f"plan changed since your last read; run python3 {SCRIPTS / 'plan_state.py'} overview {plan} before writing")
+            state = helper_command("plan_state.py", str(SCRIPTS / "plan_state.py"))
+            raise SessionError(f"plan changed since your last read; run {state} overview {plan} before writing")
 
     def current_view(self, task: str) -> str:
         # Acquiring authority always returns the bounded state it authorizes.
@@ -652,8 +654,9 @@ def candidate_context(store: SessionStore, task: str, adapter: str, compact: boo
                              str(store.root), adapter, str(SCRIPTS.parent / "SKILL.md"),
                              str(SCRIPTS / "plan_state.py"), str(plan)],
                             text=True, capture_output=True, check=True).stdout.split("\0")
-    root_arg, adapter_arg, skill, state, target = quoted[:5]
-    command = f"PWF_PROJECT_ROOT={root_arg} bash {adapter_arg}"
+    root_arg, adapter_arg, skill, state_path, target = quoted[:5]
+    command = f"PWF_PROJECT_ROOT={root_arg} {bind_command(Path(adapter), adapter_arg)}"
+    state = helper_command("plan_state.py", state_path)
     # Bind cannot succeed while another lease holds the task; say so up front
     # instead of offering a bind the agent would retry forever.
     who = identity()
@@ -668,16 +671,16 @@ def candidate_context(store: SessionStore, task: str, adapter: str, compact: boo
         return (f"[plan-files] Candidate task '{task}'; text-only chat may yield without routing. Before tools, read {skill} and classify the request.\n{reserved}"
                 f"Run {command} <verb> {task}: SAME=bind, DIFFERENT=release, AMBIGUOUS=clarify, DISCUSSION ONLY=discuss. "
                 f"Naming this plan without saying clearly which work is AMBIGUOUS. Never release continuing work.\nGoal: {goal[:180]}")
-    return ("[plan-files] OWNERSHIP ACTION REQUIRED for this prompt. Classify the latest request, then resolve ownership before other tools; this is not an external blocker.\n"
+    return ("[plan-files] OWNERSHIP ACTION REQUIRED for this prompt (not an external blocker). Classify the latest request and run its command before other tools.\n"
             f"{reserved}"
-            f"- SAME (the request clearly asks for this plan's own work: continue it, finish it, or the step it records next; implementation counts even after research): run `{command} bind {task}`.\n"
-            f"- DIFFERENT (a separate goal; citing this plan as background is not continuing it): first run `{command} release {task}`. This releases only your session.\n"
-            f"- AMBIGUOUS (it names this plan but you cannot tell which work it wants, for example it points at something the plan does not record such as \"what I said yesterday\", or it could be this plan or separate work): "
-            f"run `{command} clarify {task}`, then ask and wait. Asking costs one turn; binding the wrong work changes code. This keeps the candidate and blocks work; do not release it.\n"
-            f"- DISCUSSION ONLY (a question about this plan, this workflow, or your own behavior, with no implementation): run `{command} discuss {task}`. This answers and stops cleanly while keeping execution gated.\n"
-            f"Read {skill} once in this session before operational work — required even if its rules are already in your context, because the gate observes tool calls. Reading it is allowed before bind.\n"
-            f"After bind: run `python3 {state} overview {target}`, then only needed targeted reads. If restore.ok is false, use `python3 {state} restore-check {target}`. Reconcile user-authorized scope changes before implementation. After release: continue separately. Never release merely to bypass a gate.\n\n"
-            f"Candidate task '{task}' is not owned for this prompt. A previous prompt's bind does not carry forward. Non-goals still apply unless the user supersedes them.\n\n"
+            f"- SAME (this plan's own work: continue it, finish it, or its recorded next step; implementation counts even after research): `{command} bind {task}`.\n"
+            f"- DIFFERENT (a separate goal; citing this plan as background is not continuing it): first `{command} release {task}`; it releases only your session.\n"
+            f"- AMBIGUOUS (it names this plan but you cannot tell which work, e.g. something the plan does not record like \"what I said yesterday\", or it could be this plan or separate work): "
+            f"`{command} clarify {task}`, then ask and wait. It keeps the candidate and blocks work; do not release it. Asking costs one turn; binding the wrong work changes code.\n"
+            f"- DISCUSSION ONLY (a question about this plan, this workflow, or your own behavior, with no implementation): `{command} discuss {task}`; it answers and stops cleanly with execution still gated.\n"
+            f"Read {skill} once this session before operational work, even if its rules are in your context: the gate observes tool calls. Reading it is allowed before bind.\n"
+            f"After bind: `{state} overview {target}`, then only needed targeted reads; if restore.ok is false, `{state} restore-check {target}`. Reconcile user-authorized scope changes before implementation. After release, continue separately. Never release merely to bypass a gate.\n\n"
+            f"Candidate '{task}' is not owned for this prompt: a previous prompt's bind does not carry forward. Non-goals still apply unless the user supersedes them.\n\n"
             f"## Task Identity\n{task_identity}\n\n## Goal\n{goal}")
 
 

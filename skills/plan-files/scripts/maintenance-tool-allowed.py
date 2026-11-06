@@ -14,10 +14,12 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sys
 from pathlib import Path
 from typing import NamedTuple
 
+from global_commands import BIND_COMMANDS, HELPER_COMMANDS, installed
 from plan_paths import PLAN_FILENAMES, resolve_plan_file
 
 from session_state import (RECORD_FILES as PLAN_RECORD_FILES, EDIT_RECORD_OPS,
@@ -819,7 +821,7 @@ def load_payload() -> dict | None:
 
 
 PLANNING_HELPERS = {"plan_state.py", "plan_edit.py", "plan_checkpoint.py", "session-state.sh", "session_state.py",
-                    "resolve-project-root.sh", "bind-session.sh"}
+                    "resolve-project-root.sh", "bind-session.sh", *BIND_COMMANDS}
 
 
 def shell_command_text(payload_or_input: object) -> str:
@@ -931,6 +933,10 @@ def _planning_helper_call(words: list[str]) -> tuple[str, list[str]] | None:
             return None
         return name, operands[operands.index(script) + 1:]
     if executable in PLANNING_HELPERS:
+        # A bare short name is trusted only when PATH resolves it into this checkout.
+        short_name = "/" not in words[start] and executable in BIND_COMMANDS | HELPER_COMMANDS
+        if short_name and not installed(executable):
+            return None
         return executable, operands
     return None
 
@@ -1158,6 +1164,9 @@ def _segment_routing_verb(segment: Segment, bind_tool: Path, project_root: Path,
         script, operands = operands[0], operands[1:]
     elif executable == bind_tool.name:
         script = words[index]
+    elif executable in BIND_COMMANDS:
+        # The installed short name counts only when PATH resolves it to this adapter.
+        script = shutil.which(words[index]) or ""
     else:
         return None
     if os.path.realpath(script) != str(bind_tool):
@@ -1229,7 +1238,8 @@ def routing_verb(tool_input: object, bind_tool: Path, project_root: Path, task_i
 # may record into the other planning files. Subcommand names come from the
 # helpers' own --help surfaces, so the classification follows the tools rather
 # than a guess about what a call writes.
-PLAN_LEASE_HELPERS = {"session-state.sh", "session_state.py", "bind-session.sh", "resolve-project-root.sh"}
+PLAN_LEASE_HELPERS = {"session-state.sh", "session_state.py", "bind-session.sh", "resolve-project-root.sh",
+                      *BIND_COMMANDS}
 CHECKPOINT_READ_OPS = {"assert-finalizable"}
 # Most restrictive first: one advance anywhere in a command decides it.
 OP_CLASS_ORDER = ("advance", "record", "unknown", "read")

@@ -148,6 +148,8 @@ mutation_plan_id() {
 }
 
 BIND_TOOL_NAME=$(basename "$BIND_TOOL")
+BIND_GLOBAL_NAME="pwf-bind-$PROVIDER"
+BIND_COMMAND=$(planning_bind_command "$PROVIDER" "$BIND_TOOL")
 
 # Recognize a routing command from the tool input instead of comparing it to
 # the prescribed string. An agent that appends `2>&1 | tail -3`, drops the env
@@ -156,11 +158,12 @@ BIND_TOOL_NAME=$(basename "$BIND_TOOL")
 # with the identical instruction, a loop with no exit the agent could find. The
 # basename pre-filter keeps the common call free of another interpreter start;
 # an alias whose final component is renamed goes unrecognized, as it did before.
+# The pwf-bind-PROVIDER name that `make install` puts on PATH passes it too.
 routing_verb() {
     local task=$1
     command -v python3 >/dev/null 2>&1 || return 0
     case "$TOOL_COMMAND" in
-        *"$BIND_TOOL_NAME"*) ;;
+        *"$BIND_TOOL_NAME"*|*"$BIND_GLOBAL_NAME"*) ;;
         *) return 0 ;;
     esac
     printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" \
@@ -329,10 +332,9 @@ if [ -z "$PLAN_DIR" ]; then
         printf '{}'; exit 0
     fi
     printf -v project_root_arg '%q' "$PWD"
-    printf -v bind_tool_arg '%q' "$BIND_TOOL"
     printf -v task_arg '%q' "$CANDIDATE"
-    EXPECTED_BIND="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg bind $task_arg"
-    EXPECTED_RELEASE="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg release $task_arg"
+    EXPECTED_BIND="PWF_PROJECT_ROOT=$project_root_arg $BIND_COMMAND bind $task_arg"
+    EXPECTED_RELEASE="PWF_PROJECT_ROOT=$project_root_arg $BIND_COMMAND release $task_arg"
     # Every routing verb the candidate message offers must be runnable here,
     # or the message names an action its own gate refuses.
     ROUTING_VERB=$(routing_verb "$CANDIDATE")
@@ -374,7 +376,7 @@ if [ -z "$PLAN_DIR" ]; then
     # The call named the adapter, so it was a routing attempt the recognizer
     # refused; without saying so the agent resends the same rewritten command.
     case "$ROUTING_VERB:$TOOL_COMMAND" in
-        :*"$BIND_TOOL_NAME"*)
+        :*"$BIND_TOOL_NAME"*|:*"$BIND_GLOBAL_NAME"*)
             REASON_TEXT="[plan-files] ROUTING COMMAND NOT RECOGNIZED: copy the command for your class below exactly as printed (literal absolute paths, no other shell variables or substitutions, only read-only commands chained after it).
 $REASON_TEXT" ;;
     esac
@@ -387,17 +389,15 @@ fi
 
 # Discussion needs an explicit same-task bind with authorization before execution.
 printf -v project_root_arg '%q' "$PWD"
-printf -v bind_tool_arg '%q' "$BIND_TOOL"
 printf -v task_arg '%q' "$(basename "$PLAN_DIR")"
-EXPECTED_DISCUSS="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg discuss $task_arg"
-EXPECTED_ACTIVATE="PWF_PROJECT_ROOT=$project_root_arg bash $bind_tool_arg bind $task_arg --reason \"user authorization for execution\""
+EXPECTED_DISCUSS="PWF_PROJECT_ROOT=$project_root_arg $BIND_COMMAND discuss $task_arg"
+EXPECTED_ACTIVATE="PWF_PROJECT_ROOT=$project_root_arg $BIND_COMMAND bind $task_arg --reason \"user authorization for execution\""
 OWNED_ROUTING=$(routing_verb "$(basename "$PLAN_DIR")")
 BACKGROUND_WARN=$(printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" planning-background-warning)
 [ -z "$BACKGROUND_WARN" ] || block "$BACKGROUND_WARN"
 
 printf -v plan_arg '%q' "$(planning_plan_file "$PLAN_DIR")"
-printf -v state_arg '%q' "$PLAN_STATE_TOOL"
-MAINTENANCE_ACTION="Run: python3 $state_arg budgets $plan_arg. Then archive/consolidate completed material in the owned plan; preserve unfinished work."
+MAINTENANCE_ACTION="Run: $(planning_helper_command plan_state.py) budgets $plan_arg. Then archive/consolidate completed material in the owned plan; preserve unfinished work."
 if [ "$OWNED_ROUTING" = "discuss" ] || [ "$OWNED_ROUTING" = "handoff" ] \
     || [ "$OWNED_ROUTING" = "tools" ] || [ "$OWNED_ROUTING" = "ack-rejected" ]; then
     log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") decision=allow-routing-discuss tool=$TOOL_NAME"
@@ -452,7 +452,7 @@ DISCUSSION_HINT="If the user requested only discussion of this plan/workflow, ru
 # the message honest about the boundary: a helper is recognized by the program
 # the command actually runs, so `--help` or a version probe on one passes,
 # while quoting a helper or a plan path inside some other command does not.
-STATIC_ALLOWED_HINT="Still allowed: read-only diagnosis; native Edit/Write with an explicit file_path inside $PLAN_DIR; and scoped helpers in $(planning_script_path '' | sed 's:/$::'). For direct Markdown shell writes, a cat heredoc with a quoted delimiter and one literal .md target inside the plan is recognized; any trailing commands must be read-only. Inline Python/custom shell cannot prove its write scope merely by including plan paths, even as arguments: switch to native Edit/Write or a supported helper. A chained or substituted command is allowed only when it is itself read-only or a planning helper; one that is not blocks the whole command."
+STATIC_ALLOWED_HINT="Still allowed: read-only diagnosis; native Edit/Write with an explicit file_path inside $PLAN_DIR; helpers in $(planning_script_path '' | sed 's:/$::'); a quoted-delimiter cat heredoc to one literal .md in the plan, then only read-only commands. Inline Python/custom shell cannot prove its write scope by naming plan paths, even as arguments: switch to native Edit/Write or a supported helper. A chain or substitution passes only if every part is read-only or a helper; otherwise the whole command is blocked."
 
 allowed_hint() {
     local refusal
@@ -498,9 +498,9 @@ fi
 # finished, so operational mutation here is invisible to every later session.
 # Reads and owned-plan repair stay open: reopening the plan IS plan maintenance,
 # so the recovery this message asks for is always runnable from inside the gate.
-REOPEN_WARN=$(planning_settled_plan_warning "$PLAN_DIR" "$PWD")
+REOPEN_WARN=$(planning_settled_plan_warning "$PLAN_DIR" "$PWD" "$EXPECTED_DISCUSS")
 if [ -n "$REOPEN_WARN" ] && ! maintenance_tool_allowed "$PLAN_DIR" && ! subagent_call; then
-    REASON_TEXT="$REOPEN_WARN $DISCUSSION_HINT $(allowed_hint)"
+    REASON_TEXT="$REOPEN_WARN $(allowed_hint)"
     log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") reopen=required decision=block-settled-plan tool=$TOOL_NAME"
     block "$REASON_TEXT"
 fi

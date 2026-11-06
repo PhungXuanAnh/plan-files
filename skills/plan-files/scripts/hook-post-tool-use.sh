@@ -180,7 +180,7 @@ if [ "$TOTAL" -gt 0 ] && [ $((COMPLETE + BLOCKED + DEFERRED)) -ge "$TOTAL" ] \
         if [ "$FINALIZE_ISSUE" != "FINALIZABLE" ]; then
             printf -v FINAL_PLAN_ARG '%q' "$PLAN_FILE"
             printf -v FINAL_ROOT_ARG '%q' "$PWD"
-            FINALIZE_WARN="[plan-files] FINALIZATION ACTION REQUIRED ($FINALIZE_ISSUE). Verify the settled plan with: python3 $(planning_script_path plan_checkpoint.py) --plan $FINAL_PLAN_ARG assert-finalizable --project-root $FINAL_ROOT_ARG."
+            FINALIZE_WARN="[plan-files] FINALIZATION ACTION REQUIRED ($FINALIZE_ISSUE). Verify the settled plan with: $(planning_helper_command plan_checkpoint.py) --plan $FINAL_PLAN_ARG assert-finalizable --project-root $FINAL_ROOT_ARG."
         fi
     fi
     if [ -z "$COMPACTION_WARN$RESTORE_WARN$FINALIZE_WARN$BACKGROUND_WARN$REOPEN_WARN" ]; then
@@ -527,10 +527,10 @@ if [ "$CONTRACTED" = "true" ] && [ -n "$ACTIVE_ITEM" ]; then
 [plan-files] If this tool result satisfies the outcome, your next workflow operation must be the structured checkpoint before any unrelated tool. Otherwise continue the same item and record material partial/error evidence; arbitrary tool success is not semantic completion."
     if [ "$STALE_CHECKPOINT" = "true" ]; then
         NUDGE="${NUDGE}
-[plan-files] STALE ITEM STATE: no plan change for ${CHECKPOINT_LAG_SECS}s across ${UNCHANGED_TOOL_COUNT} tool result(s) (latest class ${TOOL_CLASS}). Checkpoint ${ACTIVE_ITEM} now if its evidence predicate is true. If it is legitimately a long multi-step item, record what you have with 'python3 $(planning_script_path plan_checkpoint.py) progress ${ACTIVE_ITEM} --evidence ...' and keep going. This line repeats at most every ${STALE_REPEAT_SECS}s until the plan changes."
+[plan-files] STALE ITEM STATE: no plan change for ${CHECKPOINT_LAG_SECS}s across ${UNCHANGED_TOOL_COUNT} tool result(s) (latest class ${TOOL_CLASS}). Checkpoint ${ACTIVE_ITEM} now if its evidence predicate is true. If it is legitimately a long multi-step item, record what you have with '$(planning_helper_command plan_checkpoint.py) progress ${ACTIVE_ITEM} --evidence ...' and keep going. This line repeats at most every ${STALE_REPEAT_SECS}s until the plan changes."
     elif [ "$CHECKPOINT_REVIEW" = "true" ]; then
         NUDGE="${NUDGE}
-[plan-files] CHECKPOINT REVIEW: no plan change for ${CHECKPOINT_LAG_SECS}s with ${UNCHANGED_UNKNOWN_COUNT} unclassified tool result(s). Their effect is unknown. Check whether ${ACTIVE_ITEM} has new evidence; if so, record it with 'python3 $(planning_script_path plan_checkpoint.py) progress ${ACTIVE_ITEM} --evidence ...' or complete the item when its predicate is true. Otherwise continue the same item. This review repeats at most every ${STALE_REPEAT_SECS}s until the plan changes."
+[plan-files] CHECKPOINT REVIEW: no plan change for ${CHECKPOINT_LAG_SECS}s with ${UNCHANGED_UNKNOWN_COUNT} unclassified tool result(s). Their effect is unknown. Check whether ${ACTIVE_ITEM} has new evidence; if so, record it with '$(planning_helper_command plan_checkpoint.py) progress ${ACTIVE_ITEM} --evidence ...' or complete the item when its predicate is true. Otherwise continue the same item. This review repeats at most every ${STALE_REPEAT_SECS}s until the plan changes."
     fi
 else
     NUDGE="[plan-files] Update ${PLAN_FILE} with what you just did. If a phase is now complete, update ${PLAN_FILE} status. If the plan-files skill rules are no longer in your context (post-/compact, or you have forgotten them), reload them by reading $(planning_doc_path SKILL.md) before continuing."

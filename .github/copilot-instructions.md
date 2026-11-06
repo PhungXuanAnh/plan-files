@@ -22,6 +22,7 @@ This repository contains one host-neutral planning skill plus provider-specific 
   - `hook-common.sh`, `hook-post-tool-use.sh`, and `hook-agent-stop.sh` — shared hook helpers plus canonical PostTool and Stop policy.
   - `hook-user-prompt-submit.sh` and `hook-bind-session.sh` — shared prompt and session-binding behavior for providers with compatible envelopes.
   - `observe.py` and `behavioral_eval.py` — telemetry reporting and isolated regression evaluation.
+  - `global_commands.py` (shell: `planning_helper_command`/`planning_bind_command` in `hook-common.sh`) — spells a command in hook messages as its installed short name only while PATH resolves that name to this checkout, else as `python3`/`bash` plus the absolute path.
 
 Use snake_case for importable Python module filenames. Resolve all skill script paths relative to `SKILL.md`; never hardcode a user's installation path in the canonical skill.
 
@@ -113,6 +114,7 @@ For an object-oriented Python implementation, retain one `AbstractHook`/`HookCor
 - Skill files and provider hook scripts execute from this repository, so edits to those files apply to global installations without reinstalling.
 - Claude Code merges `.claude/settings.json.sample` into `~/.claude/settings.json`, preserving unrelated settings and hook groups. Codex similarly merges `.codex/hooks.json.sample` into `~/.codex/hooks.json`.
 - Copilot's global hook configuration is a symlink to `.github/hooks/plan-files.json.sample`.
+- `make install-commands` (part of `make install`) links `plan_state.py`, `plan_edit.py`, `plan_checkpoint.py` and `pwf-bind-<provider>` into `COMMAND_DIR` (default `~/.local/bin`, which must be on PATH). Hook messages then print these short names instead of full paths; the gate accepts a short bind name only when PATH resolves it to this checkout's adapter. `make test` and `make behavioral-eval` drop `COMMAND_DIR` from PATH so assertions see the full-path spelling.
 - Grok installs `.grok/hooks/plan-files.json.sample` atomically to `$GROK_HOME/hooks/plan-files.json` (default `~/.grok`) while preserving sibling hook files; set `GROK_HOME` explicitly for isolated runtimes.
 - Rerun the relevant hook installer (or `make install`) after changing a Claude/Codex sample hook definition or moving this checkout. Script-only edits do not require reinstalling.
 - If Codex reports an untrusted changed hook definition, review it with `/hooks`. Restart sessions opened before a local config was renamed to `.sample`, so cached local/global layers do not both execute.

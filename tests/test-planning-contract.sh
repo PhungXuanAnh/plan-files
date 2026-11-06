@@ -948,12 +948,25 @@ SETTLED_BLOCK=$(pre_hook codex codex-contract 'git commit -m "ship it"')
 assert_contains "$SETTLED_BLOCK" "SETTLED PLAN REOPEN REQUIRED" "settled plan blocks operational mutation"
 assert_contains "$SETTLED_BLOCK" "reopen --title" "reopen block names the one-call repair"
 assert_contains "$SETTLED_BLOCK" "--supersede <OLD-ID>" "reopen block names the decision it retires"
-assert_not_contains "${SETTLED_BLOCK%%If no new work was authorized*}" "--plan $PLAN_DIR/tasks.md" \
+assert_contains "$SETTLED_BLOCK" "bind-session.sh discuss test-task" "reopen block names the exact discussion bind"
+assert_not_contains "${SETTLED_BLOCK%%(4) No new work authorized*}" "--plan $PLAN_DIR/tasks.md" \
     "reopen uses the still-active pointer"
 assert_contains "$SETTLED_BLOCK" "--plan $PLAN_DIR/tasks.md assert-finalizable" \
     "final check retains the path after pointer deactivation"
 assert_not_contains "$(post_hook codex codex-contract Read)" "SETTLED PLAN REOPEN REQUIRED" \
     "reopen diagnosis stays quiet after a read"
+# Installed short names replace python3/bash plus a path only while PATH resolves
+# them to this checkout; the gate recognizes the short bind but not a look-alike.
+SHORT_BIN="$TEST_DIR/short-bin"
+make -s -C "$REPO_ROOT" install-commands COMMAND_DIR="$SHORT_BIN" >/dev/null
+SHORT_BLOCK=$(PATH="$SHORT_BIN:$PATH" pre_hook codex codex-contract 'git commit -m "ship it"')
+assert_contains "$SHORT_BLOCK" "(1) Distinct new work: plan_edit.py --compact" "installed helper name replaces python3 and its path"
+assert_contains "$SHORT_BLOCK" "PWF_PROJECT_ROOT=$PROJECT pwf-bind-codex discuss test-task" "installed bind name replaces bash and the adapter path"
+assert_eq "$(PATH="$SHORT_BIN:$PATH" pre_hook codex codex-contract "PWF_PROJECT_ROOT=$PROJECT pwf-bind-codex discuss test-task")" "{}" \
+    "gate recognizes the installed bind name"
+mkdir -p "$TEST_DIR/fake-bin" && printf '#!/bin/sh\n' > "$TEST_DIR/fake-bin/pwf-bind-codex" && chmod +x "$TEST_DIR/fake-bin/pwf-bind-codex"
+assert_contains "$(PATH="$TEST_DIR/fake-bin:$SHORT_BIN:$PATH" pre_hook codex codex-contract "PWF_PROJECT_ROOT=$PROJECT pwf-bind-codex discuss test-task")" \
+    "SETTLED PLAN REOPEN REQUIRED" "a look-alike bind name earlier on PATH is neither advertised nor recognized"
 REOPEN_CMD="python3 $EDIT_TOOL reopen --title Deliver --decision \"| D2 | Implement and hand off | user authorized implementation | 2026-09-06 |\" --supersede D1 --item \"Implementation lands.\""
 # The prescribed repair carries a decisions table row, so its pipes must read as
 # data. Splitting the command text before lexing it blocked exactly this call.
