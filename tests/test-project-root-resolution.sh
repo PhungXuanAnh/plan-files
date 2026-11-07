@@ -104,6 +104,19 @@ assert_eq "$(CLAUDE_PROJECT_DIR="$WS9" bash "$RESOLVER" "$PHYS9")" "$WS9" \
 assert_eq "$(CLAUDE_PROJECT_DIR="$WS9" bash "$RESOLVER" "$WS2/repoA")" "$WS2" \
     "a cwd with its own pointer ancestor must ignore the host hint"
 
+# --- A workspace moved under an outer pointer and reached through a symlink
+#     at its old path: hook shells keep the logical $PWD while Python sees the
+#     physical cwd, so both spellings must resolve to the same root. ---------
+WS10="$TEST_DIR/ws10"
+mkdir -p "$WS10/project"
+: > "$WS10/.plan-files"
+: > "$WS10/project/.plan-files"
+ln -s "$WS10/project" "$TEST_DIR/old-path"
+assert_eq "$(bash "$RESOLVER" "$TEST_DIR/old-path")" "$(bash "$RESOLVER" "$WS10/project")" \
+    "a symlinked path must resolve to the same root as its physical path"
+assert_eq "$(cd "$TEST_DIR/old-path" && bash "$RESOLVER")" "$WS10" \
+    "a logical \$PWD through a symlink must resolve like the physical cwd"
+
 # --- plan_checkpoint.py's --deactivate-pointer must preserve .plan-files at
 #     the true (resolved) project root, not a hardcoded parent-count guess —
 #     even when invoked with cwd inside a nested submodule. ------------------

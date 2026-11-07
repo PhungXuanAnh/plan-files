@@ -50,6 +50,8 @@ Every hook needs to agree on a single `<project root>` for the storage model abo
 3. Otherwise, fall back to `git rev-parse --show-toplevel`, then walk out through every enclosing git superproject (`--show-superproject-working-tree`), so a cwd inside a registered git submodule resolves to the outermost superproject root, not the submodule's own toplevel.
 4. Otherwise, the cwd itself. Hooks write no logs or session state at such a fallback root unless it already has a `.plan-files`, a `tmp/plan-files` directory, or a `.git` entry.
 
+The cwd and `CLAUDE_PROJECT_DIR` are walked as physical paths, so a workspace reached through a symlink (for example its old path after a move) resolves to the same root under every spelling.
+
 ### Workspaces that are not a repo themselves
 
 Some workspaces are a plain folder — not a git repository at all — that simply contains several independent repo checkouts as subdirectories, for example:

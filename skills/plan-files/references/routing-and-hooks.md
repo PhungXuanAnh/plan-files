@@ -11,6 +11,8 @@ Hooks resolve the project root from the tool call's current directory:
 3. Otherwise use `git rev-parse --show-toplevel`, walking through an enclosing superproject when present.
 4. Otherwise use the current directory.
 
+Both start directories are walked as physical paths (symlinks resolved). Hook shells keep a logical `$PWD` while Python helpers and hosts see the physical cwd, and printed `PWF_PROJECT_ROOT` values are physical, so a workspace reached through a symlink (for example its old path after a move) must select the same ancestors under every spelling; otherwise one session's hooks split across two stores and a finished call's receipt is never retired. A stray `.plan-files` in a parent folder therefore claims every workspace moved beneath it.
+
 In nested repositories, put `.plan-files` at the intended outer workspace root. For a new non-git multi-repo workspace with no marker yet, create an empty `.plan-files` there before its first task.
 
 Step 2 exists because Claude Code runs hooks in the session's drifting shell cwd and records it as a physical path. When `<root>/tmp` is a symlink to storage outside the project, such as a Dropbox-backed `.vscode/local_files/tmp`, a cwd under the plan directory has no `.plan-files` ancestor; resolving from it would leave the prior prompt's lease unreset (a stale `discussing` lease then blocks every write) and scatter state into the plan folder. Hooks write logs and session state only at a root with a marker, a `tmp/plan-files` directory, or a `.git` entry (`resolve-project-root.sh --accepts-state`), so a step-4 fallback root stays untouched.

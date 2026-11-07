@@ -36,6 +36,11 @@
 #      submodule* still resolves to the outermost superproject root instead of
 #      the submodule's own toplevel.
 #   4. Otherwise, fall back to START_DIR itself.
+#
+# START_DIR and CLAUDE_PROJECT_DIR are walked as physical paths (symlinks
+# resolved). Shells keep a logical $PWD while Python and hosts see the physical
+# cwd, and printed roots are physical; walking a symlinked spelling would pick
+# different ancestors, so hooks of one session would use different stores.
 
 set -u
 
@@ -49,7 +54,12 @@ if [ "${1:-}" = "--accepts-state" ]; then
     exit
 fi
 
-start=${1:-$PWD}
+# physical DIR — DIR with symlinks resolved, or DIR itself when it is not a directory.
+physical() {
+    (cd -- "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"
+}
+
+start=$(physical "${1:-$PWD}")
 
 # outermost_pointer DIR — farthest ancestor of DIR (inclusive) with a pointer.
 outermost_pointer() {
@@ -68,7 +78,7 @@ outermost_pointer() {
 # Tier 2: the same walk from the host-declared project directory.
 for dir in "$start" "${CLAUDE_PROJECT_DIR:-}"; do
     [ -n "$dir" ] || continue
-    if root=$(outermost_pointer "$dir"); then
+    if root=$(outermost_pointer "$(physical "$dir")"); then
         printf '%s' "$root"
         exit 0
     fi
