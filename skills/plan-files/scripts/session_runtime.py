@@ -468,9 +468,12 @@ def begin_tool(store, provider: str, session: str, payload: dict, *, preview: bo
         if command and any(segment.terminator == "&" or {"nohup", "setsid"}.intersection(segment.argv)
                            for segment in (module.shell_segments(command) or [])):
             raise SessionError("untracked shell detachment cannot safely yield execution; use a native asynchronous tool and collect its result")
+        # A Codex subagent runs its own turns under the parent's session and lease.
         turn = turn_id(payload)
-        if turn and row.get("turn") and turn != row["turn"]:
-            raise SessionError("tool belongs to an earlier turn; bind and restore the current prompt")
+        if turn and row.get("turn") and turn != row["turn"] and not payload.get("agent_id"):
+            raise SessionError("tool call belongs to an earlier turn than this session's current prompt, so it "
+                               "cannot run under the current lease; bind, resolve and hook_explain cannot change "
+                               "that. Issue the call again in the current turn.")
         if row["status"] == "discussing":
             if module.plan_op_class(payload, store.task_path(task)) != "record":
                 return

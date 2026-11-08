@@ -184,7 +184,7 @@ non_mutating_shell() {
     printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" non-mutating-shell
 }
 
-# A Claude subagent carries out work its parent delegated earlier. Only the
+# A subagent carries out work its parent delegated earlier. Only the
 # parent routes prompts and settles the plan, so neither may strand the worker.
 subagent_call() {
     command -v python3 >/dev/null 2>&1 || return 1

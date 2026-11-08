@@ -395,6 +395,21 @@ P1.1
         self.store.claim("codex", "creator", "task-a", turn=turn_id({"turn_id": "t2"}))
         self.assertEqual(self.row("codex", "creator")["turn"], turn_id({"turn_id": "t2"}))
 
+    def test_codex_subagent_turns_run_under_the_parent_lease(self):
+        # A Codex subagent thread reports the parent's session_id with its own
+        # turn_id and agent_id, including on the UserPromptSubmit of its task.
+        self.hook("codex", "parent", "user-prompt-submit.sh", prompt=f"Continue {self.plan}.", turn_id="t1")
+        self.store.bind("codex", "parent", "task-a")
+        self.store.route("codex", "parent").with_suffix(".skill-loaded").touch()
+        child = {"agent_id": "child", "turn_id": "s1"}
+        self.assertEqual(self.hook("codex", "parent", "user-prompt-submit.sh", prompt="Run the check.", **child), {})
+        self.assertEqual(self.row("codex", "parent")["status"], "owned")
+        call = {"tool_name": "Bash", "tool_input": {"command": "touch child-output"}}
+        self.assertEqual(self.hook("codex", "parent", "pre-tool-use.sh", tool_use_id="c1", **call, **child), {})
+        self.assertEqual(self.hook("codex", "parent", "pre-tool-use.sh", tool_use_id="p1", turn_id="t1", **call), {})
+        stale = self.hook("codex", "parent", "pre-tool-use.sh", tool_use_id="p0", turn_id="t0", **call)
+        self.assertIn("earlier turn", stale["reason"])
+
     def test_grok_failure_and_denial_events_retire_their_receipts(self):
         # Grok runs PreToolUse before permission checks; dispatch/MCP failures and
         # denials then arrive only as these events, correlated by toolUseId.

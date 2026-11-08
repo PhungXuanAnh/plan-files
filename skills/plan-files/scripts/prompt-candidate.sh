@@ -22,6 +22,11 @@ SESSION_ID=$(printf '%s' "$INPUT" | "$STATE_TOOL" session-id 2>/dev/null || true
 if [ -z "$SESSION_ID" ]; then
     exit 0
 fi
+# A Codex subagent's task arrives as a prompt under its parent's session id.
+# Only the parent's own prompts route the session.
+if printf '%s' "$INPUT" | python3 "$TARGET_TOOL" subagent-call; then
+    exit 0
+fi
 
 PROMPT_CANDIDATE=$(printf '%s' "$INPUT" \
     | python3 "$TARGET_TOOL" prompt-plan-id "$PWD" 2>/dev/null || true)
