@@ -244,6 +244,12 @@ assert_eq "$(check_task_plan_format "$PLAN_DIR/tasks.md")" "" "valid plan"
 assert_eq "$(current_phase_pointer "$PLAN_DIR/tasks.md")" "Phase 1" "exact current pointer"
 assert_eq "$TOTAL/$IN_PROGRESS/$PENDING/$BLOCKED/$DEFERRED" "2/1/1/0/0" "phase counts"
 
+# The template's phase-format comment is an example, not a phase.
+sed -n '/^## Phases$/,/^-->$/p' "$REPO_ROOT/skills/plan-files/templates/plan.md" | tail -n +2 > "$PLAN_DIR/phase-comment.txt"
+sed "/^## Phases$/r $PLAN_DIR/phase-comment.txt" "$PLAN_DIR/tasks.md" > "$PLAN_DIR/commented.md"
+count_phases "$PLAN_DIR/commented.md"
+assert_eq "$(check_task_plan_format "$PLAN_DIR/commented.md")" "" "template phase comment is ignored"
+
 # Contracted item transitions are atomic and advance item, phase, and pointer state.
 write_contracted_plan
 count_phases "$PLAN_DIR/tasks.md"

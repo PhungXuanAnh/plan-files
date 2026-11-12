@@ -30,6 +30,7 @@ from plan_state import (
     finalizability_issues,
     parse_plan,
     progress_fingerprint,
+    visible_lines,
 )
 
 
@@ -83,17 +84,18 @@ def _next_action(item) -> str:
 
 
 def _set_phase_status(lines: list[str], phase_num: int, status: str) -> None:
-    headings = [(index, PHASE_RE.match(line)) for index, line in enumerate(lines)]
+    visible = visible_lines(lines)
+    headings = [(index, PHASE_RE.match(line)) for index, line in enumerate(visible)]
     headings = [(index, match) for index, match in headings if match]
     target_offset = next((offset for offset, (_, match) in enumerate(headings) if int(match.group(1)) == phase_num), None)
     if target_offset is None:
         raise CheckpointError(f"Phase {phase_num} does not exist")
     heading_index, match = headings[target_offset]
     end = headings[target_offset + 1][0] if target_offset + 1 < len(headings) else next(
-        (index for index in range(heading_index + 1, len(lines)) if lines[index].startswith("## ")),
-        len(lines),
+        (index for index in range(heading_index + 1, len(visible)) if visible[index].startswith("## ")),
+        len(visible),
     )
-    status_indices = [index for index in range(heading_index + 1, end) if STATUS_RE.match(lines[index])]
+    status_indices = [index for index in range(heading_index + 1, end) if STATUS_RE.match(visible[index])]
     if len(status_indices) != 1:
         raise CheckpointError(f"Phase {phase_num} must have exactly one body status")
     lines[status_indices[0]] = f"- **Status:** {status}"

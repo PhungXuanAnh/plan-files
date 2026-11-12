@@ -173,6 +173,20 @@ planning_assert_finalizable() {
 }
 
 # ---------------------------------------------------------------------------
+# planning_visible_lines PLAN_FILE
+# Prints PLAN_FILE with every line inside an HTML comment blanked, keeping line
+# numbers, so structural scans ignore the phase syntax examples in template
+# comments. Mirrors plan_state.visible_lines.
+# ---------------------------------------------------------------------------
+planning_visible_lines() {
+    awk '
+      /<!--/ { in_comment=1 }
+      { print (in_comment ? "" : $0) }
+      in_comment && /-->/ { in_comment=0 }
+    ' "${1:-}" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
 # count_phases PLAN_FILE
 # Parses all ### Phase blocks in PLAN_FILE and sets six globals:
 #   TOTAL        — total number of ### Phase N: headings found
@@ -270,26 +284,29 @@ $1"
         fi
     }
 
+    local _visible
+    _visible=$(planning_visible_lines "$_plan_file")
+
     local _current_count _phases_count _current_line _phases_line _inside_total
     local _section_layout_bad=0
-    _current_count=$(grep -Ec '^## Current Phase[[:space:]]*$' "$_plan_file" 2>/dev/null || true)
-    _phases_count=$(grep -Ec '^## Phases[[:space:]]*$' "$_plan_file" 2>/dev/null || true)
+    _current_count=$(grep -Ec '^## Current Phase[[:space:]]*$' <<<"$_visible" || true)
+    _phases_count=$(grep -Ec '^## Phases[[:space:]]*$' <<<"$_visible" || true)
     _current_count=${_current_count:-0}
     _phases_count=${_phases_count:-0}
     if [ "$_current_count" -ne 1 ] || [ "$_phases_count" -ne 1 ]; then
         _section_layout_bad=1
     else
-        _current_line=$(grep -nE '^## Current Phase[[:space:]]*$' "$_plan_file" 2>/dev/null | cut -d: -f1 | head -1)
-        _phases_line=$(grep -nE '^## Phases[[:space:]]*$' "$_plan_file" 2>/dev/null | cut -d: -f1 | head -1)
+        _current_line=$(grep -nE '^## Current Phase[[:space:]]*$' <<<"$_visible" | cut -d: -f1 | head -1)
+        _phases_line=$(grep -nE '^## Phases[[:space:]]*$' <<<"$_visible" | cut -d: -f1 | head -1)
         if [ "${_current_line:-0}" -ge "${_phases_line:-0}" ]; then
             _section_layout_bad=1
         fi
     fi
 
-    if grep -E '^### Phase' "$_plan_file" 2>/dev/null \
+    if grep -E '^### Phase' <<<"$_visible" \
         | grep -Ev '^### Phase[[:space:]]+[0-9]+:[[:space:]]+[^[:space:]]' \
         | grep -q . \
-        || grep -Eq '^### Phase.*\[(complete|in_progress|pending)\][[:space:]]*$' "$_plan_file"; then
+        || grep -Eq '^### Phase.*\[(complete|in_progress|pending)\][[:space:]]*$' <<<"$_visible"; then
         _fmt_add_issue PHASE_HEADING_INVALID
     fi
 
@@ -302,7 +319,7 @@ $1"
           in_phases && /^## / { in_phases=0 }
           in_phases && /^### Phase/ { count++ }
           END { print count+0 }
-        ' "$_plan_file" 2>/dev/null)
+        ' <<<"$_visible")
         _inside_total=${_inside_total:-0}
         if [ "$_inside_total" -ne "$_total" ]; then
             _section_layout_bad=1
@@ -317,11 +334,8 @@ $1"
         _current_body=$(awk '
           /^## Current Phase[[:space:]]*$/ { capture=1; next }
           capture && /^## / { exit }
-          !capture { next }
-          /<!--/ { in_comment=1 }
-          !in_comment && /[^[:space:]]/ { print }
-          in_comment && /-->/ { in_comment=0 }
-        ' "$_plan_file" 2>/dev/null)
+          capture && /[^[:space:]]/ { print }
+        ' <<<"$_visible")
         _current_body_lines=$(printf '%s\n' "$_current_body" | awk 'NF { count++ } END { print count+0 }')
         if [ "$_current_body_lines" -gt 1 ]; then
             _current_bad=1
@@ -335,7 +349,7 @@ $1"
                   in_phases && /^## / { in_phases=0 }
                   in_phases && $0 ~ ("^### Phase[[:space:]]+" num ":[[:space:]]+") { found=1 }
                   END { exit(found ? 0 : 1) }
-                ' "$_plan_file" 2>/dev/null; then
+                ' <<<"$_visible"; then
                     _current_bad=1
                 fi
             fi
@@ -346,7 +360,7 @@ $1"
     fi
 
     local _no_reason_bad=0
-    if grep -E '\*\*Status:\*\*[[:space:]]*blocked' "$_plan_file" 2>/dev/null \
+    if grep -E '\*\*Status:\*\*[[:space:]]*blocked' <<<"$_visible" \
         | grep -Ev '\*\*Status:\*\*[[:space:]]*blocked[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)' \
         | grep -q .; then
         _fmt_add_issue BLOCKED_NO_REASON
@@ -356,12 +370,12 @@ $1"
     # Bare `**Status:** deferred` (no reason / empty parens) is ALWAYS invalid,
     # regardless of how far the plan has progressed. Detect lines that start a
     # deferred marker but do NOT match the strict "deferred (non-empty reason)" form.
-    if grep -Eq '\*\*Status:\*\*[[:space:]]*deferred([[:space:]]*\([[:space:]]*\)|[[:space:]]*$|[[:space:]]+[^(])' "$_plan_file" 2>/dev/null; then
+    if grep -Eq '\*\*Status:\*\*[[:space:]]*deferred([[:space:]]*\([[:space:]]*\)|[[:space:]]*$|[[:space:]]+[^(])' <<<"$_visible"; then
         # Confirm there is a deferred line that does NOT have a valid (reason).
         # The grep above can false-positive on whitespace edge cases; double-check
         # by ensuring at least one deferred line is NOT in the valid form.
         local _bad
-        _bad=$(grep -E '\*\*Status:\*\*[[:space:]]*deferred' "$_plan_file" 2>/dev/null \
+        _bad=$(grep -E '\*\*Status:\*\*[[:space:]]*deferred' <<<"$_visible" \
             | grep -Ev '\*\*Status:\*\*[[:space:]]*deferred[[:space:]]*\([[:space:]]*[^)[:space:]][^)]*\)' \
             | head -1)
         if [ -n "$_bad" ]; then
@@ -386,9 +400,7 @@ $1"
           function flush() {
             if (in_phase && markers != 1 && bad == "") bad=1
           }
-          BEGIN { in_phase=0; markers=0; in_comment=0; bad="" }
-          /<!--/ { in_comment=1 }
-          in_comment { if (/-->/) in_comment=0; next }
+          BEGIN { in_phase=0; markers=0; bad="" }
           /^### Phase[[:space:]]+[0-9]+:[[:space:]]+/ {
             flush(); in_phase=1; markers=0
             next
@@ -399,18 +411,18 @@ $1"
           /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*blocked[[:space:]]*\([[:space:]]*[^)[:space:]].*\)[[:space:]]*$/ { markers++; next }
           /^[[:space:]]*-[[:space:]]+\*\*Status:\*\*[[:space:]]*deferred[[:space:]]*\([[:space:]]*[^)[:space:]].*\)[[:space:]]*$/ { markers++; next }
           END { flush(); if (bad != "") print bad }
-        ' "$_plan_file" 2>/dev/null)
+        ' <<<"$_visible")
     fi
     [ -n "$_bad_phase_status" ] && _fmt_add_issue PHASE_STATUS_INVALID
 
     local _profile_count
-    _profile_count=$(grep -Ec '^## Workflow Profile[[:space:]]*$' "$_plan_file" 2>/dev/null || true)
+    _profile_count=$(grep -Ec '^## Workflow Profile[[:space:]]*$' <<<"$_visible" || true)
     _profile_count=${_profile_count:-0}
     if [ "$_profile_count" -ne 1 ]; then
         _fmt_add_issue PROFILE_MISSING
     else
         local _profile_line
-        _profile_line=$(awk '/^## Workflow Profile[[:space:]]*$/{f=1;next} f && /^## /{f=0} f && /\*\*Profile:\*\*/{print;exit}' "$_plan_file" 2>/dev/null | head -1)
+        _profile_line=$(awk '/^## Workflow Profile[[:space:]]*$/{f=1;next} f && /^## /{f=0} f && /\*\*Profile:\*\*/{print;exit}' <<<"$_visible" | head -1)
         if ! printf '%s' "${_profile_line:-}" | grep -Eq '\*\*Profile:\*\*[[:space:]]*(A|B|C)[[:space:]]*$'; then
             _fmt_add_issue PROFILE_UNFILLED
         fi

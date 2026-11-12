@@ -146,18 +146,22 @@ def _section_end(lines: list[str], start: int) -> int:
     return len(lines)
 
 
-def _visible_body(lines: list[str], start: int, end: int) -> list[str]:
+def visible_lines(lines: list[str]) -> list[str]:
+    """Blank every line inside an HTML comment, keeping line positions."""
     visible: list[str] = []
     in_comment = False
-    for line in lines[start + 1 : end]:
-        stripped = line.strip()
-        if "<!--" in stripped:
+    for line in lines:
+        if "<!--" in line:
             in_comment = True
-        if not in_comment and stripped:
-            visible.append(stripped)
-        if "-->" in stripped:
+        visible.append("" if in_comment else line)
+        if "-->" in line:
             in_comment = False
     return visible
+
+
+def _visible_body(lines: list[str], start: int, end: int) -> list[str]:
+    body = visible_lines(lines[start + 1 : end])
+    return [line.strip() for line in body if line.strip()]
 
 
 def file_fingerprint(path: Path) -> str:
@@ -465,7 +469,9 @@ def _phase_items(lines: list[str], phase_num: int, start: int, end: int) -> list
 
 
 def parse_plan(path: Path) -> PlanState:
-    lines = path.read_text(encoding="utf-8").splitlines()
+    raw_lines = path.read_text(encoding="utf-8").splitlines()
+    # Template comments show phase syntax as an example; they never declare phases.
+    lines = visible_lines(raw_lines)
     issues: list[str] = []
     if conflicting_plan_files(path):
         issues.append("PLAN_FILENAME_CONFLICT")
@@ -551,7 +557,7 @@ def parse_plan(path: Path) -> PlanState:
 
     return PlanState(
         path=path,
-        lines=lines,
+        lines=raw_lines,
         contracted=contracted,
         current_phase=current_phase,
         active_item=active_item,

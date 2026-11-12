@@ -1,6 +1,6 @@
 # Exact `plan.md` Format Contract
 
-Read this reference before creating or repairing a plan. Only this format is supported. Hooks use simple regular expressions, so preserve headings and field forms exactly.
+Read this reference before creating or repairing a plan. Only this format is supported. Hooks use simple regular expressions, so preserve headings and field forms exactly. Every line from one containing `<!--` through the next one containing `-->` is invisible to these checks, so a comment may show example syntax but cannot hold a heading, status or item.
 
 ## Required section order
 
