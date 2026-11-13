@@ -481,7 +481,9 @@ class SessionStore:
                 raise SessionError(f"session is not associated with task: {task}")
             if verb in {"release", "clarify"} and row.get("status") == "inactive":
                 raise SessionError("planning lease was already relinquished; bind another task directly or start a new task id")
-            if verb in {"release", "clarify"} and row.get("status") not in {"pending", "waiting"}:
+            # A discussion holds no execution reservation, so releasing it lets the prompt move on.
+            releasable = {"pending", "waiting", "discussing"} if verb == "release" else {"pending", "waiting"}
+            if verb in {"release", "clarify"} and row.get("status") not in releasable:
                 raise SessionError("planning lease is not pending; use handoff to relinquish owned work")
             if verb == "discuss":
                 busy = self.busy(file)
