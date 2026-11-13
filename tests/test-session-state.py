@@ -75,10 +75,15 @@ class SessionIsolation(unittest.TestCase):
         self.store.bind("grok", "c", "task-a")
         with self.assertRaises(SessionError):
             self.store.claim("codex", "a", "task-a")
+        with self.assertRaisesRegex(SessionError, "already relinquished"):
+            self.store.transition("codex", "a", "release", "task-a")
+        with self.assertRaises(SessionError):
+            self.store.bind("codex", "a", "task-b")  # still owned by claude "b"
         self.assertTrue(self.store.resolve("claude", "b").endswith("task-b"))
         self.store.pending("claude", "b")
         self.store.transition("claude", "b", "release", "task-b")
         self.assertEqual(self.store.pending("claude", "b"), "")
+        self.store.bind("codex", "a", "task-b")
         self.assertEqual((self.root / ".plan-files").read_text(), "task-a\n")
 
     def test_creation_late_events_and_legacy_conflicts(self):

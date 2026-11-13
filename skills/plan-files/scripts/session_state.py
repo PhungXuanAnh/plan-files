@@ -57,6 +57,14 @@ def valid_task(task: str) -> bool:
     return bool(TASK_RE.fullmatch(task)) and task not in {".", ".."}
 
 
+def blocking_task(row: dict) -> str:
+    """Task this session must release or hand off before binding another."""
+    # Handoff and reclaim leave an inactive row; its association only nominates resumption.
+    if row.get("status") == "inactive":
+        return ""
+    return row.get("task") or row.get("candidate") or row.get("associated", "")
+
+
 def project_root(start: Path | None = None) -> Path:
     origin = start or Path(os.environ.get("PWF_PROJECT_ROOT", os.getcwd()))
     result = subprocess.run(["bash", str(SCRIPTS / "resolve-project-root.sh"), str(origin)],
@@ -399,7 +407,7 @@ class SessionStore:
         file = self.route(provider, session)
         with self.lock():
             row = self.read(file)
-            current = row.get("task") or row.get("candidate") or row.get("associated")
+            current = blocking_task(row)
             if current and current != task:
                 raise SessionError("this session must release/handoff its existing task before binding another")
             if row.get("status") == "discussing" and not reason.strip():
@@ -429,7 +437,7 @@ class SessionStore:
         file = self.route(provider, session)
         with self.lock():
             row = self.read(file)
-            current = row.get("task") or row.get("candidate") or row.get("associated")
+            current = blocking_task(row)
             if current and current != task:
                 raise SessionError("this session must release/handoff its existing task before reclaiming another")
             holders = self.holders(file, task)
@@ -471,6 +479,8 @@ class SessionStore:
                     raise SessionError("plan is not finalizable: " + explain_issues(issues))
             if current != task:
                 raise SessionError(f"session is not associated with task: {task}")
+            if verb in {"release", "clarify"} and row.get("status") == "inactive":
+                raise SessionError("planning lease was already relinquished; bind another task directly or start a new task id")
             if verb in {"release", "clarify"} and row.get("status") not in {"pending", "waiting"}:
                 raise SessionError("planning lease is not pending; use handoff to relinquish owned work")
             if verb == "discuss":

@@ -204,6 +204,21 @@ P1.1
                 self.hook(provider, "user-prompt-submit.sh")
                 self.assertEqual(self.hook(provider, "agent-stop.sh"), {})
 
+    def test_handoff_lets_the_same_prompt_bind_another_plan(self):
+        """Handoff kept the association, so bind and release both refused the next plan."""
+        other = self.project / "tmp/plan-files/task-b"
+        other.mkdir(parents=True)
+        (other / "plan.md").write_text(self.tasks.read_text())
+        for provider in ADAPTERS:
+            with self.subTest(provider=provider):
+                self.own(provider)
+                bind = self.action(provider, "bind")
+                self.run_command(["bash", "-c", bind.replace(" bind task-a", " handoff task-a")], provider)
+                bind_other = bind.replace(" bind task-a", " bind task-b")
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", bind_other).get("decision"), {"block", "deny"})
+                self.run_command(["bash", "-c", bind_other], provider)
+                self.assertEqual(self.state(provider, "resolve", provider, "fixture"), str(other))
+
     def test_hook_explain_is_read_only_and_denials_shorten(self):
         for provider in ADAPTERS:
             with self.subTest(provider=provider):
