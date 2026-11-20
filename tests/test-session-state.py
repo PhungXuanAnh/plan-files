@@ -161,6 +161,10 @@ class SessionIsolation(unittest.TestCase):
                 self.assertEqual(identity(), ("codex", "a"))
                 os.environ["PWF_SESSION_ID"] = "set-by-a-hook"
                 self.assertEqual(identity(), ("claude", "set-by-a-hook"))
+            # A later resume of the same session by another process keeps the first process an owner.
+            os.environ.update(PWF_SESSION_ID="c", PWF_SESSION_OWNER="1,3:c")
+            with patch("session_runtime.host_agent", return_value=("claude", 1)):
+                self.assertEqual(identity(), ("claude", "c"))
         self.store.claim("codex", "preview", "task-a", preview=True)
         self.assertFalse(self.store.sessions.exists())
 
@@ -439,14 +443,16 @@ Phase 1
                 self.assertIn("error-task/plan.md", result.stdout)
                 self.assertNotIn("task-a/plan.md", result.stdout)
         env_file = self.root / "claude-env"
+        env_file.write_text("export PWF_SESSION_OWNER=1:verified\n")
         result = subprocess.run(["bash", str(repo / ".claude/hooks/plan-files/scripts/session-start.sh")],
                                 input=json.dumps({"session_id": "verified"}), text=True, capture_output=True,
                                 env={**os.environ, "CLAUDE_ENV_FILE": str(env_file)}, cwd=self.root, check=True)
         self.assertEqual(json.loads(result.stdout), {})
-        exported = env_file.read_text().splitlines()
+        exported = env_file.read_text().splitlines()[1:]
         self.assertEqual(exported[:2], ["export PWF_SESSION_ADAPTER=claude", "export PWF_SESSION_ID=verified"])
-        # The owner line appears only when the test itself runs under an agent process.
-        self.assertRegex("\n".join(exported[2:]), r"^(export PWF_SESSION_OWNER=\d+:verified)?$")
+        # The owner line appears only when the test itself runs under an agent process,
+        # and keeps the earlier process that started this session.
+        self.assertRegex("\n".join(exported[2:]), r"^(export PWF_SESSION_OWNER=1,\d+:verified)?$")
         self.assertTrue(self.store.resolve("codex", "owner").endswith("task-a"))
         self.assertEqual((self.root / ".plan-files").read_text(), "task-a\n")
 

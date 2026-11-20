@@ -83,19 +83,21 @@ NATIVE_SESSION_VARIABLES = (("codex", "CODEX_THREAD_ID"), ("claude", "CLAUDE_SES
 def inherited_identity() -> bool:
     """PWF_* exported for every shell of one agent process, seen under another agent it launched.
 
-    PWF_SESSION_OWNER is "<agent pid>:<session id>"; a caller that sets its own
+    PWF_SESSION_OWNER is "<agent pid>[,<agent pid>...]:<session id>", listing every
+    process that started or resumed the session; a caller that sets its own
     PWF_SESSION_ID deliberately no longer matches it.
     """
     owner, _, session = os.environ.get("PWF_SESSION_OWNER", "").partition(":")
     if not owner or session != os.environ.get("PWF_SESSION_ID"):
         return False
+    owners = set(owner.split(","))
     from session_runtime import ancestor_pids, host_agent
     _, pid = host_agent()
     if pid:
-        return str(pid) != owner
+        return str(pid) not in owners
     # A sandbox with its own PID namespace (Codex workspace-write) hides every
     # agent above it, including the owner.
-    return owner not in {str(ancestor) for ancestor in ancestor_pids()}
+    return owners.isdisjoint(str(ancestor) for ancestor in ancestor_pids())
 
 
 def identity() -> tuple[str, str] | None:
