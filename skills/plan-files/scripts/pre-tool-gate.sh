@@ -357,6 +357,12 @@ if [ -z "$PLAN_DIR" ]; then
         log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-skill-read-before-routing tool=$TOOL_NAME"
         printf '{}'; exit 0
     fi
+    # A host may reload session environment only when the shell's cwd changes,
+    # and a bare cd touches no plan or project state.
+    if printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" directory-change; then
+        log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-cd-before-routing tool=$TOOL_NAME"
+        printf '{}'; exit 0
+    fi
     if [ "$(PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" route-status "$PROVIDER" "$SESSION_ID")" = "waiting" ] \
         && printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" question-tool; then
         log "session=$SESSION_ID candidate=$CANDIDATE decision=allow-question-while-waiting tool=$TOOL_NAME"

@@ -1397,6 +1397,20 @@ def non_mutating_shell(payload: dict) -> bool:
     return not shell_has_mutation_intent(payload_tool_input(payload))
 
 
+def directory_change(payload: dict) -> bool:
+    """A shell call that is only `cd [dir]`, with no expansion or redirection."""
+    name = str(payload.get("tool_name") or payload.get("toolName") or "").lower()
+    if name.rsplit("__", 1)[-1] not in SHELL_TOOL_NAMES:
+        return False
+    segments = shell_segments(shell_command_text(payload_tool_input(payload)))
+    if not segments or len(segments) != 1:
+        return False
+    segment = segments[0]
+    if segment.argv[0] != "cd" or len(segment.argv) > 2 or segment.substitutions:
+        return False
+    return not any(char in segment.text for char in "<>`$")
+
+
 def planning_background_warning(payload: dict) -> str:
     """Recognize explicit detachment of short planning helpers, not arbitrary jobs."""
     name = str(payload.get("tool_name") or payload.get("toolName") or "")
@@ -1542,6 +1556,9 @@ def main() -> int:
             return 1
         print(plan_op_class(payload, Path(os.path.realpath(sys.argv[2]))), end="")
         return 0
+    if len(sys.argv) == 2 and sys.argv[1] == "directory-change":
+        payload = load_payload()
+        return 0 if payload is not None and directory_change(payload) else 1
     if len(sys.argv) == 2 and sys.argv[1] == "non-mutating-shell":
         payload = load_payload()
         if payload is None:

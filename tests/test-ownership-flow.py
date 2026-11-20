@@ -935,6 +935,12 @@ P1.1
                               "the ownership message must name the skill it expects to be read")
                 self.assertNotIn(self.hook(provider, "pre-tool-use.sh", f"cat {skill_md}").get("decision"),
                                  {"block", "deny"}, "a skill read precedes routing")
+                # A bare cd lets a host reload session environment; it carries nothing else.
+                self.assertNotIn(self.hook(provider, "pre-tool-use.sh", "cd /tmp").get("decision"),
+                                 {"block", "deny"})
+                for refused in ("cd /tmp && touch app.py", "cd $(touch app.py)"):
+                    self.assertIn(self.hook(provider, "pre-tool-use.sh", refused)["decision"],
+                                  {"block", "deny"}, refused)
                 self.run_command(["bash", "-c", self.action(provider, "bind")], provider)
                 self.assertNotIn(self.hook(provider, "pre-tool-use.sh", "touch app.py").get("decision"),
                                  {"block", "deny"}, "a read before bind must still count after it")
