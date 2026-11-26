@@ -10,14 +10,15 @@ import subprocess
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--provider", choices=("codex", "claude", "copilot", "grok"), required=True)
+    parser.add_argument("--provider", choices=("codex", "claude", "copilot", "grok", "agy"), required=True)
     parser.add_argument("--session-id", default=os.environ.get("PWF_SESSION_ID"),
                         help="session to inspect; defaults to PWF_SESSION_ID or the provider environment")
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--command", required=True, help="shell command to classify, never execute")
     args = parser.parse_args()
     session_vars = {"codex": "CODEX_THREAD_ID", "claude": "CLAUDE_SESSION_ID",
-                    "copilot": "COPILOT_AGENT_SESSION_ID", "grok": "GROK_SESSION_ID"}
+                    "copilot": "COPILOT_AGENT_SESSION_ID", "grok": "GROK_SESSION_ID",
+                    "agy": "ANTIGRAVITY_CONVERSATION_ID"}
     session = args.session_id or os.environ.get(session_vars[args.provider])
     if not session:
         parser.error("--session-id is required when no verified session environment is available")

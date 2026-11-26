@@ -44,7 +44,7 @@ def ancestor_pids() -> set[int]:
 
 def host_agent() -> tuple[str, int]:
     """Provider name and pid of the nearest agent process above this one, or ("", 0)."""
-    names = ("codex", "claude", "copilot")
+    names = ("codex", "claude", "copilot", "agy")
     executables = {str(Path(path).resolve()): name for name in names if (path := shutil.which(name))}
     try:
         pid = os.getppid()
@@ -257,10 +257,11 @@ def reconcile_turn_end(store, provider: str, session: str, payload: dict) -> Non
     Codex has no failure event: a call that fails (apply_patch verification,
     sibling-hook denial) gets PreToolUse only, and nested exec-* ids are absent
     from its rollout. Claude can run PreToolUse for a streamed call that it then
-    discards, so neither the call nor its result reaches the transcript. Both
-    hosts run the main-thread Stop after the model received every synchronous
-    result of the turn, and a session runs one turn at a time. Native async
-    handles and Claude subagent calls stay outstanding.
+    discards, so neither the call nor its result reaches the transcript. agy
+    sends no PostToolUse for a call that a permission prompt or another hook
+    denied. These hosts run the main-thread Stop after the model received every
+    synchronous result of the turn, and a session runs one turn at a time.
+    Native async handles and Claude subagent calls stay outstanding.
     """
     from session_state import atomic_text
     turn = turn_id(payload)
@@ -268,6 +269,8 @@ def reconcile_turn_end(store, provider: str, session: str, payload: dict) -> Non
         kept = ("background:",)
     elif provider == "claude" and not payload.get("agent_id"):
         kept = ("background:", "agent:")
+    elif provider == "agy":
+        kept = ()
     else:
         return
     file = store.route(provider, session)

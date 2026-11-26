@@ -93,6 +93,7 @@ plan-files/
 ├── .claude/hooks/                         # Claude Code hook scripts
 ├── .codex/hooks/                          # Codex hook scripts
 ├── .grok/hooks/                           # Native Grok Build hook sample + adapter scripts
+├── .agy/hooks/                            # Antigravity CLI (agy) hook sample + adapter
 ├── .github/hooks/                         # GitHub Copilot hook scripts
 ├── CHANGELOG.md
 ├── CONTRIBUTORS.md
@@ -105,7 +106,7 @@ plan-files/
 The hook system follows an Abstract Core + Adapter architecture. These are architectural roles independent of implementation language. Bash is the current implementation, not a permanent constraint; the core and adapters may be migrated to Python when the complexity and maintenance benefits justify it.
 
 ```text
-Codex / Claude / Copilot / Grok event
+Codex / Claude / Copilot / Grok / agy event
              │ provider-specific JSON, fields, session id
              ▼
       Provider Adapter
@@ -122,7 +123,7 @@ Codex / Claude / Copilot / Grok event
 
 The abstract core owns all planning behavior: project-root and session resolution, restore and maintenance gates, phase/item state, semantic risk, checkpoint guidance, Stop finalization, and telemetry policy. In the Bash implementation this role is fulfilled by the canonical `hook-*.sh` scripts and their shared helpers under `skills/plan-files/scripts/`.
 
-A provider adapter owns only the protocol boundary. It converts the provider's event name, input fields, session identity, and capabilities into the logical core request, invokes the canonical core, then converts the provider-neutral result into the exact JSON envelope expected by Codex, Claude Code, GitHub Copilot, or Grok Build. The scripts under `.codex/hooks/`, `.claude/hooks/`, `.github/hooks/`, and `.grok/hooks/` fulfill this adapter role and should remain small.
+A provider adapter owns only the protocol boundary. It converts the provider's event name, input fields, session identity, and capabilities into the logical core request, invokes the canonical core, then converts the provider-neutral result into the exact JSON envelope expected by Codex, Claude Code, GitHub Copilot, Grok Build, or Antigravity CLI (agy). The scripts under `.codex/hooks/`, `.claude/hooks/`, `.github/hooks/`, `.grok/hooks/`, and `.agy/hooks/` fulfill this adapter role and should remain small.
 
 To prevent duplication:
 
@@ -139,7 +140,7 @@ Porting from Bash to Python is appropriate when JSON/protocol handling, state tr
 - Remove the superseded Bash policy after the new implementation passes parity tests; do not maintain the same policy in both Bash and Python.
 - Keep stable provider hook paths where possible so installed configurations do not break.
 
-In an object-oriented Python implementation, preserve the same boundary: one `AbstractHook`/`HookCore` accepts a normalized `HookRequest` and returns a normalized `HookResult`; `CodexAdapter`, `ClaudeAdapter`, `CopilotAdapter`, and `GrokAdapter` classes perform `from_provider_input(...)` and `to_provider_output(...)`. Provider subclasses must not override or duplicate planning policy.
+In an object-oriented Python implementation, preserve the same boundary: one `AbstractHook`/`HookCore` accepts a normalized `HookRequest` and returns a normalized `HookResult`; `CodexAdapter`, `ClaudeAdapter`, `CopilotAdapter`, `GrokAdapter`, and `AgyAdapter` classes perform `from_provider_input(...)` and `to_provider_output(...)`. Provider subclasses must not override or duplicate planning policy.
 
 ## Use
 
@@ -153,7 +154,7 @@ Ask the agent to use the `plan-files` skill for any multi-step task. The agent s
 6. Checkpoint the Active Item immediately after its evidence becomes true; the checkpoint synchronizes the exact Resume next action.
 7. Keep a rolling window of at most 12 hot phase headings: `phase-add` archives the oldest eligible complete phase before adding a thirteenth, and `compact-oldest` performs the same history-first eviction explicitly. Archive writes are locked and journaled for automatic crash recovery. Split only an independent goal; never raw-truncate or raise the ceiling.
 
-Codex, Claude Code, GitHub Copilot, and Grok Build implement this prompt-scoped handshake through shared cores under `skills/plan-files/scripts/`. Provider wrappers translate event arguments, session identity, and output envelopes. All four repeat the same action-first recovery contract at PreTool and pending Stop. An unidentified session or one without a candidate receives no full plan injection or Stop enforcement. A pending candidate must be resolved before work; clarification wait permits only questions and exact routing commands. A future provider reuses the same core.
+Codex, Claude Code, GitHub Copilot, Grok Build, and Antigravity CLI (agy) implement this prompt-scoped handshake through shared cores under `skills/plan-files/scripts/`. Provider wrappers translate event arguments, session identity, and output envelopes. All five repeat the same action-first recovery contract at PreTool and pending Stop. An unidentified session or one without a candidate receives no full plan injection or Stop enforcement. A pending candidate must be resolved before work; clarification wait permits only questions and exact routing commands. A future provider reuses the same core.
 
 Each new user prompt requires classification using its saved association; bind once before continuing work. A text-only answer may yield without routing, but attempted work keeps ownership recovery active. Valid Stop releases execution without marking paused work complete; blocked Stop and unfinished tools retain it. `release` rejects a candidate and is not routine cleanup. Use `discuss` for discussion-only turns; reads, questions, reports, and plan repair remain allowed. An explicit same-task `bind --reason "user authorization"` can upgrade discussion when execution was already requested; otherwise wait for a new prompt. Neither discussion nor clarification marks unfinished phases complete.
 
@@ -183,6 +184,8 @@ Grok's native adapter follows the [official hook contract](https://docs.x.ai/bui
 
 Official Grok truncates PreTool denial reasons to 256 Unicode characters before they reach the model. The Grok adapter advertises that transport limit to the shared core: long reasons are written intact to a private feedback file, and the short deny names its path and the gate that fired (ownership, restore, reopen, maintenance, plan format, skill) so the recovery is recognizable before the file is opened. Any tool call containing that current feedback path anywhere in its arguments is allowed, regardless of tool name or other arguments. Other calls still follow normal gates. Feedback access itself does not bind/release a plan; prompt and ownership transitions invalidate the file. No Grok source change, rebuild, or replacement of the official executable is needed. See [routing and hook semantics](skills/plan-files/references/routing-and-hooks.md).
 
+The Antigravity CLI (`agy`) adapter is one Python file, `.agy/hooks/plan-files/scripts/agy_adapter.py`, run for `PreInvocation`, `PreToolUse`, `PostToolUse`, and `Stop`. It checks `conversationId` against `ANTIGRAVITY_CONVERSATION_ID`, runs the turn's first PreInvocation as prompt submit, injects context as `systemMessage` steps, delivers PostToolUse context at the next PreInvocation (agy's PostToolUse cannot inject), renders `block` as `deny` for PreToolUse and `continue` for Stop, and gates only a Stop whose `terminationReason` is `NO_TOOL_CALL`.
+
 ## Install Shape
 
 Install all supported skills and hooks globally from this checkout:
@@ -191,9 +194,9 @@ Install all supported skills and hooks globally from this checkout:
 make install-global
 ```
 
-`make install-commands` (included above) links short command names into `COMMAND_DIR` (default `~/.local/bin`; it must be on PATH): `plan_state.py`, `plan_edit.py`, `plan_checkpoint.py`, and `pwf-bind-codex`/`pwf-bind-claude`/`pwf-bind-copilot`/`pwf-bind-grok` for the provider bind adapters. While PATH resolves a name to this checkout, hook messages print it instead of `python3 <absolute path>` or `bash <adapter path>`, which keeps each block message shorter; otherwise they keep the full-path spelling. `make check-installs` lists the links.
+`make install-commands` (included above) links short command names into `COMMAND_DIR` (default `~/.local/bin`; it must be on PATH): `plan_state.py`, `plan_edit.py`, `plan_checkpoint.py`, and `pwf-bind-codex`/`pwf-bind-claude`/`pwf-bind-copilot`/`pwf-bind-grok`/`pwf-bind-agy` for the provider bind adapters. While PATH resolves a name to this checkout, hook messages print it instead of `python3 <absolute path>` or `bash <adapter path>`, which keeps each block message shorter; otherwise they keep the full-path spelling. `make check-installs` lists the links.
 
-`make install-hooks` installs only the hooks. Claude Code merges the planning groups in `.claude/settings.json.sample` into the regular global file `~/.claude/settings.json`; missing groups are added, stale or duplicate planning groups are replaced, and unrelated settings and hook groups are preserved even when they share the same event. Codex merges its sample into `~/.codex/hooks.json`. Copilot's global hook config remains a symlink to its `.sample` file. Grok installs an owned native file at `${GROK_HOME:-$HOME/.grok}/hooks/plan-files.json` and leaves every sibling JSON hook untouched. Hook scripts execute from this checkout, so script-only edits apply globally without reinstalling. Rerun the relevant installer after changing a sample definition or moving this checkout.
+`make install-hooks` installs only the hooks. Claude Code merges the planning groups in `.claude/settings.json.sample` into the regular global file `~/.claude/settings.json`; missing groups are added, stale or duplicate planning groups are replaced, and unrelated settings and hook groups are preserved even when they share the same event. Codex merges its sample into `~/.codex/hooks.json`. Copilot's global hook config remains a symlink to its `.sample` file. Grok installs an owned native file at `${GROK_HOME:-$HOME/.grok}/hooks/plan-files.json` and leaves every sibling JSON hook untouched. Antigravity CLI keeps every hook in one name-keyed `${AGY_HOME:-$HOME/.gemini/config}/hooks.json`; `make install-hook-agy` writes only its `plan-files` entry, keeps the other names, and writes through a symlinked file. Hook scripts execute from this checkout, so script-only edits apply globally without reinstalling. Rerun the relevant installer after changing a sample definition or moving this checkout.
 
 Install only the native Grok hook into the normal global home:
 
@@ -206,6 +209,13 @@ Install the Grok skill and hook together, or target an isolated runtime explicit
 ```bash
 make install-grok
 GROK_HOME=/path/to/isolated/grok-home make install-hook-grok
+```
+
+Install the skill and hooks for Antigravity CLI (`agy`), then confirm with `/hooks` in agy:
+
+```bash
+make install-agy
+AGY_HOME=/path/to/isolated/gemini-config make install-hook-agy
 ```
 
 The Grok installer writes atomically, is byte-idempotent, and refuses to overwrite an unrelated existing `plan-files.json`. `.grok/hooks/plan-files.json.sample` is the source-controlled project example; it deliberately does not end in `.json`, so opening this checkout cannot register a duplicate project layer. Rename/copy it to `.json` only when a trusted project-local layer is intentional, then grant Grok project hook trust.

@@ -78,15 +78,16 @@ Provider adapters live under:
 - `.claude/hooks/plan-files/scripts/`
 - `.github/hooks/scripts/`
 - `.grok/hooks/plan-files/scripts/`
+- `.agy/hooks/plan-files/scripts/` (Antigravity CLI, `agy`)
 
-Codex, Claude Code, GitHub Copilot, and Grok Build must preserve the same behavioral contract:
+Codex, Claude Code, GitHub Copilot, Grok Build, and Antigravity CLI must preserve the same behavioral contract:
 
 - PreTool: resolve session ownership, block invalid restore/item state and over-budget unrelated mutation, but allow read-only diagnosis and owned-plan maintenance.
 - PostTool: inject bounded context, targeted restore/compaction guidance, and risk-aware checkpoint reminders. Read-only exploration and plan maintenance have zero semantic risk; likely evidence and operational mutations raise risk. Count unknown activity separately: it cannot trigger the early risk threshold, but prolonged unknown-only activity gets a conditional checkpoint review. Keep execution gating conservative and migrate older mixed-risk caches under the shared lock.
 - Stop: continue actionable/invalid work until every phase is settled and finalization succeeds.
 - Telemetry: log provider plus hashed task/session scope, injection sizes, semantic class/risk, and Stop continuations; never log raw session ids or raw hook input previews.
 
-Keep the Codex, Claude Code, and Copilot `common.sh` compatibility bridges byte-identical. Grok's `common.sh` may contain only Grok envelope/session normalization. Provider event scripts must remain thin launch shims into the canonical shell cores; provider-only code may translate event arguments, session identity, or output envelopes, but must not redefine planning policy. Keep semantic-delta policy single-sourced in `hook-post-tool-use.sh` and Stop policy single-sourced in `hook-agent-stop.sh`.
+Keep the Codex, Claude Code, and Copilot `common.sh` compatibility bridges byte-identical. Grok's `common.sh` may contain only Grok envelope/session normalization, and `agy_adapter.py` only agy envelope/session normalization and context delivery. Provider event scripts must remain thin launch shims into the canonical shell cores; provider-only code may translate event arguments, session identity, or output envelopes, but must not redefine planning policy. Keep semantic-delta policy single-sourced in `hook-post-tool-use.sh` and Stop policy single-sourced in `hook-agent-stop.sh`.
 
 Treat the hook design as an Abstract Core + Provider Adapter architecture. These roles are language-independent. Bash is the current implementation, not a permanent constraint.
 
@@ -105,17 +106,18 @@ Port shared hook code to Python when shell complexity creates a meaningful maint
 - Remove superseded Bash policy once parity passes; never leave Bash and Python as two authoritative implementations of the same behavior.
 - Preserve stable hook paths or update installers/configuration atomically when a path must change.
 
-For an object-oriented Python implementation, retain one `AbstractHook`/`HookCore` with `handle(HookRequest) -> HookResult` and separate `CodexAdapter`, `ClaudeAdapter`, `CopilotAdapter`, and `GrokAdapter` classes with `from_provider_input(...)` and `to_provider_output(...)`. Provider classes must not override planning behavior.
+For an object-oriented Python implementation, retain one `AbstractHook`/`HookCore` with `handle(HookRequest) -> HookResult` and separate `CodexAdapter`, `ClaudeAdapter`, `CopilotAdapter`, `GrokAdapter`, and `AgyAdapter` classes with `from_provider_input(...)` and `to_provider_output(...)`. Provider classes must not override planning behavior.
 
 ## Repository installation
 
-- Run `make install` from this checkout to install the global planning skill and hooks for Codex, Claude Code, GitHub Copilot, and Grok Build; it also installs the Kiro skill.
+- Run `make install` from this checkout to install the global planning skill and hooks for Codex, Claude Code, GitHub Copilot, Grok Build, and Antigravity CLI (agy); it also installs the Kiro skill.
 - `make install` is safe to repeat. Correct links are preserved, stale links are replaced, and Claude Code/Codex planning hook groups are merged without duplication.
 - Skill files and provider hook scripts execute from this repository, so edits to those files apply to global installations without reinstalling.
 - Claude Code merges `.claude/settings.json.sample` into `~/.claude/settings.json`, preserving unrelated settings and hook groups. Codex similarly merges `.codex/hooks.json.sample` into `~/.codex/hooks.json`.
 - Copilot's global hook configuration is a symlink to `.github/hooks/plan-files.json.sample`.
 - `make install-commands` (part of `make install`) links `plan_state.py`, `plan_edit.py`, `plan_checkpoint.py` and `pwf-bind-<provider>` into `COMMAND_DIR` (default `~/.local/bin`, which must be on PATH). Hook messages then print these short names instead of full paths; the gate accepts a short bind name only when PATH resolves it to this checkout's adapter. `make test` and `make behavioral-eval` drop `COMMAND_DIR` from PATH so assertions see the full-path spelling.
 - Grok installs `.grok/hooks/plan-files.json.sample` atomically to `$GROK_HOME/hooks/plan-files.json` (default `~/.grok`) while preserving sibling hook files; set `GROK_HOME` explicitly for isolated runtimes.
+- Antigravity CLI installs the `plan-files` entry of `.agy/hooks/plan-files.json.sample` into `$AGY_HOME/hooks.json` (default `~/.gemini/config`), replacing only that name; set `AGY_HOME` explicitly for isolated runtimes.
 - Rerun the relevant hook installer (or `make install`) after changing a Claude/Codex sample hook definition or moving this checkout. Script-only edits do not require reinstalling.
 - If Codex reports an untrusted changed hook definition, review it with `/hooks`. Restart sessions opened before a local config was renamed to `.sample`, so cached local/global layers do not both execute.
 
@@ -132,12 +134,12 @@ Before handing off a behavioral change, run the applicable checks, including:
 make test
 make behavioral-eval
 python3 <skill-creator-dir>/scripts/quick_validate.py skills/plan-files
-python3 -m py_compile skills/plan-files/scripts/*.py
+python3 -m py_compile skills/plan-files/scripts/*.py .agy/hooks/plan-files/scripts/*.py
 bash -n skills/plan-files/scripts/*.sh \
   .codex/hooks/plan-files/scripts/*.sh \
   .claude/hooks/plan-files/scripts/*.sh \
   .github/hooks/scripts/*.sh \
-  .grok/hooks/plan-files/scripts/*.sh
+  .grok/hooks/plan-files/scripts/*.sh .agy/hooks/plan-files/scripts/*.sh
 git diff --check
 ```
 

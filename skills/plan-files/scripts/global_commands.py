@@ -8,7 +8,8 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent
 REPO = SCRIPTS.parents[2]
 ADAPTER_DIRS = {"codex": ".codex/hooks/plan-files/scripts", "claude": ".claude/hooks/plan-files/scripts",
-                "copilot": ".github/hooks/scripts", "grok": ".grok/hooks/plan-files/scripts"}
+                "copilot": ".github/hooks/scripts", "grok": ".grok/hooks/plan-files/scripts",
+                "agy": ".agy/hooks/plan-files/scripts"}
 BIND_COMMANDS = {f"pwf-bind-{provider}" for provider in ADAPTER_DIRS}
 HELPER_COMMANDS = {"plan_state.py", "plan_edit.py", "plan_checkpoint.py"}
 

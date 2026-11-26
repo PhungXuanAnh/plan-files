@@ -77,7 +77,8 @@ def planning_root(root: Path) -> Path:
 
 
 NATIVE_SESSION_VARIABLES = (("codex", "CODEX_THREAD_ID"), ("claude", "CLAUDE_SESSION_ID"),
-                            ("copilot", "COPILOT_AGENT_SESSION_ID"), ("grok", "GROK_SESSION_ID"))
+                            ("copilot", "COPILOT_AGENT_SESSION_ID"), ("grok", "GROK_SESSION_ID"),
+                            ("agy", "ANTIGRAVITY_CONVERSATION_ID"))
 
 
 def inherited_identity() -> bool:

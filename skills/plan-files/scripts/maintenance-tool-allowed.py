@@ -26,7 +26,8 @@ from session_state import (RECORD_FILES as PLAN_RECORD_FILES, EDIT_RECORD_OPS,
                            EDIT_FILE_OPS, EDIT_ADVANCE_OPS, edit_operation_class)
 
 
-QUESTION_TOOLS = {"askuserquestion", "ask_user_question", "request_user_input", "request_user_input_async"}
+QUESTION_TOOLS = {"askuserquestion", "ask_user_question", "ask_question", "request_user_input",
+                  "request_user_input_async"}
 
 
 READ_TOOL_PREFIXES = (

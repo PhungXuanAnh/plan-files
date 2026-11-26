@@ -1,7 +1,7 @@
 .PHONY: help test behavioral-eval check-installs injected-content plan-overview \
-        install-skill-copilot install-skill-claude-code install-skill-codex install-skill-grok install-skill-kiro install-skills \
-        install-hook-copilot install-hook-claude-code install-hook-codex install-hook-grok install-hooks \
-        install-copilot install-claude-code install-codex install-grok install-commands install-global install \
+        install-skill-copilot install-skill-claude-code install-skill-codex install-skill-grok install-skill-agy install-skill-kiro install-skills \
+        install-hook-copilot install-hook-claude-code install-hook-codex install-hook-grok install-hook-agy install-hooks \
+        install-copilot install-claude-code install-codex install-grok install-agy install-commands install-global install \
         sync-upstream sync-upstream-rebase sync-upstream-merge install-hooks-json
 
 help: ## Show this help
@@ -17,6 +17,7 @@ test: ## Run planning contract tests
 	@bash tests/test-codex-global-hooks.sh
 	@bash tests/test-claude-global-hooks.sh
 	@bash tests/test-grok-global-hooks.sh
+	@bash tests/test-agy-global-hooks.sh
 
 behavioral-eval: ## Run isolated long-run planning-memory evaluation
 	@python3 "$(SKILL_SRC)/scripts/behavioral_eval.py"
@@ -41,9 +42,13 @@ KIRO_SKILL := $(HOME)/.kiro/skills/plan-files
 GROK_HOME ?= $(HOME)/.grok
 GROK_SKILL := $(GROK_HOME)/skills/plan-files
 GROK_HOOKS := $(GROK_HOME)/hooks/plan-files.json
+# Antigravity CLI (agy) reads skills and one shared, name-keyed hooks.json from here.
+AGY_HOME ?= $(HOME)/.gemini/config
+AGY_SKILL := $(AGY_HOME)/skills/plan-files
+AGY_HOOKS := $(AGY_HOME)/hooks.json
 # Short command names; hook messages use them only while PATH resolves them to this checkout.
 COMMAND_DIR ?= $(HOME)/.local/bin
-GLOBAL_COMMANDS := plan_state.py plan_edit.py plan_checkpoint.py pwf-bind-codex pwf-bind-claude pwf-bind-copilot pwf-bind-grok
+GLOBAL_COMMANDS := plan_state.py plan_edit.py plan_checkpoint.py pwf-bind-codex pwf-bind-claude pwf-bind-copilot pwf-bind-grok pwf-bind-agy
 # Tests assert the full-path spellings, so they run without the installed names;
 # the short-name contract test puts its own command directory on PATH.
 TEST_PATH := $(shell printf '%s' "$$PATH" | tr ':' '\n' | grep -vxF '$(COMMAND_DIR)' | paste -sd: -)
@@ -54,6 +59,7 @@ CLAUDE_CODE_SETTINGS_SRC := $(REPO_ROOT)/.claude/settings.json.sample
 CLAUDE_CODE_HOOKS_SRC := $(REPO_ROOT)/.claude/hooks/plan-files
 COPILOT_HOOKS_SRC := $(REPO_ROOT)/.github/hooks/plan-files.json.sample
 GROK_HOOKS_SRC := $(REPO_ROOT)/.grok/hooks/plan-files.json.sample
+AGY_HOOKS_SRC := $(REPO_ROOT)/.agy/hooks/plan-files.json.sample
 
 define link_path
 	@target='$(1)'; dest='$(2)'; \
@@ -98,6 +104,8 @@ check-installs: ## Show global skill/hook install status
 	$(call check_path,$(COPILOT_HOOKS))
 	$(call check_path,$(GROK_SKILL))
 	$(call check_path,$(GROK_HOOKS))
+	$(call check_path,$(AGY_SKILL))
+	$(call check_path,$(AGY_HOOKS))
 	$(call check_path,$(KIRO_SKILL))
 	@for name in $(GLOBAL_COMMANDS); do \
 		if [ -L "$(COMMAND_DIR)/$$name" ]; then echo "LINK    $(COMMAND_DIR)/$$name -> $$(readlink "$(COMMAND_DIR)/$$name")"; \
@@ -137,12 +145,20 @@ install-hook-grok: ## Install native hooks into the selected GROK_HOME without t
 
 install-grok: install-skill-grok install-hook-grok ## Install the skill and native hooks into the selected GROK_HOME
 
+install-skill-agy: ## Link skill into the selected AGY_HOME (Antigravity CLI)
+	$(call link_path,$(SKILL_SRC),$(AGY_SKILL))
+
+install-hook-agy: ## Add the plan-files entry to AGY_HOME/hooks.json without touching other hook names
+	@python3 scripts/install-agy-hooks.py "$(AGY_HOOKS_SRC)" "$(AGY_HOOKS)"
+
+install-agy: install-skill-agy install-hook-agy ## Install the skill and hooks for Antigravity CLI (agy)
+
 install-skill-kiro: ## Link skill into global Kiro skills
 	$(call link_path,$(SKILL_SRC),$(KIRO_SKILL))
 
-install-skills: install-skill-codex install-skill-claude-code install-skill-copilot install-skill-grok install-skill-kiro ## Link skills globally
+install-skills: install-skill-codex install-skill-claude-code install-skill-copilot install-skill-grok install-skill-agy install-skill-kiro ## Link skills globally
 
-install-hooks: install-hook-codex install-hook-claude-code install-hook-copilot install-hook-grok ## Install hook JSON/settings globally
+install-hooks: install-hook-codex install-hook-claude-code install-hook-copilot install-hook-grok install-hook-agy ## Install hook JSON/settings globally
 
 install-commands: ## Link short planning command names into COMMAND_DIR (default ~/.local/bin, must be on PATH)
 	$(call link_path,$(SKILL_SRC)/scripts/plan_state.py,$(COMMAND_DIR)/plan_state.py)
@@ -152,6 +168,7 @@ install-commands: ## Link short planning command names into COMMAND_DIR (default
 	$(call link_path,$(REPO_ROOT)/.claude/hooks/plan-files/scripts/bind-session.sh,$(COMMAND_DIR)/pwf-bind-claude)
 	$(call link_path,$(REPO_ROOT)/.github/hooks/scripts/bind-session.sh,$(COMMAND_DIR)/pwf-bind-copilot)
 	$(call link_path,$(REPO_ROOT)/.grok/hooks/plan-files/scripts/bind-session.sh,$(COMMAND_DIR)/pwf-bind-grok)
+	$(call link_path,$(REPO_ROOT)/.agy/hooks/plan-files/scripts/bind-session.sh,$(COMMAND_DIR)/pwf-bind-agy)
 
 install-global install: install-skills install-hooks install-commands ## Install skills, hook JSON/settings and short command names globally
 

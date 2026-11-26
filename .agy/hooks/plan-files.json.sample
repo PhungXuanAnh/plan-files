@@ -1,0 +1,42 @@
+{
+  "plan-files": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python3 .agy/hooks/plan-files/scripts/agy_adapter.py PreInvocation",
+        "timeout": 10
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .agy/hooks/plan-files/scripts/agy_adapter.py PreToolUse",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .agy/hooks/plan-files/scripts/agy_adapter.py PostToolUse",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "python3 .agy/hooks/plan-files/scripts/agy_adapter.py Stop",
+        "timeout": 15
+      }
+    ]
+  }
+}
