@@ -6,9 +6,13 @@ Usage: agy_adapter.py PreInvocation|PreToolUse|PostToolUse|Stop  (agy hook JSON 
 agy has no prompt-submit event and cannot inject context from PostToolUse.
 The first PreInvocation of a turn (invocationNum 0) stands in for the prompt
 hook, and PostToolUse context waits for the next PreInvocation of the turn.
+A background command gets its PostToolUse only when it finishes; until then
+Stop reports fullyIdle false, and agy then starts a turn with the same
+lastUserInput, which is a wake-up rather than a new prompt.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -63,6 +67,8 @@ def from_provider_input(event: str, payload: dict) -> dict:
         if event == "PostToolUse" and payload.get("error"):
             request["hook_event_name"] = "PostToolUseFailure"
             request["error"] = payload["error"]
+    elif event == "Stop" and payload.get("fullyIdle") is False:
+        request["host_background_running"] = True
     return request
 
 
@@ -114,6 +120,34 @@ def take_pending_context(session: str) -> str:
     return context
 
 
+def awaiting_file(session: str) -> Path:
+    return feedback_path(f"{PROVIDER}-awaiting:{session}")
+
+
+def prompt_digest(payload: dict) -> str:
+    return hashlib.sha256(str(payload.get("lastUserInput") or "").encode()).hexdigest()
+
+
+def remember_awaiting(session: str, payload: dict) -> None:
+    """Record the prompt of a turn that ended while background work still runs."""
+    path = awaiting_file(session)
+    path.unlink(missing_ok=True)
+    if payload.get("fullyIdle") is not False or not private_directory(create=True):
+        return
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as output:
+        output.write(prompt_digest(payload))
+
+
+def woken_by_background(session: str, payload: dict) -> bool:
+    """A turn that agy started for finished background work, not for a new prompt."""
+    path = awaiting_file(session)
+    if not valid_file(path):
+        return False
+    digest = path.read_text()
+    path.unlink()
+    return digest == prompt_digest(payload)
+
+
 def project_root(cwd: str) -> str:
     result = subprocess.run(["bash", str(SCRIPTS / "resolve-project-root.sh"), cwd],
                             text=True, capture_output=True, check=True)
@@ -148,8 +182,10 @@ def handle(event: str, payload: dict) -> dict | None:
     if event == "Stop" and payload.get("terminationReason") != "NO_TOOL_CALL":
         # Cancel, error and invocation limits are not a turn the agent chose to end.
         return {}
+    if event == "Stop":
+        remember_awaiting(session, payload)
     if event == "PreInvocation":
-        if payload.get("invocationNum") != 0:
+        if payload.get("invocationNum") != 0 or woken_by_background(session, payload):
             return to_provider_output(event, {}, take_pending_context(session))
         take_pending_context(session)  # A new turn drops the last turn's undelivered context.
     response = run_core(event, from_provider_input(event, payload))

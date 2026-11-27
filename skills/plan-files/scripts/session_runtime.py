@@ -270,6 +270,9 @@ def reconcile_turn_end(store, provider: str, session: str, payload: dict) -> Non
     elif provider == "claude" and not payload.get("agent_id"):
         kept = ("background:", "agent:")
     elif provider == "agy":
+        # A background command's PostToolUse arrives when it finishes, after this Stop.
+        if payload.get("host_background_running"):
+            return
         kept = ()
     else:
         return

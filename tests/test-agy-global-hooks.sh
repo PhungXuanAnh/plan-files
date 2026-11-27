@@ -73,7 +73,7 @@ tool() {
 }
 command_args() { python3 -c 'import json,sys; print(json.dumps({"CommandLine": sys.argv[1]}))' "$1"; }
 stop_hook() {
-    hook Stop "$1" "{\"conversationId\":\"$1\",\"cwd\":\"$PROJECT\",\"terminationReason\":\"$2\",\"executionNum\":0}"
+    hook Stop "$1" "{\"conversationId\":\"$1\",\"cwd\":\"$PROJECT\",\"terminationReason\":\"$2\",\"executionNum\":0,\"fullyIdle\":${3:-true},\"lastUserInput\":\"continue\"}"
 }
 state() { PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" "$@"; }
 
@@ -131,6 +131,15 @@ assert_eq "$(invocation agy-one 2)" '{}' "deferred context is delivered once"
 # Only a turn the agent ended itself is gated; Stop renders block as continue.
 assert_eq "$(stop_hook agy-one NO_TOOL_CALL | json_value '["decision"]')" continue "incomplete Stop continues"
 assert_eq "$(stop_hook agy-one USER_CANCELED)" '{}' "a canceled turn is not gated"
+
+# A background command gets PostToolUse only when it finishes, and agy then
+# wakes the agent with a turn that repeats the last prompt.
+tool PreToolUse agy-one t6 run_command "$(command_args 'sleep 30')" >/dev/null
+assert_eq "$(stop_hook agy-one NO_TOOL_CALL false)" '{}' "Stop lets the reply end while background work runs"
+tool PostToolUse agy-one t6 run_command "$(command_args 'sleep 30')" >/dev/null
+WAKE=$(invocation agy-one 0)
+case "$WAKE" in *"Candidate task"*) fail "a wake-up turn was routed as a new prompt" ;; esac
+assert_eq "$(state route-status agy agy-one)" owned "a wake-up turn keeps the lease"
 
 # A call agy denied after PreToolUse never gets PostToolUse; the turn's Stop retires it.
 write_plan task-b in_progress

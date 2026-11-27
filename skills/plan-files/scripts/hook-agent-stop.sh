@@ -63,7 +63,11 @@ PWF_TURN_ID=$(printf '%s' "$INPUT" | python3 -c 'import hashlib,json,sys; p=json
 PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" event-current "$PROVIDER" "$SESSION_ID" || { printf '{}'; exit 0; }
 # The host starts a new turn when a background job or subagent ends, so waiting
 # for one ends the reply and keeps the lease instead of re-checking every Stop.
+# A host that reports its own running background work (host_background_running)
+# is trusted for that; otherwise the session's receipts decide.
+HOST_BACKGROUND_RUNNING=$(printf '%s' "$INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("host_background_running") is True)' 2>/dev/null || true)
 awaits_notification() {
+    [ "$HOST_BACKGROUND_RUNNING" = "True" ] && return 0
     PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" awaits-notification "$PROVIDER" "$SESSION_ID" 2>/dev/null
 }
 yield_execution() {
