@@ -789,7 +789,9 @@ for SPEC in 'codex codex-contract'; do
     PWF_PROJECT_ROOT="$PROJECT" PWF_SESSION_ADAPTER="$1" PWF_SESSION_ID="$2" "$STATE_TOOL" bind test-task >/dev/null
     assert_contains "$(post_hook "$1" "$2" Read)" "Active Item P1.1" "$1 PostTool initial item context"
     assert_not_contains "$(post_hook "$1" "$2" Read)" "Active Item P1.1" "$1 PostTool keeps repeated Stop advisory compact"
-    assert_contains "$(post_hook "$1" "$2" Bash "pytest -q")" "structured checkpoint before any unrelated tool" "$1 PostTool checkpoint barrier after likely evidence"
+    EVIDENCE_NUDGE=$(post_hook "$1" "$2" Bash "pytest -q")
+    assert_contains "$EVIDENCE_NUDGE" "structured checkpoint before any unrelated tool" "$1 PostTool checkpoint barrier after likely evidence"
+    assert_not_contains "$EVIDENCE_NUDGE" "STOP WILL BLOCK" "$1 PostTool repeats one line while the plan is unchanged"
     POST_STATE=$(PWF_PROJECT_ROOT="$PROJECT" "$STATE_TOOL" cache "$1" "$2")
     sed -i 's/^unchanged_risk_score=.*/unchanged_risk_score=2/; s/^last_item_nudge_ts=.*/last_item_nudge_ts=0/; s/^last_stale_ts=.*/last_stale_ts=0/; s/^item_nudge_streak=.*/item_nudge_streak=0/' "$POST_STATE"
     STALE_FIRST=$(post_hook "$1" "$2" Bash "pytest -q")

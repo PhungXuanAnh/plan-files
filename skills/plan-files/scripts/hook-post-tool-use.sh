@@ -164,6 +164,7 @@ if [ "${TOOL_WEIGHT:-1}" -gt 0 ]; then
     REOPEN_WARN=$(planning_settled_plan_warning "$PLAN_DIR" "$PWD")
 fi
 STOP_RISK=""
+ACTIONABLE_STOP_RISK="[plan-files] STOP WILL BLOCK: actionable phases remain. Continue the Active Item and remaining phases; checkpoint evidence immediately."
 if [ -n "$INTEGRITY_WARN" ]; then
     STOP_RISK="[plan-files] STOP WILL BLOCK: repair plan integrity now.
 ${INTEGRITY_WARN}"
@@ -173,7 +174,7 @@ elif [ "$TOTAL" -gt 0 ] && [ $((COMPLETE + BLOCKED + DEFERRED)) -lt "$TOTAL" ] \
     if PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" awaits-notification "$PROVIDER" "$SESSION_ID" 2>/dev/null; then
         STOP_RISK="[plan-files] BACKGROUND WORK RUNNING: ending this reply keeps the task until its completion notification; do not poll it. Then continue the Active Item and checkpoint evidence."
     else
-        STOP_RISK="[plan-files] STOP WILL BLOCK: actionable phases remain. Continue the Active Item and remaining phases; checkpoint evidence immediately."
+        STOP_RISK=$ACTIONABLE_STOP_RISK
     fi
 fi
 FINALIZE_WARN=""
@@ -528,8 +529,14 @@ fi
 NUDGE=""
 if [ "$EMIT_CONTEXT_NUDGE" = "true" ]; then
 if [ "$CONTRACTED" = "true" ] && [ -n "$ACTIVE_ITEM" ]; then
-    NUDGE="[plan-files] Active Item ${ACTIVE_ITEM}: ${ACTIVE_TEXT} Evidence: ${ACTIVE_EVIDENCE:-pending}
+    # The full item text and rules come once per plan change; until the next
+    # change a reminder is one line, so long single items do not fill context.
+    if [ "$INJECT_FULL" = "true" ]; then
+        NUDGE="[plan-files] Active Item ${ACTIVE_ITEM}: ${ACTIVE_TEXT} Evidence: ${ACTIVE_EVIDENCE:-pending}
 [plan-files] If this tool result satisfies the outcome, your next workflow operation must be the structured checkpoint before any unrelated tool. Otherwise continue the same item and record material partial/error evidence; arbitrary tool success is not semantic completion."
+    else
+        NUDGE="[plan-files] Active Item ${ACTIVE_ITEM} unchanged: if this result proves its outcome, run the structured checkpoint before any unrelated tool."
+    fi
     if [ "$STALE_CHECKPOINT" = "true" ]; then
         NUDGE="${NUDGE}
 [plan-files] STALE ITEM STATE: no plan change for ${CHECKPOINT_LAG_SECS}s across ${UNCHANGED_TOOL_COUNT} tool result(s) (latest class ${TOOL_CLASS}). Checkpoint ${ACTIVE_ITEM} now if its evidence predicate is true. If it is legitimately a long multi-step item, record what you have with '$(planning_helper_command plan_checkpoint.py) progress ${ACTIVE_ITEM} --evidence ...' and keep going. This line repeats at most every ${STALE_REPEAT_SECS}s until the plan changes."
@@ -540,6 +547,10 @@ if [ "$CONTRACTED" = "true" ] && [ -n "$ACTIVE_ITEM" ]; then
 else
     NUDGE="[plan-files] Update ${PLAN_FILE} with what you just did. If a phase is now complete, update ${PLAN_FILE} status. If the plan-files skill rules are no longer in your context (post-/compact, or you have forgotten them), reload them by reading $(planning_doc_path SKILL.md) before continuing."
 fi
+fi
+# The actionable-phases reminder is static, so it travels with the full context only.
+if [ "$INJECT_FULL" != "true" ] && [ "$STOP_RISK" = "$ACTIONABLE_STOP_RISK" ]; then
+    STOP_RISK=""
 fi
 for WARNING in "$STOP_RISK" "$REOPEN_WARN" "$COMPACTION_WARN" "$RESTORE_WARN" "$FINALIZE_WARN" "$BACKGROUND_WARN"; do
     if [ -n "$WARNING" ]; then

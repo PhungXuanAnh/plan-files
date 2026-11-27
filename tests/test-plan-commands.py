@@ -389,7 +389,9 @@ Phase 1
         self.assertEqual(result["item"], "P3.1")
         self.assertTrue(restore_payload(self.tasks)["ok"])
         self.call("plan_checkpoint.py", "complete", "P3.1", "--evidence", "New local result passed", "--deactivate-pointer")
-        self.call("plan_checkpoint.py", "--plan", self.tasks, "assert-finalizable", "--project-root", self.project)
+        final = json.loads(self.call("plan_checkpoint.py", "--plan", self.tasks, "assert-finalizable",
+                                     "--project-root", self.project).stdout)
+        self.assertEqual(set(final["scope_review"]), {"goal", "non_goals", "hint"})
         self.assertEqual(parse_plan(self.tasks).phase(2).status, "deferred")
         self.assertEqual((self.project / ".plan-files").read_text().strip(), "work")
 
@@ -409,6 +411,7 @@ Phase 1
         self.assertEqual(state.item("P2.1").evidence, "two checks already passed")
         self.assertEqual(len(state.phases), 2)
         self.assertIsNone(result["archived_phase"])
+        self.assertTrue(result["scope_review"]["goal"])
         self.assertFalse((self.plan / "history.md").exists())
         self.assertTrue(restore_payload(self.tasks)["ok"])
         saved = {file: file.read_bytes() for file in self.plan.glob("*.md")}

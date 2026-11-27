@@ -28,6 +28,7 @@ from plan_state import (
     SETTLED,
     explain_issues,
     finalizability_issues,
+    scope_review,
     parse_plan,
     progress_fingerprint,
     visible_lines,
@@ -323,7 +324,8 @@ def assert_finalizable(plan: Path, project_root: Path | None) -> dict[str, objec
     if issues:
         raise CheckpointError(
             f"plan is not finalizable: {explain_issues(issues, project_root, plan)}")
-    return {"operation": "assert-finalizable", "finalizable": True, **_fingerprints(state)}
+    return {"operation": "assert-finalizable", "finalizable": True, "scope_review": scope_review(plan),
+            **_fingerprints(state)}
 
 
 def _parser() -> argparse.ArgumentParser:

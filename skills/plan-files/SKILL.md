@@ -54,6 +54,10 @@ Shared files, branch or repo are weak evidence. A text-only answer needs no rout
   before acting, then update Goal, Task Identity, profile and pending phases. Continue a
   blocked/deferred phase with `plan_edit.py resume N --decision ...`; new work on a settled plan with
   `reopen` ([lifecycle operations](references/plan-operations.md#lifecycle-operations)).
+- **Plan edits plus other work in one prompt:** editing this plan's own files never needs a
+  reopen; route by the other work. On a settled plan, work toward this plan's goal goes through
+  `reopen`, `reopen --append N` or `resume N`. Unrelated work (a new skill, a quick demo for the
+  user) never goes into this plan: make the plan edits, run `release <task-id>`, then do it.
 - **Discussion:** recording findings or decisions needs a fresh `overview` and may wait for another
   executor. If this prompt also authorizes execution, upgrade with
   `bind <task-id> --reason "<user authorization>"`; needing a tool is not authorization.

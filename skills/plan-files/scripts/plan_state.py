@@ -210,6 +210,17 @@ def _section_or_empty(path: Path, heading: str) -> str:
         return ""
 
 
+def scope_review(plan: Path) -> dict[str, str]:
+    """Goal and Non-goals to re-read when a phase resumes or the plan closes."""
+    identity = _section_or_empty(plan, "Task Identity")
+    return {
+        "goal": _section_or_empty(plan, "Goal"),
+        "non_goals": _field_value(identity, "Non-goals"),
+        "hint": "Confirm Goal and Non-goals match the work now authorized or delivered; "
+                "edit those sections in the plan if they no longer do.",
+    }
+
+
 def _aware_datetime(value: str) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))

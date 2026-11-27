@@ -34,6 +34,7 @@ from plan_state import (
     handoff_metadata,
     parse_plan,
     resolve_plan_argument,
+    scope_review,
 )
 
 PHASE_HIGH_WATER_RE = re.compile(r"<!-- Phase ID high-water:\s*(\d+) -->")
@@ -1397,6 +1398,8 @@ def _reopen_command(args, state, old_fingerprint: str) -> dict[str, object]:
     payload = _phase_write(args, state, archived, candidate, usage, result, old_fingerprint)
     if not args.dry_run:
         payload["restore"] = restore_payload(args.plan)
+        if args.command == "resume":
+            payload["scope_review"] = scope_review(args.plan)
     return payload
 
 
