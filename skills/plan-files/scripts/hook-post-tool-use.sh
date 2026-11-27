@@ -169,7 +169,12 @@ if [ -n "$INTEGRITY_WARN" ]; then
 ${INTEGRITY_WARN}"
 elif [ "$TOTAL" -gt 0 ] && [ $((COMPLETE + BLOCKED + DEFERRED)) -lt "$TOTAL" ] \
     && [ $((COMPLETE + IN_PROGRESS + BLOCKED + DEFERRED)) -gt 0 ]; then
-    STOP_RISK="[plan-files] STOP WILL BLOCK: actionable phases remain. Continue the Active Item and remaining phases; checkpoint evidence immediately."
+    # Stop lets the reply end while the only outstanding work notifies on completion.
+    if PWF_PROJECT_ROOT="$PWD" "$STATE_TOOL" awaits-notification "$PROVIDER" "$SESSION_ID" 2>/dev/null; then
+        STOP_RISK="[plan-files] BACKGROUND WORK RUNNING: ending this reply keeps the task until its completion notification; do not poll it. Then continue the Active Item and checkpoint evidence."
+    else
+        STOP_RISK="[plan-files] STOP WILL BLOCK: actionable phases remain. Continue the Active Item and remaining phases; checkpoint evidence immediately."
+    fi
 fi
 FINALIZE_WARN=""
 if [ "$TOTAL" -gt 0 ] && [ $((COMPLETE + BLOCKED + DEFERRED)) -ge "$TOTAL" ] \

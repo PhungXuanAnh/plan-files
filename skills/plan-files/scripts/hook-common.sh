@@ -18,7 +18,7 @@
 #   planning_file_budget_warning DIR — echo line/byte/scope warning when needed
 #   planning_handoff_warning DIR     — echo warning when optional handoff.md is stale
 #   planning_restore_warning DIR     — echo bounded targeted repair guidance for incomplete restore state
-#   planning_settled_plan_warning DIR ROOT [DISCUSS_CMD] — echo reopen guidance when every phase is already complete
+#   planning_settled_plan_warning DIR ROOT [DISCUSS_CMD] [RELEASE_CMD] — echo reopen guidance when every phase is already complete
 
 current_phase_pointer() {
     local _plan_file="${1:-}" _body
@@ -704,7 +704,7 @@ print("[plan-files] RESTORE STATE ACTION REQUIRED: " + "; ".join(parts) +
 }
 
 # ---------------------------------------------------------------------------
-# planning_settled_plan_warning PLAN_DIR PROJECT_ROOT [DISCUSS_CMD]
+# planning_settled_plan_warning PLAN_DIR PROJECT_ROOT [DISCUSS_CMD] [RELEASE_CMD]
 # A plan whose every phase is complete has nowhere to record what the current
 # prompt is doing, and Stop accepts such a plan unconditionally. So an agent
 # that binds it for further work can implement, commit, and open a PR while the
@@ -715,7 +715,7 @@ print("[plan-files] RESTORE STATE ACTION REQUIRED: " + "; ".join(parts) +
 # Every command stays literal and copy-runnable: agents and tests execute it as printed.
 # ---------------------------------------------------------------------------
 planning_settled_plan_warning() {
-    local _plan_dir="${1:-}" _root="${2:-}" _discuss="${3:-}" _plan_file _edit _checkpoint _sha _plan_arg _root_arg
+    local _plan_dir="${1:-}" _root="${2:-}" _discuss="${3:-}" _release="${4:-}" _plan_file _edit _checkpoint _sha _plan_arg _root_arg
     local TOTAL COMPLETE IN_PROGRESS PENDING BLOCKED DEFERRED
     [ -n "$_plan_dir" ] || return 0
     _plan_file=$(planning_plan_file "$_plan_dir")
@@ -732,10 +732,15 @@ planning_settled_plan_warning() {
     else
         _discuss="run the discussion bind command instead"
     fi
-    printf '[plan-files] SETTLED PLAN REOPEN REQUIRED: all %s phases in %s are complete, blocked, or deferred. Editing only this plan'"'"'s own files (handoff, findings, narrative sections) needs no reopen: use native Edit/Write on them or the section-replace/entry-append helper verbs, never an inline script. For any other work, from %s run one option (helpers default --plan to this session lease). (1) Distinct new work: %s --compact --expected-fingerprint %s reopen --title "<phase title>" --decision "| <ID> | <what the user authorized> | <why> | <date> |" --item "<first outcome>"; add --supersede <OLD-ID> for a replaced decision, more --item/--verify for the phase, --goal/--deliverable/--non-goals/--profile if scope moved. (2) Resume a blocked/deferred phase, keeping its IDs and evidence: %s --expected-fingerprint %s resume <N> --decision "| <ID> | Resume the existing work | User authorized resumption | <date> |". (3) Discussion only, deliverable not executed: %s (allows a discussion Stop with execution gated; never use it to pause authorized implementation). (4) No new work authorized: %s --plan %s deactivate-pointer --project-root %s, then %s --plan %s assert-finalizable --project-root %s. If that already reported ok (including session_finish at_stop), do not rerun it; read-only diagnosis stays allowed. Otherwise end this reply so Stop releases the session.' \
+    if [ -n "$_release" ]; then
+        _release="run exactly $_release"
+    else
+        _release="run the release bind command"
+    fi
+    printf '[plan-files] SETTLED PLAN REOPEN REQUIRED: all %s phases in %s are complete, blocked, or deferred. Editing only this plan'"'"'s own files (handoff, findings, narrative sections) needs no reopen: use native Edit/Write on them or the section-replace/entry-append helper verbs, never an inline script. For any other work, from %s run one option (helpers default --plan to this session lease). (1) Distinct new work: %s --compact --expected-fingerprint %s reopen --title "<phase title>" --decision "| <ID> | <what the user authorized> | <why> | <date> |" --item "<first outcome>"; add --supersede <OLD-ID> for a replaced decision, more --item/--verify for the phase, --goal/--deliverable/--non-goals/--profile if scope moved. (2) Resume a blocked/deferred phase, keeping its IDs and evidence: %s --expected-fingerprint %s resume <N> --decision "| <ID> | Resume the existing work | User authorized resumption | <date> |". (3) Discussion only, deliverable not executed: %s (allows a discussion Stop with execution gated; never use it to pause authorized implementation). (4) No new work authorized: %s --plan %s deactivate-pointer --project-root %s, then %s --plan %s assert-finalizable --project-root %s. If that already reported ok (including session_finish at_stop), do not rerun it; read-only diagnosis stays allowed. Otherwise end this reply so Stop releases the session. (5) This prompt'"'"'s work is unrelated to this plan: %s, then do that work without this plan.' \
         "$TOTAL" "$_plan_file" "$_root" \
         "$_edit" "$_sha" "$_edit" "$_sha" "$_discuss" \
-        "$_checkpoint" "$_plan_arg" "$_root_arg" "$_checkpoint" "$_plan_arg" "$_root_arg"
+        "$_checkpoint" "$_plan_arg" "$_root_arg" "$_checkpoint" "$_plan_arg" "$_root_arg" "$_release"
 }
 
 # Shared Stop-invalid state, also enforced before tools and repeated after tools.

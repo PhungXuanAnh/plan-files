@@ -397,6 +397,7 @@ fi
 printf -v project_root_arg '%q' "$PWD"
 printf -v task_arg '%q' "$(basename "$PLAN_DIR")"
 EXPECTED_DISCUSS="PWF_PROJECT_ROOT=$project_root_arg $BIND_COMMAND discuss $task_arg"
+EXPECTED_RELEASE="PWF_PROJECT_ROOT=$project_root_arg $BIND_COMMAND release $task_arg"
 EXPECTED_ACTIVATE="PWF_PROJECT_ROOT=$project_root_arg $BIND_COMMAND bind $task_arg --reason \"user authorization for execution\""
 OWNED_ROUTING=$(routing_verb "$(basename "$PLAN_DIR")")
 BACKGROUND_WARN=$(printf '%s' "$INPUT" | python3 "$SCRIPT_DIR/maintenance-tool-allowed.py" planning-background-warning)
@@ -504,7 +505,7 @@ fi
 # finished, so operational mutation here is invisible to every later session.
 # Reads and owned-plan repair stay open: reopening the plan IS plan maintenance,
 # so the recovery this message asks for is always runnable from inside the gate.
-REOPEN_WARN=$(planning_settled_plan_warning "$PLAN_DIR" "$PWD" "$EXPECTED_DISCUSS")
+REOPEN_WARN=$(planning_settled_plan_warning "$PLAN_DIR" "$PWD" "$EXPECTED_DISCUSS" "$EXPECTED_RELEASE")
 if [ -n "$REOPEN_WARN" ] && ! maintenance_tool_allowed "$PLAN_DIR" && ! subagent_call; then
     REASON_TEXT="$REOPEN_WARN $(allowed_hint)"
     log "session=$SESSION_ID plan=$(basename "$PLAN_DIR") reopen=required decision=block-settled-plan tool=$TOOL_NAME"

@@ -28,6 +28,9 @@ from session_state import (RECORD_FILES as PLAN_RECORD_FILES, EDIT_RECORD_OPS,
 
 QUESTION_TOOLS = {"askuserquestion", "ask_user_question", "ask_question", "request_user_input",
                   "request_user_input_async"}
+# Host checklists shown to the user (Claude, Codex, agy, Copilot); they write no file or system state.
+CHECKLIST_TOOLS = {"todowrite", "taskcreate", "taskupdate", "update_plan", "update_steps", "manage_todo_list"}
+CONVERSATION_TOOLS = QUESTION_TOOLS | CHECKLIST_TOOLS
 
 
 READ_TOOL_PREFIXES = (
@@ -459,7 +462,7 @@ def tool_class(payload: dict, plan_dir: Path) -> dict[str, object]:
     if plan_maintenance:
         category = "plan_maintenance"
         semantic_weight = 0
-    elif simple_name.rsplit(".", 1)[-1] in QUESTION_TOOLS or names_read_tool(simple_name) or (
+    elif simple_name.rsplit(".", 1)[-1] in CONVERSATION_TOOLS or names_read_tool(simple_name) or (
         simple_name in SHELL_TOOL_NAMES and bash_is_read_only(tool_input)
     ):
         category = "read_only_exploration"
@@ -803,8 +806,11 @@ def _segment_is_read_only(segment: Segment) -> bool:
     if executable in GUARDED_READ_COMMANDS:
         forbidden = GUARDED_READ_COMMANDS[executable]
         return not any(arg.startswith(flag) for arg in operands for flag in forbidden)
-    if executable == "git" and operands and operands[0] in READ_GIT_SUBCOMMANDS:
-        return True
+    if executable == "git":
+        # Skip the global options that only choose the repository or the pager.
+        while operands and operands[0] in {"-C", "--no-pager"}:
+            operands = operands[2:] if operands[0] == "-C" else operands[1:]
+        return bool(operands) and operands[0] in READ_GIT_SUBCOMMANDS
     # A help or version probe on a planning helper writes nothing: these are the
     # argparse programs this repo owns, and they print usage and exit. It is not
     # generalized to any executable on purpose -- a shell script that ignores its
@@ -1376,7 +1382,7 @@ def plan_op_class(payload: dict, plan_dir: Path) -> str:
     simple = name.rsplit("__", 1)[-1]
     if simple in SHELL_TOOL_NAMES:
         return _shell_plan_op_class(shell_command_text(tool_input), plan_dir)
-    if simple.rsplit(".", 1)[-1] in QUESTION_TOOLS or names_read_tool(simple):
+    if simple.rsplit(".", 1)[-1] in CONVERSATION_TOOLS or names_read_tool(simple):
         return "read"
     return _resolve_op_class({_plan_file_op_class(path, plan_dir)
                               for path in mutation_targets(tool_input)})
@@ -1446,7 +1452,7 @@ def is_read_only_call(payload: dict) -> bool:
     name = str(payload.get("tool_name") or payload.get("toolName") or "").lower()
     simple = name.rsplit("__", 1)[-1]
     tool_input = payload_tool_input(payload)
-    if simple.rsplit(".", 1)[-1] in QUESTION_TOOLS or names_read_tool(simple):
+    if simple.rsplit(".", 1)[-1] in CONVERSATION_TOOLS or names_read_tool(simple):
         return True
     return simple in SHELL_TOOL_NAMES and bash_is_read_only(tool_input)
 
@@ -1593,7 +1599,7 @@ def main() -> int:
     simple_name = tool_name.rsplit("__", 1)[-1]
     tool_input = payload_tool_input(payload)
 
-    if simple_name.rsplit(".", 1)[-1] in QUESTION_TOOLS or names_read_tool(simple_name):
+    if simple_name.rsplit(".", 1)[-1] in CONVERSATION_TOOLS or names_read_tool(simple_name):
         return 0
     if simple_name in SHELL_TOOL_NAMES:
         if bash_is_read_only(tool_input):

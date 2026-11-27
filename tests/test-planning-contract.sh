@@ -955,6 +955,10 @@ assert_contains "$SETTLED_BLOCK" "SETTLED PLAN REOPEN REQUIRED" "settled plan bl
 assert_contains "$SETTLED_BLOCK" "reopen --title" "reopen block names the one-call repair"
 assert_contains "$SETTLED_BLOCK" "--supersede <OLD-ID>" "reopen block names the decision it retires"
 assert_contains "$SETTLED_BLOCK" "bind-session.sh discuss test-task" "reopen block names the exact discussion bind"
+assert_contains "$SETTLED_BLOCK" "bind-session.sh release test-task" "reopen block names the release for unrelated work"
+assert_eq "$(pre_hook codex codex-contract "git -C $PROJECT --no-pager log -1")" "{}" "git global options keep a read read-only"
+assert_eq "$(printf '{"tool_name":"update_plan","tool_input":{"plan":[]}}' | python3 "$REPO_ROOT/skills/plan-files/scripts/maintenance-tool-allowed.py" "$PLAN_DIR" && echo allowed)" \
+    "allowed" "a host checklist update passes the settled gate"
 assert_not_contains "${SETTLED_BLOCK%%(4) No new work authorized*}" "--plan $PLAN_DIR/tasks.md" \
     "reopen uses the still-active pointer"
 assert_contains "$SETTLED_BLOCK" "--plan $PLAN_DIR/tasks.md assert-finalizable" \

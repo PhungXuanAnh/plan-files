@@ -85,6 +85,12 @@ class SessionIsolation(unittest.TestCase):
         self.assertEqual(self.store.pending("claude", "b"), "")
         self.store.bind("codex", "a", "task-b")
         self.assertEqual((self.root / ".plan-files").read_text(), "task-a\n")
+        # Owned work needs handoff unless every phase is settled, which undoes an unrelated bind.
+        with self.assertRaisesRegex(SessionError, "not pending"):
+            self.store.transition("codex", "a", "release", "task-b")
+        (self.store.plans / "task-b/plan.md").write_text("## Phases\n### Phase 1: Done\n- **Status:** deferred (paused)\n")
+        self.store.transition("codex", "a", "release", "task-b")
+        self.assertEqual(self.store.resolve("codex", "a"), "")
 
     def test_creation_late_events_and_legacy_conflicts(self):
         self.store.claim("codex", "a", "new", creating=True, event="first")

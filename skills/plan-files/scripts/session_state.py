@@ -260,6 +260,12 @@ class SessionStore:
             return False
         return all(key.startswith(("background:", "agent:")) for key in pending)
 
+    def settled(self, task: str) -> bool:
+        """Every phase of the task's plan is complete, blocked or deferred."""
+        from plan_state import SETTLED, parse_plan
+        state = parse_plan(resolve_plan_file(self.task_path(task)))
+        return bool(state.phases) and all(phase.status in SETTLED for phase in state.phases)
+
     def snapshot(self, task: str) -> str:
         directory = self.task_path(task)
         digest = hashlib.sha256()
@@ -486,6 +492,9 @@ class SessionStore:
                 raise SessionError("planning lease was already relinquished; bind another task directly or start a new task id")
             # A discussion holds no execution reservation, so releasing it lets the prompt move on.
             releasable = {"pending", "waiting", "discussing"} if verb == "release" else {"pending", "waiting"}
+            # A settled plan has no work in progress, so a bind that proved unrelated can be undone.
+            if verb == "release" and row.get("status") == "owned" and self.settled(task):
+                releasable.add("owned")
             if verb in {"release", "clarify"} and row.get("status") not in releasable:
                 raise SessionError("planning lease is not pending; use handoff to relinquish owned work")
             if verb == "discuss":
